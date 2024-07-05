@@ -1,28 +1,3 @@
-import random
-
-import pandas as pd
-import geopandas as gpd
-import matplotlib.pyplot as plt
-import networkx as nx
-import numpy as np
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
-from sklearn.model_selection import train_test_split
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch.optim as optim
-import torch.sparse as sparse
-from torch_geometric.nn import GCNConv
-
-import torch
-import geopandas as gpd
-from shapely.geometry import LineString
-
-import pickle
-
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
-
 import math
 import random
 import pickle
@@ -30,51 +5,24 @@ import pickle
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import tqdm
-import wandb
-
+import networkx as nx
+import matplotlib.pyplot as plt
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import torchvision
-import torchvision.transforms as T
+import torch.optim as optim
+import torch.sparse as sparse
 from torch.utils.data import DataLoader, Dataset, Subset
-
 import torch_geometric
 from torch_geometric.data import Data, Batch
 from torch_geometric.transforms import LineGraph
-
 from shapely.geometry import LineString
-
-def validate_model(model, valid_dl, loss_func, device):
-    model.eval()
-    val_loss = 0
-    num_batches = 0
-    with torch.inference_mode():
-        for idx, data in enumerate(valid_dl):
-            input_node_features, targets = data.normalized_x.to(device), data.normalized_y.to(device)
-            predicted = model(data)
-            val_loss += loss_func(predicted, targets).item()
-            num_batches += 1
-    return val_loss / num_batches if num_batches > 0 else 0
-
-def create_dataloader(is_train, batch_size, dataset, train_ratio):
-    dataset_length = len(dataset)
-    print(f"Total dataset length: {dataset_length}")
-
-    # Calculate split index for training and validation
-    split_idx = int(dataset_length * train_ratio)
-    
-    # Calculate the maximum number of samples that fit into complete batches for training and validation
-    train_samples = (split_idx // batch_size) * batch_size
-    valid_samples = ((dataset_length - split_idx) // batch_size) * batch_size
-    if is_train:
-        indices = range(0, train_samples)
-    else:
-        indices = range(split_idx, split_idx + valid_samples)
-    sub_dataset = Subset(dataset, indices)
-    print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
-    return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+import tqdm
+import wandb
 
 class MyGeometricDataset(Dataset):
     def __init__(self, data_list):
@@ -105,27 +53,36 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
+
+def create_dataloader(is_train, batch_size, dataset, train_ratio):
+    dataset_length = len(dataset)
+    print(f"Total dataset length: {dataset_length}")
+
+    # Calculate split index for training and validation
+    split_idx = int(dataset_length * train_ratio)
+    
+    # Calculate the maximum number of samples that fit into complete batches for training and validation
+    train_samples = (split_idx // batch_size) * batch_size
+    valid_samples = ((dataset_length - split_idx) // batch_size) * batch_size
+    if is_train:
+        indices = range(0, train_samples)
+    else:
+        indices = range(split_idx, split_idx + valid_samples)
+    sub_dataset = Subset(dataset, indices)
+    print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
+    return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+
     
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
-def normalize_data(dataset):
-    # Collect all node features
-    all_node_features = []
-    for data in dataset:
-        all_node_features.append(data.x)
-
-    # Stack all node features into a single tensor
-    all_node_features = torch.cat(all_node_features, dim=0)
-
-    # Fit the min-max scaler on the node features
-    scaler = MinMaxScaler()
-    scaler.fit(all_node_features)
-
-    # Apply the scaler to each data instance and store as a new feature
-    for data in dataset:
-        data.normalized_x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
-
+def normalize_dataset(dataset):
+    # Normalize node features
+    dataset = normalize_data(dataset)
+    # Normalize positional features (if any)
+    dataset = normalize_positional_features(dataset)
+    # Normalize y values
+    dataset = normalize_y_values(dataset)
     return dataset
 
 def normalize_positional_features(dataset):
@@ -146,6 +103,73 @@ def normalize_positional_features(dataset):
         data.normalized_pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
     return dataset
 
+def replace_invalid_values(tensor):
+    finite_mask = torch.isfinite(tensor)
+    if finite_mask.any():
+        max_finite_value = tensor[finite_mask].max()
+    else:
+        max_finite_value = torch.tensor(0.0)
+    tensor[~finite_mask] = max_finite_value
+    tensor[torch.isnan(tensor)] = max_finite_value
+    return tensor
+
+def normalize_data(dataset):
+    shape_of_x = dataset[0].x.shape[1]
+    if shape_of_x == 1:
+        # Collect all node features
+        all_node_features = []
+        for data in dataset:
+            all_node_features.append(data.x)
+
+        # Stack all node features into a single tensor
+        all_node_features = torch.cat(all_node_features, dim=0)
+
+        # Fit the min-max scaler on the node features
+        scaler = MinMaxScaler()
+        scaler.fit(all_node_features)
+
+        # Apply the scaler to each data instance and store as a new feature
+        for data in dataset:
+            data.normalized_x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
+            
+    else:
+        normalized_x = []
+        for i in range(shape_of_x):
+            all_node_features_this_dimension = []
+            # Concatenate all x attributes across the dataset, keeping the feature dimension
+            for data in dataset:
+                all_node_features_this_dimension.append(data.x[:,i])
+                
+            all_node_features_this_dimension = torch.cat(all_node_features_this_dimension, dim=0).reshape(-1, 1)
+        
+            # Replace infinity values with the maximum finite value in the tensor
+            finite_mask = torch.isfinite(all_node_features_this_dimension)
+            max_finite_value = all_node_features_this_dimension[finite_mask].max()
+            all_node_features_this_dimension[~finite_mask] = max_finite_value
+
+            # Check and handle NaN values
+            nan_mask = torch.isnan(all_node_features_this_dimension)
+            all_node_features_this_dimension[nan_mask] = max_finite_value
+
+            # Convert tensor to numpy array for scikit-learn
+            all_node_features_np = all_node_features_this_dimension.numpy()
+            
+            scaler = MinMaxScaler()
+            scaler.fit(all_node_features_np)
+            for data in dataset:
+                data_x_dim_replaced = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+                normalized_x_this_dimension = torch.tensor(scaler.transform(data_x_dim_replaced.numpy()), dtype=torch.float)
+                
+                if i == 0:
+                    data.normalized_x = normalized_x_this_dimension
+                else:
+                    data.normalized_x = torch.cat((data.normalized_x, normalized_x_this_dimension), dim=1)
+            
+            normalized_x.append(normalized_x_this_dimension)
+        normalized_x = torch.cat(normalized_x, dim=1)
+        data.normalized_x = normalized_x  
+    return dataset
+
 def normalize_y_values(dataset):
     # Collect all y values
     all_y_values = []
@@ -164,31 +188,6 @@ def normalize_y_values(dataset):
         data.normalized_y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
 
     return dataset
-
-def normalize_dataset(dataset):
-    # Normalize node features
-    dataset = normalize_data(dataset)
-    # Normalize positional features (if any)
-    dataset = normalize_positional_features(dataset)
-    # Normalize y values
-    dataset = normalize_y_values(dataset)
-    return dataset
-
-
-# def check_and_replace_inf(policy_data):
-#     has_inf = False
-#     inf_sources = {"capacity": 0, "freespeed": 0, "mode": 0}
-    
-#     for i, row in enumerate(policy_data):
-#         capacity, freespeed, modes = row[0], row[1], row[2]
-        
-#         # Check freespeed for inf values
-#         if freespeed == float('inf') or freespeed == float('-inf'):
-#             # print(f"Inf value found in freespeed at row {i}: {freespeed}")
-#             has_inf = True
-#             inf_sources["freespeed"] += 1
-#             row[1] = 1e6 if freespeed == float('inf') else -1e6
-#     return policy_data, has_inf, inf_sources
 
 # Define a dictionary to map each mode to an integer
 mode_mapping = {
@@ -219,8 +218,36 @@ def encode_modes(modes):
     return mode_mapping.get(modes, -1)  # Use -1 for any unknown modes
 
 
+def compute_baseline_error(dataset_normalized):
+    """
+    Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
+    Parameters:
+    - dataset_normalized: A dataset containing normalized y values.
 
+    Returns:
+    - mse_value: The baseline MSE value.
+    """
+    # Concatenate the normalized y values from the dataset
+    y_values_normalized = np.concatenate([data.normalized_y for data in dataset_normalized])
+
+    # Compute the mean of the normalized y values
+    mean_y_normalized = np.mean(y_values_normalized)
+
+    # Convert numpy arrays to torch tensors
+    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
+    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32)
+
+    # Create the target tensor with the same shape as y_values_normalized_tensor
+    target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
+
+    # Instantiate the MSELoss function
+    mse_loss = torch.nn.MSELoss()
+
+    # Compute the MSE
+    mse = mse_loss(y_values_normalized_tensor, target_tensor)
+
+    return mse.item() 
 
 
 # def visualize_data(policy_features, flow_features, title):

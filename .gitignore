@@ -1,3 +1,4 @@
+.history/
 data/
 scripts/wandb/
 scripts/__pycache__/
