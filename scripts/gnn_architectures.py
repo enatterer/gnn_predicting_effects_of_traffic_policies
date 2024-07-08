@@ -10,7 +10,7 @@ from torch_geometric.nn import PointNetConv
 
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
-                 gcn_layers: int, output_layer: str = 'gcn', graph_layers_before: bool = False):
+                 gcn_layers: int, output_layer: str = 'gcn'):
         """
         in_channels: number of input features
         out_channels: number of output features
@@ -29,7 +29,6 @@ class MyGnn(torch.nn.Module):
         self.gat_layers = gat_layers
         self.gcn_layers = gcn_layers
         self.output_layer = output_layer
-        self.graph_layers_before = graph_layers_before
         self.graph_layers = []
         layers = []
         
@@ -60,7 +59,8 @@ class MyGnn(torch.nn.Module):
             layers.append(nn.ReLU(inplace=True))
 
         # Create the Sequential module with the layers
-        self.graph_layers = torch_geometric.nn.Sequential('x, edge_index', layers)
+        if layers:
+            self.graph_layers = torch_geometric.nn.Sequential('x, edge_index', layers)
                     
         if output_layer == 'gcn':
             self.output_layer = torch_geometric.nn.GCNConv(hidden_size, out_channels)
@@ -76,18 +76,11 @@ class MyGnn(torch.nn.Module):
         x = data.x
         edge_index = data.edge_index
         
-        if self.graph_layers_before:
-            if self.graph_layers:
-                x = self.graph_layers(x, edge_index)
+        if self.graph_layers:
+            x = self.graph_layers(x, edge_index)
                 
         x = self.pointLayer(x, data.pos, edge_index)
-        
-        if not self.graph_layers_before:
-            if self.graph_layers:
-                x = self.graph_layers(x, edge_index)
-        x = self.output_layer(x, edge_index)
         return x
-
 
 def validate_model_pos_features(model, valid_dl, loss_func, device):
     model.eval()
