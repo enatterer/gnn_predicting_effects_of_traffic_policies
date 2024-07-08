@@ -100,7 +100,7 @@ def normalize_positional_features(dataset):
 
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
-        data.normalized_pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
+        data.pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
     return dataset
 
 def replace_invalid_values(tensor):
@@ -130,7 +130,7 @@ def normalize_data(dataset):
 
         # Apply the scaler to each data instance and store as a new feature
         for data in dataset:
-            data.normalized_x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
+            data.x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
             
     else:
         normalized_x = []
@@ -167,7 +167,7 @@ def normalize_data(dataset):
             
             normalized_x.append(normalized_x_this_dimension)
         normalized_x = torch.cat(normalized_x, dim=1)
-        data.normalized_x = normalized_x  
+        data.x = normalized_x  
     return dataset
 
 def normalize_y_values(dataset):
@@ -185,7 +185,7 @@ def normalize_y_values(dataset):
 
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
-        data.normalized_y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
+        data.y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
 
     return dataset
 
@@ -229,7 +229,7 @@ def compute_baseline_error(dataset_normalized):
     - mse_value: The baseline MSE value.
     """
     # Concatenate the normalized y values from the dataset
-    y_values_normalized = np.concatenate([data.normalized_y for data in dataset_normalized])
+    y_values_normalized = np.concatenate([data.y for data in dataset_normalized])
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)

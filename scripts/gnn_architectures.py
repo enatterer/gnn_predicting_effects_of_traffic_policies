@@ -10,7 +10,7 @@ from torch_geometric.nn import PointNetConv
 
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
-                 heads: int, gcn_layers: int, output_layer: str = 'gcn', graph_layers_before: bool = False):
+                 gcn_layers: int, output_layer: str = 'gcn', graph_layers_before: bool = False):
         """
         in_channels: number of input features
         out_channels: number of output features
@@ -95,7 +95,7 @@ def validate_model_pos_features(model, valid_dl, loss_func, device):
     num_batches = 0
     with torch.inference_mode():
         for idx, data in enumerate(valid_dl):
-            input_node_features, targets = data.normalized_x.to(device), data.normalized_y.to(device)
+            input_node_features, targets = data.x.to(device), data.y.to(device)
             predicted = model(data.to(device))
             val_loss += loss_func(predicted, targets).item()
             num_batches += 1
