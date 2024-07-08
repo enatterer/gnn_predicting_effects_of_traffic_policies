@@ -47,7 +47,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
 def main():
     # Define parameters 
     num_epochs = 1000
-    project_name = 'finetuning'
+    project_name = 'finetuning_model_architecture'
     train_ratio = 0.8
     
     # Reconstruct the Data objects
@@ -86,7 +86,11 @@ def main():
                     "epochs": num_epochs,
                     "batch_size": batch_size,
                     "lr": lr,
-                    'early_stopping_patience': 10,
+                    "early_stopping_patience": 10,
+                    "hidden_layer_size": hidden_size_parameter,
+                    "gat_layers": gat_layer_parameter,
+                    "gcn_layers": gcn_layer_parameter,
+                    "output_layer": output_layer_parameter,
                     # "dropout": 0.15,
                 }
             )
