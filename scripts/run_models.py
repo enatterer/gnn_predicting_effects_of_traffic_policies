@@ -42,6 +42,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     print("Best validation loss: ", val_loss)
     wandb.summary["val_loss"] = val_loss
     wandb.finish()
+    return val_loss, epoch
     
 
 def main():
@@ -55,19 +56,19 @@ def main():
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
     dataset_normalized = gio.normalize_dataset(datalist)
     
-    batch_size_range = [16, 32]
+    batch_size_range = [16]
     output_layer_range = ['gat', 'gcn']
     hidden_size_range = [16, 32, 64]
     gat_layers_range = [0, 1]
-    gcn_layers_range = [0, 1]
-    lr_range = [0.001, 0.0001]
+    gcn_layers_range = [1]
+    lr_range = [0.001]
     
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    early_stopping = gio.EarlyStopping(patience=10, verbose=True)
+    early_stopping = gio.EarlyStopping(patience=5, verbose=True)
 
     # Create a list to hold all configurations
     configurations = list(itertools.product(batch_size_range, lr_range, output_layer_range, hidden_size_range, gat_layers_range, gcn_layers_range))
-
+    print(configurations)
     wandb.login()
     counter = 0
     # Open the text file for writing

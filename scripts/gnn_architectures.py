@@ -75,11 +75,13 @@ class MyGnn(torch.nn.Module):
     def forward(self, data):
         x = data.x
         edge_index = data.edge_index
+
+        x = self.pointLayer(x, data.pos, edge_index)
         
         if self.graph_layers:
             x = self.graph_layers(x, edge_index)
-                
-        x = self.pointLayer(x, data.pos, edge_index)
+            
+        x = self.output_layer(x, edge_index)
         return x
 
 def validate_model_pos_features(model, valid_dl, loss_func, device):
