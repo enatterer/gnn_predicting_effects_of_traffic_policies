@@ -54,9 +54,12 @@ class EarlyStopping:
             self.counter = 0
 
 
-def create_dataloader(is_train, batch_size, dataset, train_ratio):
+def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False):
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
+
+    if is_test:
+        return DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     # Calculate split index for training and validation
     split_idx = int(dataset_length * train_ratio)
@@ -72,7 +75,6 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio):
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-    
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
@@ -83,6 +85,19 @@ def normalize_dataset(dataset):
     dataset = normalize_positional_features(dataset)
     # Normalize y values
     dataset = normalize_y_values(dataset)
+    return dataset
+
+# Function to replace x with normalized_x and remove normalized_x
+def replace_x_with_normalized_x(dataset):
+    for data in dataset:
+        if hasattr(data, 'normalized_x'):
+            data.x = data.normalized_x
+            del data.normalized_x
+    return dataset
+
+def cut_dimensions(dataset):
+    for data in dataset:
+        data.x = data.x[:, 0].view(-1, 1)  # Keep only the first column and reshape
     return dataset
 
 def normalize_positional_features(dataset):
