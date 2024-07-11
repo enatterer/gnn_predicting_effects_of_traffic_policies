@@ -80,7 +80,7 @@ def collate_fn(data_list):
 
 def normalize_dataset(dataset):
     # Normalize node features
-    dataset = normalize_data(dataset)
+    dataset = normalize_x_values(dataset)
     # Normalize positional features (if any)
     dataset = normalize_positional_features(dataset)
     # Normalize y values
@@ -95,10 +95,14 @@ def replace_x_with_normalized_x(dataset):
             del data.normalized_x
     return dataset
 
-def cut_dimensions(dataset):
-    for data in dataset:
-        data.x = data.x[:, 0].view(-1, 1)  # Keep only the first column and reshape
-    return dataset
+def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
+    dataset_with_fewer_dimensions = dataset.copy()
+    for data in dataset_with_fewer_dimensions:
+        if indices_of_dimensions_to_keep == [0]:
+            data.x = data.x[:, 0].view(-1, 1)  # Keep only the first column and reshape
+        else: 
+            data.x = data.x[:, indices_of_dimensions_to_keep]
+    return dataset_with_fewer_dimensions
 
 def normalize_positional_features(dataset):
     # Collect all positional features
@@ -128,62 +132,34 @@ def replace_invalid_values(tensor):
     tensor[torch.isnan(tensor)] = max_finite_value
     return tensor
 
-def normalize_data(dataset):
+def normalize_x_values(dataset):
     shape_of_x = dataset[0].x.shape[1]
-    if shape_of_x == 1:
-        # Collect all node features
-        all_node_features = []
-        for data in dataset:
-            all_node_features.append(data.x)
-
-        # Stack all node features into a single tensor
+    for i in range(shape_of_x):
+        all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
         all_node_features = torch.cat(all_node_features, dim=0)
 
-        # Fit the min-max scaler on the node features
+        all_node_features = replace_invalid_values(all_node_features)
+        all_node_features_np = all_node_features.numpy()
+
         scaler = MinMaxScaler()
-        scaler.fit(all_node_features)
+        scaler.fit(all_node_features_np)
 
-        # Apply the scaler to each data instance and store as a new feature
         for data in dataset:
-            data.x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
-            
-    else:
-        normalized_x = []
-        for i in range(shape_of_x):
-            all_node_features_this_dimension = []
-            # Concatenate all x attributes across the dataset, keeping the feature dimension
-            for data in dataset:
-                all_node_features_this_dimension.append(data.x[:,i])
-                
-            all_node_features_this_dimension = torch.cat(all_node_features_this_dimension, dim=0).reshape(-1, 1)
-        
-            # Replace infinity values with the maximum finite value in the tensor
-            finite_mask = torch.isfinite(all_node_features_this_dimension)
-            max_finite_value = all_node_features_this_dimension[finite_mask].max()
-            all_node_features_this_dimension[~finite_mask] = max_finite_value
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
 
-            # Check and handle NaN values
-            nan_mask = torch.isnan(all_node_features_this_dimension)
-            all_node_features_this_dimension[nan_mask] = max_finite_value
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
 
-            # Convert tensor to numpy array for scikit-learn
-            all_node_features_np = all_node_features_this_dimension.numpy()
-            
-            scaler = MinMaxScaler()
-            scaler.fit(all_node_features_np)
-            for data in dataset:
-                data_x_dim_replaced = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-                normalized_x_this_dimension = torch.tensor(scaler.transform(data_x_dim_replaced.numpy()), dtype=torch.float)
-                
-                if i == 0:
-                    data.normalized_x = normalized_x_this_dimension
-                else:
-                    data.normalized_x = torch.cat((data.normalized_x, normalized_x_this_dimension), dim=1)
-            
-            normalized_x.append(normalized_x_this_dimension)
-        normalized_x = torch.cat(normalized_x, dim=1)
-        data.x = normalized_x  
+    for data in dataset:
+        data.x = data.normalized_x
+        del data.normalized_x
+
     return dataset
+
+
 
 def normalize_y_values(dataset):
     # Collect all y values
