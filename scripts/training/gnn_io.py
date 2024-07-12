@@ -24,6 +24,9 @@ from shapely.geometry import LineString
 import tqdm
 import wandb
 
+import joblib  # For saving the scaler
+
+
 class MyGeometricDataset(Dataset):
     def __init__(self, data_list):
         self.data_list = data_list
@@ -84,7 +87,7 @@ def normalize_dataset(dataset):
     # Normalize positional features (if any)
     dataset = normalize_positional_features(dataset)
     # Normalize y values
-    dataset = normalize_y_values(dataset)
+    # dataset = normalize_y_values(dataset)
     return dataset
 
 # Function to replace x with normalized_x and remove normalized_x
@@ -168,11 +171,14 @@ def normalize_y_values(dataset):
         all_y_values.append(data.y)
 
     # Stack all y values into a single tensor
-    all_y_values = torch.cat(all_y_values, dim=0)
+    all_y_values = torch.cat(all_y_values, dim=0).reshape(-1, 1)
 
     # Fit the min-max scaler on the y values
     scaler = MinMaxScaler()
     scaler.fit(all_y_values)
+    
+    # Save the scaler for future inverse transformation
+    joblib.dump(scaler, 'y_scaler.pkl')
 
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
