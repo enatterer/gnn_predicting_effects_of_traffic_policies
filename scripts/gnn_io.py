@@ -81,7 +81,17 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False)
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
+
 def normalize_dataset(dataset):
+    # Normalize node features
+    dataset = normalize_x_values(dataset)
+    # Normalize positional features (if any)
+    dataset = normalize_positional_features(dataset)
+    # Normalize y values
+    dataset = normalize_y_values(dataset)
+    return dataset
+
+def normalize_dataset_do_not_normalize_y(dataset):
     # Normalize node features
     dataset = normalize_x_values(dataset)
     # Normalize positional features (if any)
@@ -230,6 +240,12 @@ def compute_baseline_error(dataset_normalized):
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
+    print("mean_y_normalized: ")
+    print(mean_y_normalized)
+    
+    median_y_normalized = np.median(y_values_normalized)   
+    print("median_y_normalized: ")
+    print(median_y_normalized)
 
     # Convert numpy arrays to torch tensors
     y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
@@ -246,6 +262,32 @@ def compute_baseline_error(dataset_normalized):
 
     return mse.item() 
 
+
+def compute_baseline_error_difference_loss(dataset_normalized):
+    """
+    Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
+
+    Parameters:
+    - dataset_normalized: A dataset containing y values: The actual difference of the volume of cars.
+
+    Returns:
+    - mse_value: The baseline MSE value.
+    """
+    # Concatenate the normalized y values from the dataset
+    actual_difference_vol_car = np.concatenate([data.y for data in dataset_normalized])
+
+    target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
+    
+    target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
+    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
+    
+    # # # # Instantiate the MSELoss function
+    mse_loss = torch.nn.MSELoss()
+
+    # # # # Compute the MSE
+    mse = mse_loss(actual_difference_vol_car, target_tensor)
+
+    return mse.item() 
 
 # def visualize_data(policy_features, flow_features, title):
 #     edges = edge_index.T.tolist()

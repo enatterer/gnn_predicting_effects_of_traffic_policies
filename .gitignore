@@ -1,4 +1,7 @@
 .history/
 data/
 scripts/training/wandb/
+scripts/testing_and_evaluation/wandb/
+scripts/training/__pycache__/
+scripts/testing_and_evaluation/__pycache__/
 scripts/__pycache__/
