@@ -24,6 +24,8 @@ from shapely.geometry import LineString
 import tqdm
 import wandb
 
+import json
+
 import joblib  # For saving the scaler
 
 
@@ -57,6 +59,7 @@ class EarlyStopping:
             self.counter = 0
 
 
+# This function should be replaced by below create_dataloaders
 def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False):
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
@@ -78,17 +81,64 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False)
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
+def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
+    # Ensure the ratios sum to 1
+    assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
+    
+    dataset_length = len(dataset)
+    print(f"Total dataset length: {dataset_length}")
+    
+    # Calculate split indices
+    train_split_idx = int(dataset_length * train_ratio)
+    val_split_idx = train_split_idx + int(dataset_length * val_ratio)
+    
+    # Create indices for each subset
+    train_indices = range(0, train_split_idx)
+    val_indices = range(train_split_idx, val_split_idx)
+    test_indices = range(val_split_idx, dataset_length)
+    
+    # Create subsets
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    test_subset = Subset(dataset, test_indices)
+    
+    print(f"Training subset length: {len(train_subset)}")
+    print(f"Validation subset length: {len(val_subset)}")
+    print(f"Test subset length: {len(test_subset)}")
+    
+    # Create data loaders
+    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    
+    return train_loader, val_loader, test_loader
+
+def save_dataloader(dataloader, file_path):
+    # Extract the dataset from the DataLoader
+    dataset = dataloader.dataset
+    # Save the dataset to the specified file path
+    torch.save(dataset, file_path)
+
+def save_dataloader_params(dataloader, file_path):
+    params = {
+        'batch_size': dataloader.batch_size,
+        # 'shuffle': dataloader.shuffle,
+        'collate_fn': dataloader.collate_fn.__name__  # Assuming collate_fn is a known function
+    }
+    with open(file_path, 'w') as f:
+        json.dump(params, f)
+
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
 
-def normalize_dataset(dataset):
+def normalize_dataset(dataset, y_scalar=None):
     # Normalize node features
     dataset = normalize_x_values(dataset)
     # Normalize positional features (if any)
     dataset = normalize_positional_features(dataset)
     # Normalize y values
-    dataset = normalize_y_values(dataset)
+    dataset = normalize_y_values(dataset, y_scalar)
     return dataset
 
 def normalize_dataset_do_not_normalize_y(dataset):
@@ -174,7 +224,7 @@ def normalize_x_values(dataset):
 
 
 
-def normalize_y_values(dataset):
+def normalize_y_values(dataset, y_scalar=None):
     # Collect all y values
     all_y_values = []
     for data in dataset:
@@ -183,12 +233,15 @@ def normalize_y_values(dataset):
     # Stack all y values into a single tensor
     all_y_values = torch.cat(all_y_values, dim=0).reshape(-1, 1)
 
-    # Fit the min-max scaler on the y values
-    scaler = MinMaxScaler()
-    scaler.fit(all_y_values)
-    
-    # Save the scaler for future inverse transformation
-    joblib.dump(scaler, 'y_scaler.pkl')
+    if y_scalar is None:
+        # Fit the min-max scaler on the y values
+        scaler = MinMaxScaler()
+        scaler.fit(all_y_values)
+        
+        # Save the scaler for future inverse transformation
+        joblib.dump(scaler, 'y_scaler.pkl')
+    else:
+        scaler = y_scalar
 
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
@@ -225,7 +278,7 @@ def encode_modes(modes):
     return mode_mapping.get(modes, -1)  # Use -1 for any unknown modes
 
 
-def compute_baseline_error(dataset_normalized):
+def compute_baseline_of_mean_target(dataset_normalized):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
@@ -263,7 +316,7 @@ def compute_baseline_error(dataset_normalized):
     return mse.item() 
 
 
-def compute_baseline_error_difference_loss(dataset_normalized):
+def compute_baseline_of_no_policies(dataset_normalized):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
@@ -281,10 +334,10 @@ def compute_baseline_error_difference_loss(dataset_normalized):
     target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
     actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
     
-    # # # # Instantiate the MSELoss function
+    # Instantiate the MSELoss function
     mse_loss = torch.nn.MSELoss()
 
-    # # # # Compute the MSE
+    # Compute the MSE
     mse = mse_loss(actual_difference_vol_car, target_tensor)
 
     return mse.item() 

@@ -6,9 +6,9 @@ import torch
 import torch_geometric
 from torch_geometric.data import Data
 
-from scripts.training.gnn_architectures import MyGnn
+from scripts.gnn_architectures import MyGnn
 import scripts.gnn_io as gio
-import scripts.training.gnn_architectures as garch
+import scripts.gnn_architectures as garch
 import pprint
 import itertools
 
