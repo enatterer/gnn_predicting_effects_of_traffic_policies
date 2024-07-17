@@ -144,3 +144,38 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     wandb.summary["val_loss"] = val_loss
     wandb.finish()
     return val_loss, epoch
+
+def evaluate(model, test_dl, device, loss_func=torch.nn.MSELoss()):
+    model.eval()  # Set the model to evaluation mode
+    test_loss = 0
+    output_list = []
+    with torch.no_grad():  # Disable gradient computation
+        for data in test_dl:
+            inputs, targets = data.x.to(device), data.y.to(device)
+            outputs = model(data.to(device))
+            output_list.append(outputs)
+            loss = loss_func(outputs, targets)
+            test_loss += loss.item()
+    avg_test_loss = test_loss / len(test_dl)
+    return avg_test_loss, output_list
+
+def load_model(model_path):
+    # Load the saved model checkpoint
+    checkpoint = torch.load(model_path)
+    
+    # Extract the state dictionary and configuration
+    state_dict = checkpoint['state_dict']
+    config = checkpoint['config']
+    
+    # Initialize the model with the configuration
+    model = MyGnn(
+        in_channels=config['in_channels'],
+        out_channels=config['out_channels'],
+        hidden_size=config['hidden_size'],
+        gat_layers=config['gat_layers'],
+        gcn_layers=config['gcn_layers'],
+        # output_layer=config['output_layer'],
+        output_layer='gat'
+    )
+    model.load_state_dict(state_dict)
+    return model, config
