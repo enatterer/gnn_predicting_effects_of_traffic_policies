@@ -7,6 +7,9 @@ import torch_geometric
 from torch_geometric.data import Data, Batch
 
 from torch_geometric.nn import PointNetConv
+from tqdm import tqdm
+import wandb
+import numpy as np
 
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
@@ -24,7 +27,7 @@ class MyGnn(torch.nn.Module):
         
         # Hyperparameters 
         self.in_channels = in_channels
-        self.ot_channels = out_channels
+        self.out_channels = out_channels
         self.hidden_size = hidden_size
         self.gat_layers = gat_layers
         self.gcn_layers = gcn_layers
@@ -95,3 +98,49 @@ def validate_model_pos_features(model, valid_dl, loss_func, device):
             val_loss += loss_func(predicted, targets).item()
             num_batches += 1
     return val_loss / num_batches if num_batches > 0 else 0
+
+
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None):
+    for epoch in range(config.epochs):
+        model.train()
+        actual_vals = []
+        predictions = []
+        for idx, data in tqdm(enumerate(train_dl)):
+            input_node_features, targets = data.x.to(device), data.y.to(device)
+            optimizer.zero_grad()
+            
+            # Forward pass
+            predicted = model(data.to(device))
+            
+            actual_vals.extend(targets.detach().numpy())
+            predictions.extend(predicted.detach().numpy())
+            
+            # Backward pass
+            train_loss = loss_fct(predicted, targets)
+            train_loss.backward()
+            optimizer.step()
+            
+            wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
+            # print(f"epoch: {epoch}, step: {idx}, loss: {train_loss.item()}")
+        
+        actual_vals = np.array(actual_vals)
+        predictions = np.array(predictions)
+        
+        # Calculate R^2
+        sst = ((actual_vals - actual_vals.mean()) ** 2).sum()
+        ssr = ((actual_vals - predictions) ** 2).sum()
+        r2 = 1 - ssr / sst
+
+        val_loss = validate_model_pos_features(model, valid_dl, loss_fct, device)
+        print(f"epoch: {epoch}, validation loss: {val_loss}, R^2: {r2}")
+        wandb.log({"loss": val_loss, "epoch": epoch, "r2": r2})
+            
+        early_stopping(val_loss)
+        if early_stopping.early_stop:
+            print("Early stopping triggered. Stopping training.")
+            break
+    
+    print("Best validation loss: ", val_loss)
+    wandb.summary["val_loss"] = val_loss
+    wandb.finish()
+    return val_loss, epoch
