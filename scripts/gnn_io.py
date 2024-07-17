@@ -24,6 +24,11 @@ from shapely.geometry import LineString
 import tqdm
 import wandb
 
+import json
+
+import joblib  # For saving the scaler
+
+
 class MyGeometricDataset(Dataset):
     def __init__(self, data_list):
         self.data_list = data_list
@@ -43,7 +48,7 @@ class EarlyStopping:
     def __call__(self, val_loss):
         if self.best_loss is None:
             self.best_loss = val_loss
-        elif val_loss > self.best_loss:
+        elif val_loss >= self.best_loss:
             self.counter += 1
             if self.verbose:
                 print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
@@ -54,9 +59,13 @@ class EarlyStopping:
             self.counter = 0
 
 
-def create_dataloader(is_train, batch_size, dataset, train_ratio):
+# This function should be replaced by below create_dataloaders
+def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False):
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
+
+    if is_test:
+        return DataLoader(dataset=dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
     # Calculate split index for training and validation
     split_idx = int(dataset_length * train_ratio)
@@ -72,20 +81,93 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio):
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
+def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
+    # Ensure the ratios sum to 1
+    assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
+    dataset_length = len(dataset)
+    print(f"Total dataset length: {dataset_length}")
+    
+    # Calculate split indices
+    train_split_idx = int(dataset_length * train_ratio)
+    val_split_idx = train_split_idx + int(dataset_length * val_ratio)
+    
+    # Create indices for each subset
+    train_indices = range(0, train_split_idx)
+    val_indices = range(train_split_idx, val_split_idx)
+    test_indices = range(val_split_idx, dataset_length)
+    
+    # Create subsets
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    test_subset = Subset(dataset, test_indices)
+    
+    print(f"Training subset length: {len(train_subset)}")
+    print(f"Validation subset length: {len(val_subset)}")
+    print(f"Test subset length: {len(test_subset)}")
+    
+    # Create data loaders
+    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    
+    return train_loader, val_loader, test_loader
+
+def save_dataloader(dataloader, file_path):
+    # Extract the dataset from the DataLoader
+    dataset = dataloader.dataset
+    # Save the dataset to the specified file path
+    torch.save(dataset, file_path)
+
+def save_dataloader_params(dataloader, file_path):
+    params = {
+        'batch_size': dataloader.batch_size,
+        # 'shuffle': dataloader.shuffle,
+        'collate_fn': dataloader.collate_fn.__name__  # Assuming collate_fn is a known function
+    }
+    with open(file_path, 'w') as f:
+        json.dump(params, f)
+
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
-def normalize_dataset(dataset):
+# Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
+def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
     # Normalize node features
-    dataset = normalize_data(dataset)
+    dataset = normalize_x_values_with_scalar_saved(dataset, x_scalar_list, directory_path)
     # Normalize positional features (if any)
-    dataset = normalize_positional_features(dataset)
+    dataset = normalize_positional_features(dataset, pos_scalar, directory_path)
     # Normalize y values
-    dataset = normalize_y_values(dataset)
+    dataset = normalize_y_values(dataset, y_scalar, directory_path)
     return dataset
 
-def normalize_positional_features(dataset):
+# def normalize_dataset_do_not_normalize_y(dataset):
+#     # Normalize node features
+#     dataset = normalize_x_values(dataset)
+#     # Normalize positional features (if any)
+#     dataset = normalize_positional_features(dataset)
+#     # Normalize y values
+#     # dataset = normalize_y_values(dataset)
+#     return dataset
+
+# Function to replace x with normalized_x and remove normalized_x
+def replace_x_with_normalized_x(dataset):
+    for data in dataset:
+        if hasattr(data, 'normalized_x'):
+            data.x = data.normalized_x
+            del data.normalized_x
+    return dataset
+
+def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
+    dataset_with_fewer_dimensions = dataset.copy()
+    for data in dataset_with_fewer_dimensions:
+        if indices_of_dimensions_to_keep == [0]:
+            data.x = data.x[:, 0].view(-1, 1)  # Keep only the first column and reshape
+        else: 
+            data.x = data.x[:, indices_of_dimensions_to_keep]
+    return dataset_with_fewer_dimensions
+
+def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
     # Collect all positional features
     all_pos_features = []
     for data in dataset:
@@ -93,14 +175,17 @@ def normalize_positional_features(dataset):
 
     # Stack all positional features into a single tensor
     all_pos_features = torch.cat(all_pos_features, dim=0)
-
-    # Fit the min-max scaler on the positional features
-    scaler = MinMaxScaler()
-    scaler.fit(all_pos_features)
-
+    
+    if pos_scalar is None:
+        scaler = MinMaxScaler()
+        scaler.fit(all_pos_features)
+        joblib.dump(scaler, directory_path + 'pos_scaler.pkl')
+    else:
+        scaler = pos_scalar
+    
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
-        data.normalized_pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
+        data.pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
     return dataset
 
 def replace_invalid_values(tensor):
@@ -113,79 +198,86 @@ def replace_invalid_values(tensor):
     tensor[torch.isnan(tensor)] = max_finite_value
     return tensor
 
-def normalize_data(dataset):
-    shape_of_x = dataset[0].x.shape[1]
-    if shape_of_x == 1:
-        # Collect all node features
-        all_node_features = []
-        for data in dataset:
-            all_node_features.append(data.x)
+# def normalize_x_values(dataset):
+#     shape_of_x = dataset[0].x.shape[1]
+#     for i in range(shape_of_x):
+#         all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
+#         all_node_features = torch.cat(all_node_features, dim=0)
 
-        # Stack all node features into a single tensor
+#         all_node_features = replace_invalid_values(all_node_features)
+#         all_node_features_np = all_node_features.numpy()
+
+#         scaler = MinMaxScaler()
+#         scaler.fit(all_node_features_np)
+
+#         for data in dataset:
+#             data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+#             normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+
+#             if i == 0:
+#                 data.normalized_x = normalized_x_dim
+#             else:
+#                 data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
+
+#     for data in dataset:
+#         data.x = data.normalized_x
+#         del data.normalized_x
+
+#     return dataset
+
+def normalize_x_values_with_scalar_saved(dataset, x_scaler_list, directory_path=None):
+    shape_of_x = dataset[0].x.shape[1]
+    list_of_scalers_to_save = []
+    create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
+    for i in range(shape_of_x):
+        all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
         all_node_features = torch.cat(all_node_features, dim=0)
 
-        # Fit the min-max scaler on the node features
-        scaler = MinMaxScaler()
-        scaler.fit(all_node_features)
-
-        # Apply the scaler to each data instance and store as a new feature
-        for data in dataset:
-            data.normalized_x = torch.tensor(scaler.transform(data.x), dtype=torch.float)
-            
-    else:
-        normalized_x = []
-        for i in range(shape_of_x):
-            all_node_features_this_dimension = []
-            # Concatenate all x attributes across the dataset, keeping the feature dimension
-            for data in dataset:
-                all_node_features_this_dimension.append(data.x[:,i])
-                
-            all_node_features_this_dimension = torch.cat(all_node_features_this_dimension, dim=0).reshape(-1, 1)
+        all_node_features = replace_invalid_values(all_node_features)
+        all_node_features_np = all_node_features.numpy()
         
-            # Replace infinity values with the maximum finite value in the tensor
-            finite_mask = torch.isfinite(all_node_features_this_dimension)
-            max_finite_value = all_node_features_this_dimension[finite_mask].max()
-            all_node_features_this_dimension[~finite_mask] = max_finite_value
-
-            # Check and handle NaN values
-            nan_mask = torch.isnan(all_node_features_this_dimension)
-            all_node_features_this_dimension[nan_mask] = max_finite_value
-
-            # Convert tensor to numpy array for scikit-learn
-            all_node_features_np = all_node_features_this_dimension.numpy()
-            
+        if create_scaler:
             scaler = MinMaxScaler()
             scaler.fit(all_node_features_np)
-            for data in dataset:
-                data_x_dim_replaced = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-                normalized_x_this_dimension = torch.tensor(scaler.transform(data_x_dim_replaced.numpy()), dtype=torch.float)
-                
-                if i == 0:
-                    data.normalized_x = normalized_x_this_dimension
-                else:
-                    data.normalized_x = torch.cat((data.normalized_x, normalized_x_this_dimension), dim=1)
-            
-            normalized_x.append(normalized_x_this_dimension)
-        normalized_x = torch.cat(normalized_x, dim=1)
-        data.normalized_x = normalized_x  
+            list_of_scalers_to_save.append(scaler)
+        else:
+            scaler_of_this_dimension = x_scaler_list[i]
+            scaler = scaler_of_this_dimension
+        
+        for data in dataset:
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
+    if create_scaler:
+        joblib.dump(list_of_scalers_to_save, directory_path + 'x_scaler.pkl')
+    for data in dataset:
+        data.x = data.normalized_x
+        del data.normalized_x
     return dataset
 
-def normalize_y_values(dataset):
+
+def normalize_y_values(dataset, y_scalar=None, directory_path=None):
     # Collect all y values
     all_y_values = []
     for data in dataset:
         all_y_values.append(data.y)
 
     # Stack all y values into a single tensor
-    all_y_values = torch.cat(all_y_values, dim=0)
+    all_y_values = torch.cat(all_y_values, dim=0).reshape(-1, 1)
 
-    # Fit the min-max scaler on the y values
-    scaler = MinMaxScaler()
-    scaler.fit(all_y_values)
+    if y_scalar is None:
+        scaler = MinMaxScaler()
+        scaler.fit(all_y_values)
+        joblib.dump(scaler, directory_path + 'y_scaler.pkl')
+    else:
+        scaler = y_scalar
 
     # Apply the scaler to each data instance and store as a new feature
     for data in dataset:
-        data.normalized_y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
+        data.y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
 
     return dataset
 
@@ -218,21 +310,27 @@ def encode_modes(modes):
     return mode_mapping.get(modes, -1)  # Use -1 for any unknown modes
 
 
-def compute_baseline_error(dataset_normalized):
+def compute_baseline_of_mean_target(dataset, loss_fct):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
     Parameters:
-    - dataset_normalized: A dataset containing normalized y values.
+    - dataset: A dataset containing normalized y values.
 
     Returns:
     - mse_value: The baseline MSE value.
     """
     # Concatenate the normalized y values from the dataset
-    y_values_normalized = np.concatenate([data.normalized_y for data in dataset_normalized])
+    y_values_normalized = np.concatenate([data.y for data in dataset])
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
+    # print("mean_y_normalized: ")
+    # print(mean_y_normalized)
+    
+    # median_y_normalized = np.median(y_values_normalized)   
+    # print("median_y_normalized: ")
+    # print(median_y_normalized)
 
     # Convert numpy arrays to torch tensors
     y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
@@ -242,13 +340,34 @@ def compute_baseline_error(dataset_normalized):
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
     # Instantiate the MSELoss function
-    mse_loss = torch.nn.MSELoss()
+    # mse_loss = torch.nn.MSELoss()
 
     # Compute the MSE
-    mse = mse_loss(y_values_normalized_tensor, target_tensor)
+    loss = loss_fct(y_values_normalized_tensor, target_tensor)
+    return loss.item() 
 
-    return mse.item() 
 
+def compute_baseline_of_no_policies(dataset, loss_fct):
+    """
+    Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
+
+    Parameters:
+    - dataset: A dataset containing y values: The actual difference of the volume of cars.
+
+    Returns:
+    - mse_value: The baseline MSE value.
+    """
+    # Concatenate the normalized y values from the dataset
+    actual_difference_vol_car = np.concatenate([data.y for data in dataset])
+
+    target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
+    
+    target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
+    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
+    
+    # Compute the loss
+    loss = loss_fct(actual_difference_vol_car, target_tensor)
+    return loss.item()
 
 # def visualize_data(policy_features, flow_features, title):
 #     edges = edge_index.T.tolist()
