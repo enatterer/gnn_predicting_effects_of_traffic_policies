@@ -57,6 +57,21 @@ class EarlyStopping:
         else:
             self.best_loss = val_loss
             self.counter = 0
+            
+def int_list_to_string(lst: list, delimiter: str = ', ') -> str:
+    """
+    Converts a list of integers to a string representation with the specified delimiter.
+
+    Parameters:
+    lst (list[int]): The list of integers.
+    delimiter (str): The delimiter used to separate the integers in the string. Default is ', '.
+
+    Returns:
+    str: The string representation of the list.
+    """
+    # Join the list elements into a string with the specified delimiter
+    return f"[{delimiter.join(map(str, lst))}]"
+
 
 
 # This function should be replaced by below create_dataloaders
