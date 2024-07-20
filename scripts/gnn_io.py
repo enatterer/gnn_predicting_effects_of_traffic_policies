@@ -107,9 +107,9 @@ def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
     print(f"Test subset length: {len(test_subset)}")
     
     # Create data loaders
-    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn)
+    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn)
+    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn)
     
     return train_loader, val_loader, test_loader
 
@@ -132,23 +132,21 @@ def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
 # Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
-def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
+def normalize_dataset(dataset, input_feature_normalisation:str= "standardScalar", y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
+    # if input_feature_normalisation ==  StandardScaler():
+    #     input_feature_normalisation = StandardScaler()
+    # else:
+    #     input_feature_normalisation= MinMaxScaler()
+    if input_feature_normalisation == None:
+        input_feature_normalisation = "standardScaler"
+    print("Input normalisation: " + str(input_feature_normalisation))
     # Normalize node features
-    dataset = normalize_x_values_with_scalar_saved(dataset, x_scalar_list, directory_path)
+    dataset = normalize_x_values_with_scalar_saved(dataset, input_feature_normalisation, x_scalar_list, directory_path)
     # Normalize positional features (if any)
-    dataset = normalize_positional_features(dataset, pos_scalar, directory_path)
+    dataset = normalize_positional_features(dataset, input_feature_normalisation, pos_scalar, directory_path)
     # Normalize y values
     dataset = normalize_y_values(dataset, y_scalar, directory_path)
     return dataset
-
-# def normalize_dataset_do_not_normalize_y(dataset):
-#     # Normalize node features
-#     dataset = normalize_x_values(dataset)
-#     # Normalize positional features (if any)
-#     dataset = normalize_positional_features(dataset)
-#     # Normalize y values
-#     # dataset = normalize_y_values(dataset)
-#     return dataset
 
 # Function to replace x with normalized_x and remove normalized_x
 def replace_x_with_normalized_x(dataset):
@@ -167,7 +165,7 @@ def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
             data.x = data.x[:, indices_of_dimensions_to_keep]
     return dataset_with_fewer_dimensions
 
-def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
+def normalize_positional_features(dataset, input_feature_normalisation, pos_scalar=None, directory_path=None):
     # Collect all positional features
     all_pos_features = []
     for data in dataset:
@@ -177,7 +175,8 @@ def normalize_positional_features(dataset, pos_scalar=None, directory_path=None)
     all_pos_features = torch.cat(all_pos_features, dim=0)
     
     if pos_scalar is None:
-        scaler = MinMaxScaler()
+        scaler = StandardScaler()
+        print("Scaler created for pos features: " + str(scaler))
         scaler.fit(all_pos_features)
         joblib.dump(scaler, directory_path + 'pos_scaler.pkl')
     else:
@@ -225,19 +224,19 @@ def replace_invalid_values(tensor):
 
 #     return dataset
 
-def normalize_x_values_with_scalar_saved(dataset, x_scaler_list, directory_path=None):
+def normalize_x_values_with_scalar_saved(dataset, input_feature_normalisation, x_scaler_list, directory_path=None):
     shape_of_x = dataset[0].x.shape[1]
     list_of_scalers_to_save = []
     create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
     for i in range(shape_of_x):
         all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
         all_node_features = torch.cat(all_node_features, dim=0)
-
         all_node_features = replace_invalid_values(all_node_features)
         all_node_features_np = all_node_features.numpy()
         
         if create_scaler:
-            scaler = MinMaxScaler()
+            scaler = StandardScaler()
+            print("Scaler created for x values: " + str(scaler))
             scaler.fit(all_node_features_np)
             list_of_scalers_to_save.append(scaler)
         else:
