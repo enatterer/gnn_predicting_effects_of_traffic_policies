@@ -10,6 +10,7 @@ import os
 from tqdm import tqdm
 import signal
 import joblib
+import argparse
 
 # Add the 'scripts' directory to the Python path
 scripts_path = os.path.abspath(os.path.join('..'))
@@ -37,14 +38,18 @@ def get_paths(base_dir, unique_model_description):
     return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
 
 # Define parameters
-def get_parameters():
+def get_parameters(args):
         project_name = "run_with_configurations"
         indices_of_datasets_to_use = [0, 1, 3, 4]
-        num_epochs = 1
-        batch_size = 8
-        hidden_layer_size = 64
-        hidden_layer_size_structure = [1, -1, 0, 1, 0]
-        gat_and_conv_structure = [1, 1, 1, 1, 1, 1]
+        num_epochs = 1000
+        batch_size = args.batch_size
+        hidden_layer_size = args.hidden_layer_size
+        hidden_layer_size_structure = [int(x) for x in args.hidden_layer_size_structure.split(',')]
+        print("hidden layer size struture")
+        print(hidden_layer_size_structure)
+        gat_and_conv_structure = [int(x) for x in args.gat_and_conv_structure.split(',')]
+        print("gat and conv ")
+        print(gat_and_conv_structure)
         lr = 0.001
         gradient_accumulation_steps = 3
         in_channels = len(indices_of_datasets_to_use) + 2
@@ -128,9 +133,18 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
     print(f'Model saved to {model_save_path}')   
 
 def main():
+    # Command-line arguments
+    parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
+    parser.add_argument("--hidden_layer_size", type=int, default=64, help="Size of hidden layers.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--hidden_layer_size_structure", type=str, default="1,-1,0,1,0", help="Structure of hidden layer sizes (comma-separated).")
+    parser.add_argument("--gat_and_conv_structure", type=str, default="1,1,1,1,1,1", help="Structure of GAT and GCN layers (comma-separated).")
+    
+    args = parser.parse_args()
+    
     set_random_seeds()
     device = get_device()
-    params = get_parameters()
+    params = get_parameters(args=args)
     
     # Create base directory for the run
     base_dir = '../../data/runs/'
@@ -156,8 +170,6 @@ def main():
         "out_channels": params['out_channels'],
     })
     early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
-    print("model save path: ")
-    print(model_save_path)
     train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
      
 if __name__ == '__main__':

@@ -13,10 +13,9 @@ import wandb
 import numpy as np
 import os
 from torch.cuda.amp import GradScaler, autocast
-
+            
 class MyGnn(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
-                 gcn_layers: int, output_layer: str = 'gcn'):
+    def __init__(self, in_channels: int, out_channels: int, hidden_layers_size: int, hidden_layer_size_structure: list, gat_and_conv_structure: list):
         """
         in_channels: number of input features
         out_channels: number of output features
@@ -31,135 +30,34 @@ class MyGnn(torch.nn.Module):
         # Hyperparameters 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.hidden_size = hidden_size
-        self.gat_layers = gat_layers
-        self.gcn_layers = gcn_layers
-        self.output_layer = output_layer
+        self.hidden_size = hidden_layers_size
+        self.hidden_layer_size_structure = hidden_layer_size_structure
+        self.gat_and_conv_structure = gat_and_conv_structure
         self.graph_layers = []
         layers = []
         
-        # Architecture
+        # Architecture of PointNetConv
         local_MLP_1 = nn.Sequential(
-            nn.Linear(in_channels, hidden_size),
+            nn.Linear(in_channels, hidden_layers_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(hidden_layers_size, hidden_layers_size),
         )
-        
         global_MLP_1 = nn.Sequential(
-            nn.Linear(hidden_size, int(hidden_size/2)),
+            nn.Linear(hidden_layers_size, int(hidden_layers_size/2)),
             nn.ReLU(),
-            nn.Linear(int(hidden_size/2), int(hidden_size*2)),
+            nn.Linear(int(hidden_layers_size/2), int(hidden_layers_size*2)),
             nn.ReLU(),
-            nn.Linear(int(hidden_size*2), hidden_size)
+            nn.Linear(int(hidden_layers_size*2), hidden_layers_size)
         )
-        
         self.pointLayer = PointNetConv(local_nn = local_MLP_1, global_nn = global_MLP_1)
-                
-        # Add GAT layers and ReLU activations to the list
-        for _ in range(gat_layers):
-            layers.append((torch_geometric.nn.GATConv(hidden_size, hidden_size), 'x, edge_index -> x'))
-            layers.append(nn.ReLU(inplace=True))
-            
-        for _ in range(gcn_layers):
-            layers.append((torch_geometric.nn.GCNConv(hidden_size, hidden_size), 'x, edge_index -> x'))
-            layers.append(nn.ReLU(inplace=True))
-
+        
+        hidden_layer_structure = define_hidden_layer_structure(hidden_layer_size_structure= self.hidden_layer_size_structure, hidden_layer_size=self.hidden_size, output_layer_size=self.out_channels)
+        layers = define_gat_and_conv_layers(hidden_layer_structure=hidden_layer_structure, gat_and_conv_structure=self.gat_and_conv_structure)
+        
         # Create the Sequential module with the layers
         if layers:
             self.graph_layers = torch_geometric.nn.Sequential('x, edge_index', layers)
                     
-        if output_layer == 'gcn':
-            self.output_layer = torch_geometric.nn.GCNConv(hidden_size, out_channels)
-        elif output_layer == 'gat':
-            self.output_layer = torch_geometric.nn.GATConv(hidden_size, out_channels)
-        else:
-            raise ValueError("Invalid output layer")
-            
-        print("Model initialized")
-        print(self)
-
-    def forward(self, data):
-        x = data.x
-        edge_index = data.edge_index
-
-        x = self.pointLayer(x, data.pos, edge_index)
-        
-        if self.graph_layers:
-            x = self.graph_layers(x, edge_index)
-            
-        x = self.output_layer(x, edge_index)
-        return x
-    
-    
-class MyGnnHardCoded(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, hidden_size: int, output_layer: str = 'gcn'):
-        """
-        in_channels: number of input features
-        out_channels: number of output features
-        hidden_size: size of hidden layer
-        gat_layers: number of GAT layers
-        heads: number of attention heads
-        gcn_layers: number of GCN layers
-        output_layer: 'gat' or 'gcn'
-        """
-        super().__init__()
-        
-        # Hyperparameters 
-        self.in_channels = in_channels
-        self.out_channels = out_channels
-        self.hidden_size = hidden_size
-        self.output_layer = output_layer
-        self.graph_layers = []
-        layers = []
-        
-        # Architecture
-        local_MLP_1 = nn.Sequential(
-            nn.Linear(in_channels, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
-        )
-        
-        global_MLP_1 = nn.Sequential(
-            nn.Linear(hidden_size, int(hidden_size/2)),
-            nn.ReLU(),
-            nn.Linear(int(hidden_size/2), int(hidden_size*2)),
-            nn.ReLU(),
-            nn.Linear(int(hidden_size*2), hidden_size)
-        )
-        
-        self.pointLayer = PointNetConv(local_nn = local_MLP_1, global_nn = global_MLP_1)
-                
-        layers.append((torch_geometric.nn.GATConv(hidden_size, int(hidden_size*2)), 'x, edge_index -> x'))
-        layers.append(nn.ReLU(inplace=True))
-        
-        layers.append((torch_geometric.nn.GATConv(int(hidden_size*2), int(hidden_size/2)), 'x, edge_index -> x'))
-        layers.append(nn.ReLU(inplace=True))
-        
-        layers.append((torch_geometric.nn.GATConv(int(hidden_size/2), int(hidden_size*2)), 'x, edge_index -> x'))
-        layers.append(nn.ReLU(inplace=True))
-        
-        layers.append((torch_geometric.nn.GATConv(int(hidden_size*2), hidden_size), 'x, edge_index -> x'))
-        layers.append(nn.ReLU(inplace=True))
-        
-        layers.append((torch_geometric.nn.GATConv(hidden_size, hidden_size), 'x, edge_index -> x'))
-        layers.append(nn.ReLU(inplace=True))
-        
-        
-        # for _ in range(gcn_layers):
-        #     layers.append((torch_geometric.nn.GCNConv(hidden_size, hidden_size), 'x, edge_index -> x'))
-        #     layers.append(nn.ReLU(inplace=True))
-
-        # Create the Sequential module with the layers
-        if layers:
-            self.graph_layers = torch_geometric.nn.Sequential('x, edge_index', layers)
-                    
-        if output_layer == 'gcn':
-            self.output_layer = torch_geometric.nn.GCNConv(hidden_size, out_channels)
-        elif output_layer == 'gat':
-            self.output_layer = torch_geometric.nn.GATConv(hidden_size, out_channels)
-        else:
-            raise ValueError("Invalid output layer")
-            
         print("Model initialized")
         print(self)
 
@@ -169,7 +67,6 @@ class MyGnnHardCoded(torch.nn.Module):
         x = self.pointLayer(x, data.pos, edge_index)
         if self.graph_layers:
             x = self.graph_layers(x, edge_index)
-        x = self.output_layer(x, edge_index)
         return x
 
 def validate_model_pos_features(model, valid_dl, loss_func, device):
@@ -258,7 +155,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
         optimizer.zero_grad()
         total_train_loss = 0
         
-        for idx, data in tqdm(enumerate(train_dl)):
+        for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.epochs}"):
             input_node_features, targets = data.x.to(device), data.y.to(device)
             with autocast():
                 # Forward pass
@@ -317,6 +214,71 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     wandb.finish()
     return val_loss, epoch
 
+def define_hidden_layer_structure(hidden_layer_size_structure: list, hidden_layer_size: int, output_layer_size = int):
+    """
+    Generates a list of hidden layer sizes based on an initial size and a list of instructions.
+
+    Parameters:
+    list_of_halfs_and_duplicates (list): List of instructions where 1 means double the size,
+                                         0 means the same size, and -1 means half the size.
+    hidden_layer_size (int): The initial size of the hidden layer.
+
+    Returns:
+    list: A list of integers representing the sizes of the hidden layers.
+    """
+    if not all(isinstance(i, int) and i in [-1, 0, 1] for i in hidden_layer_size_structure):
+        raise ValueError("list_of_halfs_and_duplicates must contain only -1, 0, or 1.")
+    if hidden_layer_size <= 0:
+        raise ValueError("hidden_layer_size must be a positive integer.")
+    
+    result_list = [hidden_layer_size]
+    for i in hidden_layer_size_structure:
+        if i == 1:
+            result_list.append(int(result_list[-1] * 2))
+        elif i == 0:
+            result_list.append(result_list[-1])
+        elif i == -1:
+            result_list.append(int(result_list[-1] / 2))
+    result_list.append(output_layer_size)
+    return result_list
+
+def define_gat_and_conv_layers(hidden_layer_structure: list, gat_and_conv_structure: list):
+    """
+    Generates a list of GNN layers and ReLU activations based on the provided hidden layer structure.
+
+    Parameters:
+    hidden_layer_structure (list[int]): A list of integers representing the sizes of the hidden layers.
+    gat_and_conv_structure (list[int]): A list specifying the type of GNN layer to use. 
+        Use 1 for 'GATConv' and -1 for 'GCNConv'.
+        Note that the size of hidden_layer_structure must be the same size as gat_and_conv_structure.
+
+    Returns:
+    list: A list of tuples and ReLU activations, where each tuple contains a GNN layer and a string describing the data flow.
+    
+    Raises:
+    ValueError: If an invalid layer type is specified or if the input lengths are incompatible.
+    """
+    
+    if len(hidden_layer_structure) != len(gat_and_conv_structure):
+        raise ValueError("The size of hidden_layer_structure and gat_and_conv_structure must be the same!")
+
+    # Mapping layer types to their corresponding classes
+    layer_types = {
+        1: torch_geometric.nn.GATConv,
+        -1: torch_geometric.nn.GCNConv
+    }
+
+    layers = []
+    for idx in range(len(hidden_layer_structure) - 1):
+        layer_type = gat_and_conv_structure[idx]
+        if layer_type in layer_types:
+            layer_class = layer_types[layer_type]
+            layers.append((layer_class(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
+        else:
+            raise ValueError("Invalid layer_type. Choose 1 for 'GATConv' or -1 for 'GCNConv'.")
+        layers.append(torch.nn.ReLU(inplace=True))
+    return layers
+
 def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path):
     checkpoint = {
         'epoch': epoch,
@@ -362,3 +324,4 @@ def load_model(model_path):
     )
     model.load_state_dict(state_dict)
     return model, config
+
