@@ -12,6 +12,7 @@ from tqdm import tqdm
 import wandb
 import numpy as np
 import os
+from torch.cuda.amp import GradScaler, autocast
 
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
@@ -241,6 +242,8 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
         The epoch at which the best validation loss was achieved.
     """
     
+    scaler = GradScaler()
+    
     # Check if a checkpoint exists and load it
     if use_existing_checkpoint:
         latest_checkpoint = get_latest_checkpoint(path_existing_checkpoints)
@@ -257,30 +260,32 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
         
         for idx, data in tqdm(enumerate(train_dl)):
             input_node_features, targets = data.x.to(device), data.y.to(device)
-            
-            # Forward pass
-            predicted = model(data.to(device))
-            
+            with autocast():
+                # Forward pass
+                predicted = model(data.to(device))
+                train_loss = loss_fct(predicted, targets)
+
             if compute_r_squared:
                 actual_vals.extend(targets.cpu().detach().numpy())
                 predictions.extend(predicted.cpu().detach().numpy())
             
             # Backward pass
-            train_loss = loss_fct(predicted, targets)
-            train_loss.backward()
-            total_train_loss += train_loss.item()
+            scaler.scale(train_loss).backward() 
 
             if (idx + 1) % accumulation_steps == 0:
-                optimizer.step()
+                scaler.step(optimizer)
+                scaler.update()
                 optimizer.zero_grad()
                 
             # Do not log train loss at every iteration, as it uses CPU
-            if (idx + 1) % 100 == 0:
+            if (idx + 1) % 300 == 0:
                 wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
         
         if len(train_dl) % accumulation_steps != 0:
-            optimizer.step()
+            scaler.step(optimizer)
+            scaler.update()
             optimizer.zero_grad()
+            
         if compute_r_squared:
             actual_vals = np.array(actual_vals)
             predictions = np.array(predictions)
@@ -296,11 +301,11 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
         print(f"epoch: {epoch}, validation loss: {val_loss}")
         wandb.log(log_data)
         
-        total_train_loss /= len(train_dl)
         # Save model checkpoint every 5 epochs
-        if (epoch + 1) % 5 == 0:
+        if save_checkpoints and (epoch + 1) % iteration_save_checkpoint == 0:
+            # total_train_loss /= len(train_dl)
             checkpoint_path = f"../../data/checkpoints/checkpoint_epoch_{epoch + 1}.pth"
-            save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path)
+            save_checkpoint(model, optimizer, epoch, val_loss, total_train_loss, checkpoint_path)
             
         early_stopping(val_loss)
         if early_stopping.early_stop:
