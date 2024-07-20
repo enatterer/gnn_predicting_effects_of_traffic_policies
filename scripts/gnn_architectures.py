@@ -11,6 +11,7 @@ from torch_geometric.nn import PointNetConv
 from tqdm import tqdm
 import wandb
 import numpy as np
+import os
 
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_size: int, gat_layers: int, 
@@ -182,43 +183,78 @@ def validate_model_pos_features(model, valid_dl, loss_func, device):
             num_batches += 1
     return val_loss / num_batches if num_batches > 0 else 0
 
+def get_latest_checkpoint(checkpoint_dir):
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
+    if not checkpoint_files:
+        return None
+    checkpoint_files.sort(key=lambda f: int(f.split('_')[-1].split('.')[0]))
+    return os.path.join(checkpoint_dir, checkpoint_files[-1])
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3):
+def load_checkpoint(checkpoint_path, model, optimizer):
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+    val_loss = checkpoint['val_loss']
+    train_loss = checkpoint['train_loss']
+    print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
+    return model, optimizer, epoch, val_loss, train_loss
+
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None):
+    # Check if a checkpoint exists and load it
+    if use_existing_checkpoint:
+        latest_checkpoint = get_latest_checkpoint(path_existing_checkpoints)
+        if latest_checkpoint:
+            model, optimizer, start_epoch, _, _ = load_checkpoint(latest_checkpoint, model, optimizer)
+    
     for epoch in range(config.epochs):
         model.train()
-        actual_vals = []
-        predictions = []
+        # actual_vals = []
+        # predictions = []
         optimizer.zero_grad()
+        total_train_loss = 0
+        
         for idx, data in tqdm(enumerate(train_dl)):
             input_node_features, targets = data.x.to(device), data.y.to(device)
             
             # Forward pass
             predicted = model(data.to(device))
             
-            actual_vals.extend(targets.cpu().detach().numpy())
-            predictions.extend(predicted.cpu().detach().numpy())
+            # actual_vals.extend(targets.cpu().detach().numpy())
+            # predictions.extend(predicted.cpu().detach().numpy())
             
             # Backward pass
             train_loss = loss_fct(predicted, targets)
             train_loss.backward()
-            optimizer.step()
+            total_train_loss += train_loss.item()
+
             if (idx + 1) % accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
             
-            wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
+            # wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
             # print(f"epoch: {epoch}, step: {idx}, loss: {train_loss.item()}")
         
-        actual_vals = np.array(actual_vals)
-        predictions = np.array(predictions)
+        # if len(train_dl) % accumulation_steps != 0:
+        #     optimizer.step()
+        #     optimizer.zero_grad()
+            
+        # actual_vals = np.array(actual_vals)
+        # predictions = np.array(predictions)
         
         # Calculate R^2
-        r2 = r2_score(actual_vals, predictions)
-        wandb.log({"r2": r2, "epoch": epoch, "step": idx})
+        # r2 = r2_score(actual_vals, predictions)
+        # wandb.log({"epoch": epoch, "step": idx})
 
         val_loss = validate_model_pos_features(model, valid_dl, loss_fct, device)
         print(f"epoch: {epoch}, validation loss: {val_loss}")
         wandb.log({"loss": val_loss, "epoch": epoch})
+        
+        total_train_loss /= len(train_dl)
+        # Save model checkpoint every 5 epochs
+        if (epoch + 1) % 5 == 0:
+            checkpoint_path = f"../../data/checkpoints/checkpoint_epoch_{epoch + 1}.pth"
+            save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path)
             
         early_stopping(val_loss)
         if early_stopping.early_stop:
@@ -229,6 +265,17 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     wandb.summary["val_loss"] = val_loss
     wandb.finish()
     return val_loss, epoch
+
+def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path):
+    checkpoint = {
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'val_loss': val_loss,
+        'train_loss': train_loss
+    }
+    torch.save(checkpoint, checkpoint_path)
+    print(f'Model checkpoint saved at epoch {epoch}')
 
 def evaluate(model, test_dl, device, loss_func=torch.nn.MSELoss()):
     model.eval()  # Set the model to evaluation mode
