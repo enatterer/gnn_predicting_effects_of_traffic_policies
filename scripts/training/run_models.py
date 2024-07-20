@@ -21,10 +21,11 @@ import gnn_architectures as garch
 
 # Define the paths here
 def get_paths():
-    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
-    model_save_path = '../../data/trained_models/model_last_layer_gcn.pth'
-    path_to_save_dataloader = "../../data/data_created_during_training_needed_for_testing/"
-    checkpoint_dir = "../../data/checkpoints_batchsize_8/"
+    data_path = '../../data/'
+    data_dict_list = torch.load(data_path + 'train_data/dataset_1pm_0-3500_new.pt')
+    model_save_path = data_path + 'trained_models/model_last_layer_gcn.pth'
+    path_to_save_dataloader = data_path + 'data_created_during_training_needed_for_testing/'
+    checkpoint_dir = data_path + 'checkpoints/'
     os.makedirs(checkpoint_dir, exist_ok=True)
     return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
 
@@ -124,8 +125,6 @@ def main():
     device = get_device()
     data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths()
     params = get_parameters()
-    print("params")
-    print(params)
     dataset_normalized = prepare_data(data_dict_list, params['indices_of_datasets_to_use'], path_to_save_dataloader)
     train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], params['unique_model_description'], path_to_save_dataloader)
     
@@ -145,7 +144,6 @@ def main():
     })
 
     early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
-    print(config)
     train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
      
 if __name__ == '__main__':
