@@ -10,19 +10,20 @@ from torch_geometric.data import Data
 import sys
 import os
 from tqdm import tqdm
+import signal
+import sys
+import joblib
 
 # Add the 'scripts' directory to the Python path
 scripts_path = os.path.abspath(os.path.join('..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
     
-import joblib
 
 # Now you can import the gnn_io module
 import gnn_io as gio
 
 import gnn_architectures as garch
-
 
 def main():
     # Ensure deterministic behavior
@@ -35,12 +36,17 @@ def main():
     # Device configuration
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     
-    # Define parameters 
-    num_epochs = 1000
-    project_name = "run_with_python_script"
+    # Define paths 
+    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
+    model_save_path = '../../data/trained_models/model_last_layer_gcn.pth'
     path_to_save_dataloader = "../../data/data_created_during_training_needed_for_testing/"
+    checkpoint_dir = "../../data/checkpoints_batchsize_8/"
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    # Define parameters
+    project_name = "run_with_python_script"
     indices_of_datasets_to_use = [0, 1, 3, 4]
-
+    num_epochs = 1000
     loss_fct = torch.nn.MSELoss()
     batch_size = 8
     output_layer_parameter = 'gat'
@@ -66,27 +72,14 @@ def main():
         f"early_stopping_{early_stopping_patience}"
     )
 
-    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
-    
     # Reconstruct the Data objects
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
     dataset_only_relevant_dimensions = gio.cut_dimensions(dataset=datalist, indices_of_dimensions_to_keep=indices_of_datasets_to_use)
     dataset_normalized = gio.normalize_dataset(dataset_only_relevant_dimensions, y_scalar=None, x_scalar_list=None, pos_scalar=None, directory_path=path_to_save_dataloader)
     
-    baseline_error = gio.compute_baseline_of_no_policies(dataset=dataset_normalized, loss_fct=loss_fct)
-    print(f'Baseline error no policies: {baseline_error}')
-
-    baseline_error = gio.compute_baseline_of_mean_target(dataset=dataset_normalized, loss_fct=loss_fct)
-    print(f'Baseline error mean: {baseline_error}')
-    
     train_dl, valid_dl, test_dl = gio.create_dataloaders(batch_size = batch_size, dataset=dataset_normalized, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
     gio.save_dataloader(test_dl, path_to_save_dataloader + 'test_dl_' + unique_model_description + '.pt')
     gio.save_dataloader_params(test_dl, path_to_save_dataloader + 'test_loader_params_' + unique_model_description+ '.json')
-    
-    print(f"Running with {torch.cuda.device_count()} GPUS")
-    if torch.cuda.is_available():
-        device = torch.device('cuda')
-        print("Name is ", torch.cuda.get_device_name())
     
     wandb.login()
     wandb.init(
@@ -106,30 +99,30 @@ def main():
     )
     config = wandb.config
 
-    print("output_layer: ", output_layer_parameter)
-    print("hidden_size: ", hidden_size_parameter)
-    print("gat_layers: ", gat_layer_parameter)
-    print("gcn_layers: ", gcn_layer_parameter)
-
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     early_stopping = gio.EarlyStopping(patience=early_stopping_patience, verbose=True)
-
+    
     gnn_instance = garch.MyGnnHardCoded(in_channels=in_channels, out_channels=out_channels, hidden_size=hidden_size_parameter, output_layer=output_layer_parameter)
     model = gnn_instance.to(device)
-    best_val_loss, best_epoch = garch.train(model=model, 
-                                    config=config, 
-                                    loss_fct=loss_fct, 
-                                    optimizer=torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0),
-                                    train_dl=train_dl, 
-                                    valid_dl=valid_dl,
-                                    device=device, 
-                                    early_stopping=early_stopping,
-                                    accumulation_steps=3,
-                                    save_checkpoints=True,
-                                    iteration_save_checkpoint=5,
-                                    use_existing_checkpoint=False, 
-                                    path_existing_checkpoints = "../../data/checkpoints_batchsize_8/",
-                                    compute_r_squared=False)
+
+    garch.train(model=model, 
+        config=config, 
+        loss_fct=loss_fct, 
+        optimizer=torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0),
+        train_dl=train_dl, 
+        valid_dl=valid_dl,
+        device=device, 
+        early_stopping=early_stopping,
+        accumulation_steps=3,
+        save_checkpoints=False,
+        iteration_save_checkpoint=None,
+        use_existing_checkpoint=False, 
+        path_existing_checkpoints = checkpoint_dir,
+        compute_r_squared=False)
     
+    # Save the model
+    torch.save(model.state_dict(), model_save_path)
+    print(f'Model saved to {model_save_path}')   
+     
 if __name__ == '__main__':
     main()
