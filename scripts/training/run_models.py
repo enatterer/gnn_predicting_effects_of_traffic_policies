@@ -20,52 +20,59 @@ import gnn_io as gio
 import gnn_architectures as garch
 
 # Define the paths here
-def get_paths():
-    data_path = '../../data/'
-    data_dict_list = torch.load(data_path + 'train_data/dataset_1pm_0-3500_new.pt')
-    model_save_path = data_path + 'trained_models/model_last_layer_gcn.pth'
-    path_to_save_dataloader = data_path + 'data_created_during_training_needed_for_testing/'
-    checkpoint_dir = data_path + 'checkpoints/'
+def get_paths(base_dir, unique_model_description):
+    data_path = os.path.join(base_dir, unique_model_description)
+    os.makedirs(data_path, exist_ok=True)
+    
+    model_save_path = os.path.join(data_path, 'trained_models/model.pth')
+    path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
+    checkpoint_dir = os.path.join(data_path, 'checkpoints/')
+    
+    os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
+    os.makedirs(path_to_save_dataloader, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
+    
+    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
+
     return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
 
 # Define parameters
 def get_parameters():
-        project_name = "run_with_python_script"
+        project_name = "run_with_configurations"
         indices_of_datasets_to_use = [0, 1, 3, 4]
-        num_epochs = 1000
+        num_epochs = 1
         batch_size = 8
-        output_layer_parameter = 'gat'
         hidden_layer_size = 64
-        gat_layer_parameter = 5
-        gcn_layer_parameter = 0
+        hidden_layer_size_structure = [1, -1, 0, 1, 0]
+        gat_and_conv_structure = [1, 1, 1, 1, 1, 1]
         lr = 0.001
+        gradient_accumulation_steps = 3
         in_channels = len(indices_of_datasets_to_use) + 2
         out_channels = 1
         early_stopping_patience = 10
 
         unique_model_description = (
-            f"datasets_{indices_of_datasets_to_use}_"
+            f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
             f"batch_{batch_size}_"
-            f"output_{output_layer_parameter}_"
             f"hidden_{hidden_layer_size}_"
-            f"gat_layers_{gat_layer_parameter}_"
-            f"gcn_layers_{gcn_layer_parameter}_"
-            f"lr_{lr}_"
-            f"in_channels_{in_channels}_"
-            f"out_channels_{out_channels}_"
-            f"early_stopping_{early_stopping_patience}"
+            f"hidden_layer_size_structure_{gio.int_list_to_string(lst = hidden_layer_size_structure, delimiter='_')}_"
+            f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
+            # f"lr_{lr}_"
+            # f"g_accumulation_steps_{gradient_accumulation_steps}_"
+            # f"in_channels_{in_channels}_"
+            # f"out_channels_{out_channels}_"
+            # f"early_stopping_{early_stopping_patience}"
         )
         return {
             "project_name": project_name,
             "indices_of_datasets_to_use": indices_of_datasets_to_use,
             "num_epochs": num_epochs,
             "batch_size": batch_size,
-            "output_layer_parameter": output_layer_parameter,
             "hidden_layer_size": hidden_layer_size,
-            "gat_layer_parameter": gat_layer_parameter,
-            "gcn_layer_parameter": gcn_layer_parameter,
+            "hidden_layer_size_structure": hidden_layer_size_structure,
+            "gat_and_conv_structure": gat_and_conv_structure,
             "lr": lr,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
             "in_channels": in_channels,
             "out_channels": out_channels,
             "early_stopping_patience": early_stopping_patience,
@@ -88,10 +95,10 @@ def prepare_data(data_dict_list, indices_of_datasets_to_use, path_to_save_datalo
     dataset_normalized = gio.normalize_dataset(dataset_only_relevant_dimensions, y_scalar=None, x_scalar_list=None, pos_scalar=None, directory_path=path_to_save_dataloader)
     return dataset_normalized
 
-def create_dataloaders_and_save_test_set(dataset_normalized, batch_size, unique_model_description, path_to_save_dataloader):
+def create_dataloaders_and_save_test_set(dataset_normalized, batch_size, path_to_save_dataloader):
     train_dl, valid_dl, test_dl = gio.create_dataloaders(batch_size=batch_size, dataset=dataset_normalized, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
-    gio.save_dataloader(test_dl, path_to_save_dataloader + 'test_dl_' + unique_model_description + '.pt')
-    gio.save_dataloader_params(test_dl, path_to_save_dataloader + 'test_loader_params_' + unique_model_description + '.json')
+    gio.save_dataloader(test_dl, path_to_save_dataloader + 'test_dl.pt')
+    gio.save_dataloader_params(test_dl, path_to_save_dataloader + 'test_loader_params.json')
     return train_dl, valid_dl
 
 def setup_wandb(project_name, config):
@@ -100,7 +107,7 @@ def setup_wandb(project_name, config):
     return wandb.config
         
 def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path):
-    gnn_instance = garch.MyGnnHardCoded(in_channels=config.in_channels, out_channels=config.out_channels, hidden_size=config.hidden_layer_size, output_layer=config.output_layer)
+    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_size=config.hidden_layer_size, hidden_layer_size_structure=config.hidden_layer_size_structure, gat_and_conv_structure=config.gat_and_conv_structure)
     model = gnn_instance.to(device)
     loss_fct = torch.nn.MSELoss()
     garch.train(model=model, 
@@ -111,7 +118,7 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
                 valid_dl=valid_dl,
                 device=device, 
                 early_stopping=early_stopping,
-                accumulation_steps=3,
+                accumulation_steps=config.gradient_accumulation_steps,
                 save_checkpoints=False,
                 iteration_save_checkpoint=None,
                 use_existing_checkpoint=False, 
@@ -123,27 +130,34 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
 def main():
     set_random_seeds()
     device = get_device()
-    data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths()
     params = get_parameters()
+    
+    # Create base directory for the run
+    base_dir = '../../data/runs/'
+    unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
+    os.makedirs(unique_run_dir, exist_ok=True)
+    
+    data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths(base_dir, params['unique_model_description'])
     dataset_normalized = prepare_data(data_dict_list, params['indices_of_datasets_to_use'], path_to_save_dataloader)
-    train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], params['unique_model_description'], path_to_save_dataloader)
+    train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], path_to_save_dataloader)
     
     config = setup_wandb(params['project_name'], {
         "epochs": params['num_epochs'],
         "batch_size": params['batch_size'],
         "lr": params['lr'],
+        "gradient_accumulation_steps": params['gradient_accumulation_steps'],
         "early_stopping_patience": params['early_stopping_patience'],
         "hidden_layer_size": params['hidden_layer_size'],
-        "gat_layers": params['gat_layer_parameter'],
-        "gcn_layers": params['gcn_layer_parameter'],
-        "output_layer": params['output_layer_parameter'],
+        "hidden_layer_size_structure": params['hidden_layer_size_structure'],
+        "gat_and_conv_structure": params['gat_and_conv_structure'],
         "indices_to_use": params['indices_of_datasets_to_use'],
         "dataset_length": len(dataset_normalized), 
         "in_channels": params['in_channels'],
         "out_channels": params['out_channels'],
     })
-
     early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
+    print("model save path: ")
+    print(model_save_path)
     train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
      
 if __name__ == '__main__':
