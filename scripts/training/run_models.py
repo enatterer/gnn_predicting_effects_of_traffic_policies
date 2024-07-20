@@ -52,8 +52,6 @@ def main():
     out_channels = 1 # we are predicting one value
     early_stopping_patience = 10
 
-    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
-
     unique_model_description = (
         f"datasets_{indices_of_datasets_to_use}_"
         f"loss_{loss_fct.__class__.__name__}_"
@@ -118,12 +116,20 @@ def main():
 
     gnn_instance = garch.MyGnnHardCoded(in_channels=in_channels, out_channels=out_channels, hidden_size=hidden_size_parameter, output_layer=output_layer_parameter)
     model = gnn_instance.to(device)
-    best_val_loss, best_epoch = garch.train(model=model, config=config, 
+    best_val_loss, best_epoch = garch.train(model=model, 
+                                    config=config, 
                                     loss_fct=loss_fct, 
                                     optimizer=torch.optim.Adam(model.parameters(), lr=lr, weight_decay=0.0),
-                                    train_dl=train_dl, valid_dl=valid_dl,
-                                    device=device, early_stopping=early_stopping,
-                                    use_existing_checkpoint=False, path_existing_checkpoints = "../../data/checkpoints_batchsize_8/")
+                                    train_dl=train_dl, 
+                                    valid_dl=valid_dl,
+                                    device=device, 
+                                    early_stopping=early_stopping,
+                                    accumulation_steps=3,
+                                    save_checkpoints=True,
+                                    iteration_save_checkpoint=5,
+                                    use_existing_checkpoint=False, 
+                                    path_existing_checkpoints = "../../data/checkpoints_batchsize_8/",
+                                    compute_r_squared=False)
     
 if __name__ == '__main__':
     main()

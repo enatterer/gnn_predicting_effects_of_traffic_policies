@@ -200,7 +200,47 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
     return model, optimizer, epoch, val_loss, train_loss
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None):
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, save_checkpoints:bool=True, iteration_save_checkpoint:int=5, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None, compute_r_squared:bool = False):
+    """
+    Trains the machine learning model with the specified configurations.
+
+    Parameters:
+    model: torch.nn.Module
+        The model to be trained, a GNN.
+    config: Config, optional
+        Configuration object containing training hyperparameters such as the number of epochs.
+    loss_fct: callable, optional
+        The loss function to be used during training.
+    optimizer: torch.optim.Optimizer, optional
+        The optimizer to use for model parameter updates.
+    train_dl: DataLoader, optional
+        DataLoader for the training dataset.
+    valid_dl: DataLoader, optional
+        DataLoader for the validation dataset.
+    device: torch.device, optional
+        Device on which to perform training (e.g., 'cpu' or 'cuda').
+    early_stopping: EarlyStopping, optional
+        EarlyStopping object to handle early stopping based on validation loss.
+    accumulation_steps: int, default=3
+        Number of steps to accumulate gradients before performing an optimizer step.
+    save_checkpoints: bool, default=True
+        Flag indicating whether to save checkpoints. 
+    iteration_save_checkpoint: int, default=5
+        At which iterations should the model be saved. 
+    use_existing_checkpoint: bool, default=False
+        Flag indicating whether to use an existing checkpoint to resume training.
+    path_existing_checkpoints: str, optional
+        Path to the directory containing existing checkpoints.
+    compute_r_squared: bool, default=False
+        Flag indicating whether to compute and log the R^2 metric during training. We found that it uses a lot of CPU, because numpy only works on CPU, therefore, it is recommended to switch it off for training with limited CPU usage.
+
+    Returns:
+    val_loss: float
+        The best validation loss achieved during training.
+    epoch: int
+        The epoch at which the best validation loss was achieved.
+    """
+    
     # Check if a checkpoint exists and load it
     if use_existing_checkpoint:
         latest_checkpoint = get_latest_checkpoint(path_existing_checkpoints)
@@ -209,8 +249,9 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     
     for epoch in range(config.epochs):
         model.train()
-        # actual_vals = []
-        # predictions = []
+        if compute_r_squared:
+            actual_vals = []
+            predictions = []
         optimizer.zero_grad()
         total_train_loss = 0
         
@@ -220,8 +261,9 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
             # Forward pass
             predicted = model(data.to(device))
             
-            # actual_vals.extend(targets.cpu().detach().numpy())
-            # predictions.extend(predicted.cpu().detach().numpy())
+            if compute_r_squared:
+                actual_vals.extend(targets.cpu().detach().numpy())
+                predictions.extend(predicted.cpu().detach().numpy())
             
             # Backward pass
             train_loss = loss_fct(predicted, targets)
@@ -231,24 +273,28 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
             if (idx + 1) % accumulation_steps == 0:
                 optimizer.step()
                 optimizer.zero_grad()
-            
-            # wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
-            # print(f"epoch: {epoch}, step: {idx}, loss: {train_loss.item()}")
+                
+            # Do not log train loss at every iteration, as it uses CPU
+            if (idx + 1) % 100 == 0:
+                wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
         
-        # if len(train_dl) % accumulation_steps != 0:
-        #     optimizer.step()
-        #     optimizer.zero_grad()
-            
-        # actual_vals = np.array(actual_vals)
-        # predictions = np.array(predictions)
-        
-        # Calculate R^2
-        # r2 = r2_score(actual_vals, predictions)
-        # wandb.log({"epoch": epoch, "step": idx})
+        if len(train_dl) % accumulation_steps != 0:
+            optimizer.step()
+            optimizer.zero_grad()
+        if compute_r_squared:
+            actual_vals = np.array(actual_vals)
+            predictions = np.array(predictions)
+            # Calculate R^2
+            r2 = r2_score(actual_vals, predictions)
 
         val_loss = validate_model_pos_features(model, valid_dl, loss_fct, device)
+        
+        # Log and print validation loss and R^2 if compute_r_squared is True
+        log_data = {"loss": val_loss, "epoch": epoch}
+        if compute_r_squared:
+            log_data["R^2"] = r2
         print(f"epoch: {epoch}, validation loss: {val_loss}")
-        wandb.log({"loss": val_loss, "epoch": epoch})
+        wandb.log(log_data)
         
         total_train_loss /= len(train_dl)
         # Save model checkpoint every 5 epochs
