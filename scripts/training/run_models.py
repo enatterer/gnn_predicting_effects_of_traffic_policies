@@ -42,19 +42,15 @@ def get_parameters(args):
         project_name = "run_with_configurations"
         indices_of_datasets_to_use = [0, 1, 3, 4]
         num_epochs = 1000
+        in_channels = len(indices_of_datasets_to_use) + 2
+        out_channels = 1
+        lr = args.lr
         batch_size = args.batch_size
         hidden_layer_size = args.hidden_layer_size
         hidden_layer_size_structure = [int(x) for x in args.hidden_layer_size_structure.split(',')]
-        print("hidden layer size struture")
-        print(hidden_layer_size_structure)
         gat_and_conv_structure = [int(x) for x in args.gat_and_conv_structure.split(',')]
-        print("gat and conv ")
-        print(gat_and_conv_structure)
-        lr = 0.001
-        gradient_accumulation_steps = 3
-        in_channels = len(indices_of_datasets_to_use) + 2
-        out_channels = 1
-        early_stopping_patience = 10
+        gradient_accumulation_steps = args.gradient_accumulation_steps
+        early_stopping_patience = args.early_stopping_patience
 
         unique_model_description = (
             f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
@@ -62,11 +58,11 @@ def get_parameters(args):
             f"hidden_{hidden_layer_size}_"
             f"hidden_layer_size_structure_{gio.int_list_to_string(lst = hidden_layer_size_structure, delimiter='_')}_"
             f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
-            # f"lr_{lr}_"
-            # f"g_accumulation_steps_{gradient_accumulation_steps}_"
+            f"lr_{lr}_"
+            f"g_accumulation_steps_{gradient_accumulation_steps}_"
+            f"early_stopping_{early_stopping_patience}"
             # f"in_channels_{in_channels}_"
             # f"out_channels_{out_channels}_"
-            # f"early_stopping_{early_stopping_patience}"
         )
         return {
             "project_name": project_name,
@@ -137,8 +133,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--hidden_layer_size", type=int, default=64, help="Size of hidden layers.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--hidden_layer_size_structure", type=str, default="1,-1,0,1,0", help="Structure of hidden layer sizes (comma-separated).")
+    parser.add_argument("--hidden_layer_size_structure", type=str, default="1,-1,0,1", help="Structure of hidden layer sizes (comma-separated).")
     parser.add_argument("--gat_and_conv_structure", type=str, default="1,1,1,1,1,1", help="Structure of GAT and GCN layers (comma-separated).")
+    parser.add_argument("--early_stopping_patience", type=str, default=10, help="The early stopping patience.")
+    parser.add_argument("--gradient_accumulation_steps", type=str, default=3, help="After how many steps the gradient should be updated.")
+    parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
     
     args = parser.parse_args()
     
