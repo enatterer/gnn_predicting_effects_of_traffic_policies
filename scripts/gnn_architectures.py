@@ -88,22 +88,14 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
     return model, optimizer, epoch, val_loss, train_loss
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None, compute_r_squared:bool = False, model_save_path:str=None): 
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, compute_r_squared:bool = False, model_save_path:str=None): 
     scaler = GradScaler()
-    start_epoch = 0
-
-    # Check if a checkpoint exists and load it
-    if use_existing_checkpoint:
-        latest_checkpoint = get_latest_checkpoint(path_existing_checkpoints)
-        if latest_checkpoint:
-            model, optimizer, start_epoch, _, _ = load_checkpoint(latest_checkpoint, model, optimizer)
-        
     total_steps = config.epochs * len(train_dl)
     scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=10, total_steps=total_steps)
 
     best_val_loss = float('inf')
     
-    for epoch in range(start_epoch, config.epochs):
+    for epoch in range(config.epochs):
         model.train()
         if compute_r_squared:
             actual_vals = []

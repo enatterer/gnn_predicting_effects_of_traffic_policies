@@ -11,6 +11,9 @@ from tqdm import tqdm
 import signal
 import joblib
 import argparse
+import json
+import os
+import subprocess
 
 # Add the 'scripts' directory to the Python path
 scripts_path = os.path.abspath(os.path.join('..'))
@@ -19,8 +22,6 @@ if scripts_path not in sys.path:
     
 import gnn_io as gio
 import gnn_architectures as garch
-import os
-import subprocess
     
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -53,12 +54,11 @@ def get_paths(base_dir, unique_model_description):
     os.makedirs(data_path, exist_ok=True)
     model_save_path = os.path.join(data_path, 'trained_models/model.pth')
     path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
-    checkpoint_dir = os.path.join(data_path, 'checkpoints/')
+    config_save_path = os.path.join(data_path, 'trained_models/config.json')
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     os.makedirs(path_to_save_dataloader, exist_ok=True)
-    os.makedirs(checkpoint_dir, exist_ok=True)
     data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-4400.pt')
-    return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
+    return data_dict_list, model_save_path, config_save_path, path_to_save_dataloader
 
 # Define parameters
 def get_parameters(args):
@@ -78,10 +78,10 @@ def get_parameters(args):
             # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
             # f"batch_{batch_size}_"
             f"hidden_{hidden_layers_base_for_point_net_conv}_"
-            f"hidden_layer_structure_{gio.int_list_to_string(lst = hidden_layer_structure, delimiter='_')}_"
+            f"hidden_layer_str_{gio.int_list_to_string(lst = hidden_layer_structure, delimiter='_')}_"
             # f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
-            f"lr_{lr}_"
-            f"g_accumulation_steps_{gradient_accumulation_steps}_"
+            # f"lr_{lr}_"
+            # f"g_accumulation_steps_{gradient_accumulation_steps}"
             # f"early_stopping_{early_stopping_patience}"
             # f"in_channels_{in_channels}_"
             # f"out_channels_{out_channels}_"
@@ -107,9 +107,6 @@ def set_random_seeds():
     np.random.seed(hash("improves reproducibility") % 2**32 - 1)
     torch.manual_seed(hash("by removing stochasticity") % 2**32 - 1)
     torch.cuda.manual_seed_all(hash("so runs are repeatable") % 2**32 - 1)
-
-# def get_device():
-    # return torch.device("cuda:" + device_number if torch.cuda.is_available() else "cpu")
 
 def prepare_data(data_dict_list, indices_of_datasets_to_use, path_to_save_dataloader):
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
@@ -147,7 +144,6 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
                 model_save_path=model_save_path)
     print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
 
-
 def main():
     # Command-line arguments
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -164,12 +160,9 @@ def main():
     set_random_seeds()
     
     try:
-        print("HI")
         gpus = get_available_gpus()
-        
         best_gpu = select_best_gpu(gpus)
         set_cuda_visible_device(best_gpu)
-        
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         params = get_parameters(args=args)
         
@@ -178,7 +171,7 @@ def main():
         unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths(base_dir, params['unique_model_description'])
+        data_dict_list, model_save_path, config_save_path, path_to_save_dataloader = get_paths(base_dir, params['unique_model_description'])
         dataset_normalized = prepare_data(data_dict_list, params['indices_of_datasets_to_use'], path_to_save_dataloader)
         train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], path_to_save_dataloader)
         
@@ -190,14 +183,30 @@ def main():
             "early_stopping_patience": params['early_stopping_patience'],
             "hidden_layers_base_for_point_net_conv": params['hidden_layers_base_for_point_net_conv'],
             "hidden_layer_structure": params['hidden_layer_structure'],
-            # "gat_and_conv_structure": params['gat_and_conv_structure'],
             "indices_to_use": params['indices_of_datasets_to_use'],
             "dataset_length": len(dataset_normalized), 
             "in_channels": params['in_channels'],
             "out_channels": params['out_channels'],
         })
+        with open(config_save_path, 'w') as f:
+            json.dump(config, f)
+        
+        gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, hidden_layer_structure=config.hidden_layer_structure)
+        model = gnn_instance.to(device)
+        loss_fct = torch.nn.MSELoss()
         early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
-        train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
+        best_val_loss, best_epoch = garch.train(model=model, 
+                    config=config, 
+                    loss_fct=loss_fct,
+                    optimizer=torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0),
+                    train_dl=train_dl, 
+                    valid_dl=valid_dl,
+                    device=device, 
+                    early_stopping=early_stopping,
+                    accumulation_steps=config.gradient_accumulation_steps,
+                    compute_r_squared=False,
+                    model_save_path=model_save_path)
+        print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:
         print(f"Error: {e}")
