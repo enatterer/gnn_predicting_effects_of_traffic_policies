@@ -52,7 +52,7 @@ def set_cuda_visible_device(gpu_index):
 def get_paths(base_dir, unique_model_description):
     data_path = os.path.join(base_dir, unique_model_description)
     os.makedirs(data_path, exist_ok=True)
-    model_save_path = os.path.join(data_path, 'trained_models/model.pth')
+    model_save_path = os.path.join(data_path, 'trained_model/model.pth')
     path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
     config_save_path = os.path.join(data_path, 'trained_models/config.json')
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
@@ -62,7 +62,7 @@ def get_paths(base_dir, unique_model_description):
 
 # Define parameters
 def get_parameters(args):
-        project_name = "experimentation"
+        project_name = "runs_123"
         indices_of_datasets_to_use = [0, 1, 3, 4]
         num_epochs = 1000
         in_channels = len(indices_of_datasets_to_use) + 2
@@ -154,7 +154,6 @@ def main():
     parser.add_argument("--gradient_accumulation_steps", type=str, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--device_nr", type=str, default="1", help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
-    
     args = parser.parse_args()
     
     set_random_seeds()
@@ -167,7 +166,7 @@ def main():
         params = get_parameters(args=args)
         
         # Create base directory for the run
-        base_dir = '../../data/runs_experiments/'
+        base_dir = '../../data/runs_123/'
         unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
@@ -188,9 +187,7 @@ def main():
             "in_channels": params['in_channels'],
             "out_channels": params['out_channels'],
         })
-        with open(config_save_path, 'w') as f:
-            json.dump(config, f)
-        
+
         gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, hidden_layer_structure=config.hidden_layer_structure)
         model = gnn_instance.to(device)
         loss_fct = torch.nn.MSELoss()

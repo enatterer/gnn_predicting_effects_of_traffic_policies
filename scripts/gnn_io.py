@@ -23,6 +23,7 @@ from torch_geometric.transforms import LineGraph
 from shapely.geometry import LineString
 import tqdm
 import wandb
+import os 
 
 import json
 
@@ -71,7 +72,6 @@ def int_list_to_string(lst: list, delimiter: str = ', ') -> str:
     """
     # Join the list elements into a string with the specified delimiter
     return f"[{delimiter.join(map(str, lst))}]"
-
 
 
 # This function should be replaced by below create_dataloaders
@@ -125,7 +125,6 @@ def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
     train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn)
     val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn)
     test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn)
-    
     return train_loader, val_loader, test_loader
 
 def save_dataloader(dataloader, file_path):
@@ -147,28 +146,78 @@ def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
 # Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
-def normalize_dataset(dataset, input_feature_normalisation:str= "standardScalar", y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
-    # if input_feature_normalisation ==  StandardScaler():
-    #     input_feature_normalisation = StandardScaler()
-    # else:
-    #     input_feature_normalisation= MinMaxScaler()
+def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
     if input_feature_normalisation == None:
         input_feature_normalisation = "standardScaler"
     print("Input normalisation: " + str(input_feature_normalisation))
-    # Normalize node features
-    dataset = normalize_x_values_with_scalar_saved(dataset, input_feature_normalisation, x_scalar_list, directory_path)
-    # Normalize positional features (if any)
+    dataset = normalize_x_values(dataset, input_feature_normalisation, x_scalar_list, directory_path)
     dataset = normalize_positional_features(dataset, input_feature_normalisation, pos_scalar, directory_path)
-    # Normalize y values
     dataset = normalize_y_values(dataset, y_scalar, directory_path)
     return dataset
 
-# Function to replace x with normalized_x and remove normalized_x
-def replace_x_with_normalized_x(dataset):
+def normalize_x_values(dataset, x_scaler_list, directory_path=None):
+    shape_of_x = dataset[0].x.shape[1]
+    list_of_scalers_to_save = []
+    create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
+    x_values = torch.cat([data.x for data in dataset], dim=0)
+
+    for i in range(shape_of_x):
+        all_node_features = replace_invalid_values(x_values[:, i].reshape(-1, 1)).numpy()
+
+        if create_scaler:
+            scaler = StandardScaler()
+            print(f"Scaler created for x values: {scaler}")
+            scaler.fit(all_node_features)
+            list_of_scalers_to_save.append(scaler)
+        else:
+            scaler = x_scaler_list[i]
+
+        for data in dataset:
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
+
+    if create_scaler:
+        joblib.dump(list_of_scalers_to_save, os.path.join(directory_path, 'x_scaler.pkl'))
+
     for data in dataset:
-        if hasattr(data, 'normalized_x'):
-            data.x = data.normalized_x
-            del data.normalized_x
+        data.x = data.normalized_x
+        del data.normalized_x
+    return dataset
+
+def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
+    all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
+    all_pos_features = replace_invalid_values(all_pos_features).numpy()
+
+    if pos_scalar is None:
+        scaler = StandardScaler()
+        print(f"Scaler created for pos features: {scaler}")
+        scaler.fit(all_pos_features)
+        joblib.dump(scaler, os.path.join(directory_path, 'pos_scaler.pkl'))
+    else:
+        scaler = pos_scalar
+
+    for data in dataset:
+        data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
+    return dataset
+
+def normalize_y_values(dataset, y_scalar=None, directory_path=None):
+    all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
+    all_y_values = replace_invalid_values(all_y_values).numpy()
+
+    if y_scalar is None:
+        scaler = StandardScaler()
+        print(f"Scaler created for y values: {scaler}")
+        scaler.fit(all_y_values)
+        joblib.dump(scaler, os.path.join(directory_path, 'y_scaler.pkl'))
+    else:
+        scaler = y_scalar
+
+    for data in dataset:
+        data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
     return dataset
 
 def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
@@ -180,120 +229,11 @@ def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
             data.x = data.x[:, indices_of_dimensions_to_keep]
     return dataset_with_fewer_dimensions
 
-def normalize_positional_features(dataset, input_feature_normalisation, pos_scalar=None, directory_path=None):
-    # Collect all positional features
-    all_pos_features = []
-    for data in dataset:
-        all_pos_features.append(data.pos)
-
-    # Stack all positional features into a single tensor
-    all_pos_features = torch.cat(all_pos_features, dim=0)
-    
-    if pos_scalar is None:
-        scaler = StandardScaler()
-        print("Scaler created for pos features: " + str(scaler))
-        scaler.fit(all_pos_features)
-        joblib.dump(scaler, directory_path + 'pos_scaler.pkl')
-    else:
-        scaler = pos_scalar
-    
-    # Apply the scaler to each data instance and store as a new feature
-    for data in dataset:
-        data.pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
-    return dataset
-
 def replace_invalid_values(tensor):
-    finite_mask = torch.isfinite(tensor)
-    if finite_mask.any():
-        max_finite_value = tensor[finite_mask].max()
-    else:
-        max_finite_value = torch.tensor(0.0)
-    tensor[~finite_mask] = max_finite_value
-    tensor[torch.isnan(tensor)] = max_finite_value
+    tensor[tensor != tensor] = 0  # replace NaNs with 0
+    tensor[tensor == float('inf')] = 0  # replace inf with 0
+    tensor[tensor == float('-inf')] = 0  # replace -inf with 0
     return tensor
-
-# def normalize_x_values(dataset):
-#     shape_of_x = dataset[0].x.shape[1]
-#     for i in range(shape_of_x):
-#         all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
-#         all_node_features = torch.cat(all_node_features, dim=0)
-
-#         all_node_features = replace_invalid_values(all_node_features)
-#         all_node_features_np = all_node_features.numpy()
-
-#         scaler = MinMaxScaler()
-#         scaler.fit(all_node_features_np)
-
-#         for data in dataset:
-#             data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-#             normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
-
-#             if i == 0:
-#                 data.normalized_x = normalized_x_dim
-#             else:
-#                 data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
-
-#     for data in dataset:
-#         data.x = data.normalized_x
-#         del data.normalized_x
-
-#     return dataset
-
-def normalize_x_values_with_scalar_saved(dataset, input_feature_normalisation, x_scaler_list, directory_path=None):
-    shape_of_x = dataset[0].x.shape[1]
-    list_of_scalers_to_save = []
-    create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
-    for i in range(shape_of_x):
-        all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
-        all_node_features = torch.cat(all_node_features, dim=0)
-        all_node_features = replace_invalid_values(all_node_features)
-        all_node_features_np = all_node_features.numpy()
-        
-        if create_scaler:
-            scaler = StandardScaler()
-            print("Scaler created for x values: " + str(scaler))
-            scaler.fit(all_node_features_np)
-            list_of_scalers_to_save.append(scaler)
-        else:
-            scaler_of_this_dimension = x_scaler_list[i]
-            scaler = scaler_of_this_dimension
-        
-        for data in dataset:
-            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
-            if i == 0:
-                data.normalized_x = normalized_x_dim
-            else:
-                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
-    if create_scaler:
-        joblib.dump(list_of_scalers_to_save, directory_path + 'x_scaler.pkl')
-    for data in dataset:
-        data.x = data.normalized_x
-        del data.normalized_x
-    return dataset
-
-
-def normalize_y_values(dataset, y_scalar=None, directory_path=None):
-    # Collect all y values
-    all_y_values = []
-    for data in dataset:
-        all_y_values.append(data.y)
-
-    # Stack all y values into a single tensor
-    all_y_values = torch.cat(all_y_values, dim=0).reshape(-1, 1)
-
-    if y_scalar is None:
-        scaler = MinMaxScaler()
-        scaler.fit(all_y_values)
-        joblib.dump(scaler, directory_path + 'y_scaler.pkl')
-    else:
-        scaler = y_scalar
-
-    # Apply the scaler to each data instance and store as a new feature
-    for data in dataset:
-        data.y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
-
-    return dataset
 
 # Define a dictionary to map each mode to an integer
 mode_mapping = {
