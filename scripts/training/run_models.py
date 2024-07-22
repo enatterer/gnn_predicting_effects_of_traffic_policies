@@ -33,34 +33,34 @@ def get_paths(base_dir, unique_model_description):
     os.makedirs(path_to_save_dataloader, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-3500_new.pt')
+    data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-4400.pt')
 
     return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
 
 # Define parameters
 def get_parameters(args):
-        project_name = "run_with_configurations"
+        project_name = "best_runs"
         indices_of_datasets_to_use = [0, 1, 3, 4]
         num_epochs = 1000
         in_channels = len(indices_of_datasets_to_use) + 2
         out_channels = 1
-        lr = args.lr
-        batch_size = args.batch_size
-        hidden_layer_size = args.hidden_layer_size
+        lr = float(args.lr)
+        batch_size = int(args.batch_size)
+        hidden_layer_size = int(args.hidden_layer_size)
         hidden_layer_size_structure = [int(x) for x in args.hidden_layer_size_structure.split(',')]
         gat_and_conv_structure = [int(x) for x in args.gat_and_conv_structure.split(',')]
-        gradient_accumulation_steps = args.gradient_accumulation_steps
-        early_stopping_patience = args.early_stopping_patience
+        gradient_accumulation_steps = int(args.gradient_accumulation_steps)
+        early_stopping_patience = int(args.early_stopping_patience)
 
         unique_model_description = (
-            f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
-            f"batch_{batch_size}_"
+            # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
+            # f"batch_{batch_size}_"
             f"hidden_{hidden_layer_size}_"
             f"hidden_layer_size_structure_{gio.int_list_to_string(lst = hidden_layer_size_structure, delimiter='_')}_"
             f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
             f"lr_{lr}_"
             f"g_accumulation_steps_{gradient_accumulation_steps}_"
-            f"early_stopping_{early_stopping_patience}"
+            # f"early_stopping_{early_stopping_patience}"
             # f"in_channels_{in_channels}_"
             # f"out_channels_{out_channels}_"
         )
@@ -87,8 +87,8 @@ def set_random_seeds():
     torch.manual_seed(hash("by removing stochasticity") % 2**32 - 1)
     torch.cuda.manual_seed_all(hash("so runs are repeatable") % 2**32 - 1)
 
-def get_device():
-    return torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
+def get_device(device_number:str):
+    return torch.device("cuda:" + device_number if torch.cuda.is_available() else "cpu")
 
 def prepare_data(data_dict_list, indices_of_datasets_to_use, path_to_save_dataloader):
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
@@ -111,7 +111,7 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
     gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_size=config.hidden_layer_size, hidden_layer_size_structure=config.hidden_layer_size_structure, gat_and_conv_structure=config.gat_and_conv_structure)
     model = gnn_instance.to(device)
     loss_fct = torch.nn.MSELoss()
-    garch.train(model=model, 
+    best_val_loss, best_epoch = garch.train(model=model, 
                 config=config, 
                 loss_fct=loss_fct,
                 optimizer=torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0),
@@ -120,13 +120,11 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
                 device=device, 
                 early_stopping=early_stopping,
                 accumulation_steps=config.gradient_accumulation_steps,
-                save_checkpoints=False,
-                iteration_save_checkpoint=None,
                 use_existing_checkpoint=False, 
                 path_existing_checkpoints=checkpoint_dir,
-                compute_r_squared=False)
-    torch.save(model.state_dict(), model_save_path)
-    print(f'Model saved to {model_save_path}')   
+                compute_r_squared=False,
+                model_save_path=model_save_path)
+    print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
 
 def main():
     # Command-line arguments
@@ -135,18 +133,19 @@ def main():
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--hidden_layer_size_structure", type=str, default="1,-1,0,1", help="Structure of hidden layer sizes (comma-separated).")
     parser.add_argument("--gat_and_conv_structure", type=str, default="1,1,1,1,1,1", help="Structure of GAT and GCN layers (comma-separated).")
-    parser.add_argument("--early_stopping_patience", type=str, default=10, help="The early stopping patience.")
+    parser.add_argument("--early_stopping_patience", type=str, default=20, help="The early stopping patience.")
     parser.add_argument("--gradient_accumulation_steps", type=str, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
+    parser.add_argument("--device_nr", type=str, default=1, help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
     
     args = parser.parse_args()
     
     set_random_seeds()
-    device = get_device()
+    device = get_device(device_number=args.device_nr)
     params = get_parameters(args=args)
     
     # Create base directory for the run
-    base_dir = '../../data/runs/'
+    base_dir = '../../data/runs_new_2/'
     unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
     os.makedirs(unique_run_dir, exist_ok=True)
     

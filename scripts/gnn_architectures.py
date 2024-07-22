@@ -13,6 +13,7 @@ import wandb
 import numpy as np
 import os
 from torch.cuda.amp import GradScaler, autocast
+import math
             
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_layers_size: int, hidden_layer_size_structure: list, gat_and_conv_structure: list):
@@ -98,7 +99,7 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
     return model, optimizer, epoch, val_loss, train_loss
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, save_checkpoints:bool=True, iteration_save_checkpoint:int=5, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None, compute_r_squared:bool = False):
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, use_existing_checkpoint:bool=False, path_existing_checkpoints:str=None, compute_r_squared:bool = False, model_save_path:str=None):
     """
     Trains the machine learning model with the specified configurations.
 
@@ -140,22 +141,32 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     """
     
     scaler = GradScaler()
-    
+    start_epoch = 0
+
     # Check if a checkpoint exists and load it
     if use_existing_checkpoint:
         latest_checkpoint = get_latest_checkpoint(path_existing_checkpoints)
         if latest_checkpoint:
             model, optimizer, start_epoch, _, _ = load_checkpoint(latest_checkpoint, model, optimizer)
+        
+    total_steps = config.epochs * len(train_dl)
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=10, total_steps=total_steps)
+
+    best_val_loss = float('inf')
     
-    for epoch in range(config.epochs):
+    for epoch in range(start_epoch, config.epochs):
         model.train()
         if compute_r_squared:
             actual_vals = []
             predictions = []
         optimizer.zero_grad()
-        total_train_loss = 0
         
         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.epochs}"):
+            step = epoch * len(train_dl) + idx
+            lr = scheduler.get_lr(step)
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = lr
+                
             input_node_features, targets = data.x.to(device), data.y.to(device)
             with autocast():
                 # Forward pass
@@ -198,11 +209,11 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
         print(f"epoch: {epoch}, validation loss: {val_loss}")
         wandb.log(log_data)
         
-        # Save model checkpoint every 5 epochs
-        if save_checkpoints and (epoch + 1) % iteration_save_checkpoint == 0:
-            # total_train_loss /= len(train_dl)
-            checkpoint_path = f"../../data/checkpoints/checkpoint_epoch_{epoch + 1}.pth"
-            save_checkpoint(model, optimizer, epoch, val_loss, total_train_loss, checkpoint_path)
+        # Save the model if validation loss improves
+        if val_loss < best_val_loss and model_save_path:
+            best_val_loss = val_loss
+            torch.save(model.state_dict(), model_save_path)
+            print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
             
         early_stopping(val_loss)
         if early_stopping.early_stop:
@@ -324,4 +335,20 @@ def load_model(model_path):
     )
     model.load_state_dict(state_dict)
     return model, config
+
+class LinearWarmupCosineDecayScheduler:
+    def __init__(self, initial_lr, warmup_steps, total_steps):
+        self.initial_lr = initial_lr
+        self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
+
+    def get_lr(self, step):
+        if step < self.warmup_steps:
+            return self.initial_lr * (step / self.warmup_steps)
+        else:
+            progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+            return self.initial_lr * cosine_decay 
+        
+        
 
