@@ -24,40 +24,35 @@ import gnn_architectures as garch
 def get_paths(base_dir, unique_model_description):
     data_path = os.path.join(base_dir, unique_model_description)
     os.makedirs(data_path, exist_ok=True)
-    
     model_save_path = os.path.join(data_path, 'trained_models/model.pth')
     path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
     checkpoint_dir = os.path.join(data_path, 'checkpoints/')
-    
     os.makedirs(os.path.dirname(model_save_path), exist_ok=True)
     os.makedirs(path_to_save_dataloader, exist_ok=True)
     os.makedirs(checkpoint_dir, exist_ok=True)
-    
     data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-4400.pt')
-
     return data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir
 
 # Define parameters
 def get_parameters(args):
-        project_name = "best_runs"
+        project_name = "experimentation"
         indices_of_datasets_to_use = [0, 1, 3, 4]
         num_epochs = 1000
         in_channels = len(indices_of_datasets_to_use) + 2
         out_channels = 1
         lr = float(args.lr)
         batch_size = int(args.batch_size)
-        hidden_layer_size = int(args.hidden_layer_size)
-        hidden_layer_size_structure = [int(x) for x in args.hidden_layer_size_structure.split(',')]
-        gat_and_conv_structure = [int(x) for x in args.gat_and_conv_structure.split(',')]
+        hidden_layers_base_for_point_net_conv = int(args.hidden_layers_base_for_point_net_conv)
+        hidden_layer_structure = [int(x) for x in args.hidden_layer_structure.split(',')]
         gradient_accumulation_steps = int(args.gradient_accumulation_steps)
         early_stopping_patience = int(args.early_stopping_patience)
 
         unique_model_description = (
             # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
             # f"batch_{batch_size}_"
-            f"hidden_{hidden_layer_size}_"
-            f"hidden_layer_size_structure_{gio.int_list_to_string(lst = hidden_layer_size_structure, delimiter='_')}_"
-            f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
+            f"hidden_{hidden_layers_base_for_point_net_conv}_"
+            f"hidden_layer_structure_{gio.int_list_to_string(lst = hidden_layer_structure, delimiter='_')}_"
+            # f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
             f"lr_{lr}_"
             f"g_accumulation_steps_{gradient_accumulation_steps}_"
             # f"early_stopping_{early_stopping_patience}"
@@ -69,9 +64,8 @@ def get_parameters(args):
             "indices_of_datasets_to_use": indices_of_datasets_to_use,
             "num_epochs": num_epochs,
             "batch_size": batch_size,
-            "hidden_layer_size": hidden_layer_size,
-            "hidden_layer_size_structure": hidden_layer_size_structure,
-            "gat_and_conv_structure": gat_and_conv_structure,
+            "hidden_layers_base_for_point_net_conv": hidden_layers_base_for_point_net_conv,
+            "hidden_layer_structure": hidden_layer_structure,
             "lr": lr,
             "gradient_accumulation_steps": gradient_accumulation_steps,
             "in_channels": in_channels,
@@ -108,7 +102,7 @@ def setup_wandb(project_name, config):
     return wandb.config
         
 def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path):
-    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_size=config.hidden_layer_size, hidden_layer_size_structure=config.hidden_layer_size_structure, gat_and_conv_structure=config.gat_and_conv_structure)
+    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, hidden_layer_structure=config.hidden_layer_structure)
     model = gnn_instance.to(device)
     loss_fct = torch.nn.MSELoss()
     best_val_loss, best_epoch = garch.train(model=model, 
@@ -129,14 +123,13 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
 def main():
     # Command-line arguments
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--hidden_layer_size", type=int, default=64, help="Size of hidden layers.")
+    parser.add_argument("--hidden_layers_base_for_point_net_conv", type=int, default=64, help="Size of hidden layers.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--hidden_layer_size_structure", type=str, default="1,-1,0,1", help="Structure of hidden layer sizes (comma-separated).")
-    parser.add_argument("--gat_and_conv_structure", type=str, default="1,1,1,1,1,1", help="Structure of GAT and GCN layers (comma-separated).")
+    parser.add_argument("--hidden_layer_structure", type=str, default="1,-1,0,1", help="Structure of hidden layer sizes (comma-separated).")
     parser.add_argument("--early_stopping_patience", type=str, default=20, help="The early stopping patience.")
     parser.add_argument("--gradient_accumulation_steps", type=str, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
-    parser.add_argument("--device_nr", type=str, default=1, help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
+    parser.add_argument("--device_nr", type=str, default="1", help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
     
     args = parser.parse_args()
     
@@ -145,7 +138,7 @@ def main():
     params = get_parameters(args=args)
     
     # Create base directory for the run
-    base_dir = '../../data/runs_new_2/'
+    base_dir = '../../data/runs_experiments/'
     unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
     os.makedirs(unique_run_dir, exist_ok=True)
     
@@ -159,9 +152,9 @@ def main():
         "lr": params['lr'],
         "gradient_accumulation_steps": params['gradient_accumulation_steps'],
         "early_stopping_patience": params['early_stopping_patience'],
-        "hidden_layer_size": params['hidden_layer_size'],
-        "hidden_layer_size_structure": params['hidden_layer_size_structure'],
-        "gat_and_conv_structure": params['gat_and_conv_structure'],
+        "hidden_layers_base_for_point_net_conv": params['hidden_layers_base_for_point_net_conv'],
+        "hidden_layer_structure": params['hidden_layer_structure'],
+        # "gat_and_conv_structure": params['gat_and_conv_structure'],
         "indices_to_use": params['indices_of_datasets_to_use'],
         "dataset_length": len(dataset_normalized), 
         "in_channels": params['in_channels'],
