@@ -19,6 +19,33 @@ if scripts_path not in sys.path:
     
 import gnn_io as gio
 import gnn_architectures as garch
+import os
+import subprocess
+    
+def get_available_gpus():
+    command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
+    result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode != 0:
+        raise RuntimeError(f"Error executing nvidia-smi: {result.stderr.decode('utf-8')}")
+    gpu_info = result.stdout.decode('utf-8').strip().split('\n')
+    gpus = []
+    for info in gpu_info:
+        index, utilization, memory_free = info.split(', ')
+        gpus.append({
+            'index': int(index),
+            'utilization': int(utilization),
+            'memory_free': int(memory_free)
+        })
+    return gpus
+    
+def select_best_gpu(gpus):
+    # Sort by free memory (descending) and then by utilization (ascending)
+    gpus = sorted(gpus, key=lambda x: (-x['memory_free'], x['utilization']))
+    return gpus[0]['index']
+
+def set_cuda_visible_device(gpu_index):
+    os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_index)
+    print(f"Using GPU {gpu_index} with CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
 
 # Define the paths here
 def get_paths(base_dir, unique_model_description):
@@ -81,8 +108,8 @@ def set_random_seeds():
     torch.manual_seed(hash("by removing stochasticity") % 2**32 - 1)
     torch.cuda.manual_seed_all(hash("so runs are repeatable") % 2**32 - 1)
 
-def get_device(device_number:str):
-    return torch.device("cuda:" + device_number if torch.cuda.is_available() else "cpu")
+# def get_device():
+    # return torch.device("cuda:" + device_number if torch.cuda.is_available() else "cpu")
 
 def prepare_data(data_dict_list, indices_of_datasets_to_use, path_to_save_dataloader):
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
@@ -120,6 +147,7 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
                 model_save_path=model_save_path)
     print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
 
+
 def main():
     # Command-line arguments
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -134,34 +162,47 @@ def main():
     args = parser.parse_args()
     
     set_random_seeds()
-    device = get_device(device_number=args.device_nr)
-    params = get_parameters(args=args)
     
-    # Create base directory for the run
-    base_dir = '../../data/runs_experiments/'
-    unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
-    os.makedirs(unique_run_dir, exist_ok=True)
-    
-    data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths(base_dir, params['unique_model_description'])
-    dataset_normalized = prepare_data(data_dict_list, params['indices_of_datasets_to_use'], path_to_save_dataloader)
-    train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], path_to_save_dataloader)
-    
-    config = setup_wandb(params['project_name'], {
-        "epochs": params['num_epochs'],
-        "batch_size": params['batch_size'],
-        "lr": params['lr'],
-        "gradient_accumulation_steps": params['gradient_accumulation_steps'],
-        "early_stopping_patience": params['early_stopping_patience'],
-        "hidden_layers_base_for_point_net_conv": params['hidden_layers_base_for_point_net_conv'],
-        "hidden_layer_structure": params['hidden_layer_structure'],
-        # "gat_and_conv_structure": params['gat_and_conv_structure'],
-        "indices_to_use": params['indices_of_datasets_to_use'],
-        "dataset_length": len(dataset_normalized), 
-        "in_channels": params['in_channels'],
-        "out_channels": params['out_channels'],
-    })
-    early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
-    train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
+    try:
+        print("HI")
+        gpus = get_available_gpus()
+        
+        best_gpu = select_best_gpu(gpus)
+        set_cuda_visible_device(best_gpu)
+        
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        params = get_parameters(args=args)
+        
+        # Create base directory for the run
+        base_dir = '../../data/runs_experiments/'
+        unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
+        os.makedirs(unique_run_dir, exist_ok=True)
+        
+        data_dict_list, model_save_path, path_to_save_dataloader, checkpoint_dir = get_paths(base_dir, params['unique_model_description'])
+        dataset_normalized = prepare_data(data_dict_list, params['indices_of_datasets_to_use'], path_to_save_dataloader)
+        train_dl, valid_dl = create_dataloaders_and_save_test_set(dataset_normalized, params['batch_size'], path_to_save_dataloader)
+        
+        config = setup_wandb(params['project_name'], {
+            "epochs": params['num_epochs'],
+            "batch_size": params['batch_size'],
+            "lr": params['lr'],
+            "gradient_accumulation_steps": params['gradient_accumulation_steps'],
+            "early_stopping_patience": params['early_stopping_patience'],
+            "hidden_layers_base_for_point_net_conv": params['hidden_layers_base_for_point_net_conv'],
+            "hidden_layer_structure": params['hidden_layer_structure'],
+            # "gat_and_conv_structure": params['gat_and_conv_structure'],
+            "indices_to_use": params['indices_of_datasets_to_use'],
+            "dataset_length": len(dataset_normalized), 
+            "in_channels": params['in_channels'],
+            "out_channels": params['out_channels'],
+        })
+        early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
+        train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path)
+        
+    except Exception as e:
+        print(f"Error: {e}")
+        print("Falling back to CPU.")
+        os.environ['CUDA_VISIBLE_DEVICES'] = ""
      
 if __name__ == '__main__':
     main()
