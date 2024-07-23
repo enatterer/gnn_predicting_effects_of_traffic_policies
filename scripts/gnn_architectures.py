@@ -14,6 +14,16 @@ import numpy as np
 import os
 from torch.cuda.amp import GradScaler, autocast
 import math
+import torch.nn.init as init
+from torch_geometric.nn import PointNetConv, GATConv, Sequential as GeoSequential
+
+
+def initialize_weights(self):
+    for m in self.modules():
+        if isinstance(m, nn.Linear):
+            # You can choose a different initialization method
+            init.xavier_normal_(m.weight)
+            init.zeros_(m.bias)
             
 class MyGnn(torch.nn.Module):
     def __init__(self, in_channels: int, out_channels: int, hidden_layers_base_for_point_net_conv: int, hidden_layer_structure: list):
@@ -41,15 +51,57 @@ class MyGnn(torch.nn.Module):
             nn.Linear(int(hidden_layers_base_for_point_net_conv*2), hidden_layers_base_for_point_net_conv)
         )
         self.pointLayer = PointNetConv(local_nn = local_MLP_1, global_nn = global_MLP_1)
-        
         layers = define_layers(hidden_layer_structure=hidden_layer_structure, out_channels = out_channels)
         
         # Create the Sequential module with the layers
         if layers:
-            self.graph_layers = torch_geometric.nn.Sequential('x, edge_index', layers)
-                    
+            self.graph_layers = GeoSequential('x, edge_index', layers)
+        else:
+            self.graph_layers= None
+                
+        self.initialize_weights()
+                
         print("Model initialized")
         print(self)
+    
+    def initialize_weights(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                print(f"Initializing {m}")
+                init.xavier_normal_(m.weight)
+                init.zeros_(m.bias)
+            elif isinstance(m, PointNetConv):
+                print(f"Initializing {m}")
+                for name, param in m.local_nn.named_parameters():
+                    if param.dim() > 1:  # weight parameters
+                        print(f"Initializing {name} with kaiming_normal")
+                        init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+                    else:  # bias parameters
+                        print(f"Initializing {name} with zeros")
+                        init.zeros_(param)
+                for name, param in m.global_nn.named_parameters():
+                    if param.dim() > 1:  # weight parameters
+                        print(f"Initializing {name} with kaiming_normal")
+                        init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+                    else:  # bias parameters
+                        print(f"Initializing {name} with zeros")
+                        init.zeros_(param)
+            elif isinstance(m, torch_geometric.nn.GATConv):
+                print(f"Initializing {m}")
+                if hasattr(m, 'lin') and m.lin is not None:
+                    init.xavier_normal_(m.lin.weight)
+                    if m.lin.bias is not None:
+                        init.zeros_(m.lin.bias)
+                else:
+                    print(f"Warning: {m} does not have lin or it is None")
+                if hasattr(m, 'att_src') and m.att_src is not None:
+                    init.xavier_normal_(m.att_src)
+                else:
+                    print(f"Warning: {m} does not have att_src or it is None")
+                if hasattr(m, 'att_dst') and m.att_dst is not None:
+                    init.xavier_normal_(m.att_dst)
+                else:
+                    print(f"Warning: {m} does not have att_dst or it is None")
 
     def forward(self, data):
         x = data.x
@@ -58,18 +110,14 @@ class MyGnn(torch.nn.Module):
         if self.graph_layers:
             x = self.graph_layers(x, edge_index)
         return x
-
-def validate_model_pos_features(model, valid_dl, loss_func, device):
-    model.eval()
-    val_loss = 0
-    num_batches = 0
-    with torch.inference_mode():
-        for idx, data in enumerate(valid_dl):
-            input_node_features, targets = data.x.to(device), data.y.to(device)
-            predicted = model(data.to(device))
-            val_loss += loss_func(predicted, targets).item()
-            num_batches += 1
-    return val_loss / num_batches if num_batches > 0 else 0
+    
+def define_layers(hidden_layer_structure: list, out_channels: int):
+    layers = []
+    for idx in range(len(hidden_layer_structure) - 1):
+        layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
+        layers.append(torch.nn.ReLU(inplace=True))
+    layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[-1], out_channels), 'x, edge_index -> x'))
+    return layers
 
 def get_latest_checkpoint(checkpoint_dir):
     checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
@@ -91,17 +139,11 @@ def load_checkpoint(checkpoint_path, model, optimizer):
 def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, compute_r_squared:bool = False, model_save_path:str=None): 
     scaler = GradScaler()
     total_steps = config.epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=10, total_steps=total_steps)
-
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=3000, total_steps=total_steps)
     best_val_loss = float('inf')
-    
     for epoch in range(config.epochs):
         model.train()
-        if compute_r_squared:
-            actual_vals = []
-            predictions = []
         optimizer.zero_grad()
-        
         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.epochs}"):
             step = epoch * len(train_dl) + idx
             lr = scheduler.get_lr(step)
@@ -113,11 +155,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
                 # Forward pass
                 predicted = model(data.to(device))
                 train_loss = loss_fct(predicted, targets)
-
-            if compute_r_squared:
-                actual_vals.extend(targets.cpu().detach().numpy())
-                predictions.extend(predicted.cpu().detach().numpy())
-            
+                
             # Backward pass
             scaler.scale(train_loss).backward() 
 
@@ -128,34 +166,23 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
                 
             # Do not log train loss at every iteration, as it uses CPU
             if (idx + 1) % 300 == 0:
-                wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
+                wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx, "lr_train": lr})
         
         if len(train_dl) % accumulation_steps != 0:
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
             
-        if compute_r_squared:
-            actual_vals = np.array(actual_vals)
-            predictions = np.array(predictions)
-            # Calculate R^2
-            r2 = r2_score(actual_vals, predictions)
+        val_loss, r_squared = validate_model(model, valid_dl, loss_fct, device)
+        wandb.log({"test_loss": val_loss, "epoch": epoch, "lr_test": lr, "r^2": r_squared})
+        print(f"epoch: {epoch}, validation loss: {val_loss}, lr_test: {lr}, r^2: {r_squared}")
+        
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss   
+            if model_save_path:         
+                torch.save(model.state_dict(), model_save_path)
+                print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
 
-        val_loss = validate_model_pos_features(model, valid_dl, loss_fct, device)
-        
-        # Log and print validation loss and R^2 if compute_r_squared is True
-        log_data = {"loss": val_loss, "epoch": epoch}
-        if compute_r_squared:
-            log_data["R^2"] = r2
-        print(f"epoch: {epoch}, validation loss: {val_loss}")
-        wandb.log(log_data)
-        
-        # Save the model if validation loss improves
-        if val_loss < best_val_loss and model_save_path:
-            best_val_loss = val_loss
-            torch.save(model.state_dict(), model_save_path)
-            print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
-            
         early_stopping(val_loss)
         if early_stopping.early_stop:
             print("Early stopping triggered. Stopping training.")
@@ -166,13 +193,37 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     wandb.finish()
     return val_loss, epoch
 
-def define_layers(hidden_layer_structure: list, out_channels: int):
-    layers = []
-    for idx in range(len(hidden_layer_structure) - 1):
-        layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
-        layers.append(torch.nn.ReLU(inplace=True))
-    layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[-1], out_channels), 'x, edge_index -> x'))
-    return layers
+def validate_model(model, valid_dl, loss_func, device):
+    model.eval()
+    val_loss = 0
+    num_batches = 0
+    
+    actual_vals = []
+    predictions = []
+    
+    with torch.inference_mode():
+        for idx, data in enumerate(valid_dl):
+            input_node_features, targets = data.x.to(device), data.y.to(device)
+            predicted = model(data.to(device))
+            actual_vals.append(targets)
+            predictions.append(predicted)
+            val_loss += loss_func(predicted, targets).item()
+            num_batches += 1
+            
+    actual_vals=torch.cat(actual_vals)
+    predictions = torch.cat(predictions)
+    r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
+    return val_loss / num_batches if num_batches > 0 else 0, r_squared, actual_vals, predictions
+
+def compute_r2_torch(preds, targets):
+    """Compute R^2 score using PyTorch."""
+    mean_targets = torch.mean(targets)
+    ss_tot = torch.sum((targets - mean_targets) ** 2)
+    ss_res = torch.sum((targets - preds) ** 2)
+    r2 = 1 - ss_res / ss_tot
+    return r2
+
+
 
 def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path):
     checkpoint = {
@@ -184,20 +235,6 @@ def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_pa
     }
     torch.save(checkpoint, checkpoint_path)
     print(f'Model checkpoint saved at epoch {epoch}')
-
-def evaluate(model, test_dl, device, loss_func=torch.nn.MSELoss()):
-    model.eval()  # Set the model to evaluation mode
-    test_loss = 0
-    output_list = []
-    with torch.no_grad():  # Disable gradient computation
-        for data in test_dl:
-            inputs, targets = data.x.to(device), data.y.to(device)
-            outputs = model(data.to(device))
-            output_list.append(outputs)
-            loss = loss_func(outputs, targets)
-            test_loss += loss.item()
-    avg_test_loss = test_loss / len(test_dl)
-    return avg_test_loss, output_list
 
 def load_model(model_path):
     # Load the saved model checkpoint
@@ -234,5 +271,9 @@ class LinearWarmupCosineDecayScheduler:
             cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
             return self.initial_lr * cosine_decay 
         
-        
-
+def initialize_weights(self):
+    for m in self.modules():
+        if isinstance(m, nn.Linear):
+            # You can choose a different initialization method
+            init.xavier_normal_(m.weight)
+            init.zeros_(m.bias)

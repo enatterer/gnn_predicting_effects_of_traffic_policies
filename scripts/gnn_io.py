@@ -147,11 +147,8 @@ def collate_fn(data_list):
 
 # Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
 def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
-    if input_feature_normalisation == None:
-        input_feature_normalisation = "standardScaler"
-    print("Input normalisation: " + str(input_feature_normalisation))
-    dataset = normalize_x_values(dataset, input_feature_normalisation, x_scalar_list, directory_path)
-    dataset = normalize_positional_features(dataset, input_feature_normalisation, pos_scalar, directory_path)
+    dataset = normalize_x_values(dataset, x_scalar_list, directory_path)
+    dataset = normalize_positional_features(dataset, pos_scalar, directory_path)
     dataset = normalize_y_values(dataset, y_scalar, directory_path)
     return dataset
 
@@ -171,6 +168,7 @@ def normalize_x_values(dataset, x_scaler_list, directory_path=None):
             list_of_scalers_to_save.append(scaler)
         else:
             scaler = x_scaler_list[i]
+            # scaler.fit(all_node_features)
 
         for data in dataset:
             data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
@@ -188,6 +186,38 @@ def normalize_x_values(dataset, x_scaler_list, directory_path=None):
         del data.normalized_x
     return dataset
 
+
+
+def normalize_x_values_and_create_scalers(dataset, directory_path):
+    shape_of_x = dataset[0].x.shape[1]
+    list_of_scalers_to_save = []
+    x_values = torch.cat([data.x for data in dataset], dim=0)
+
+    for i in range(shape_of_x):
+        all_node_features = replace_invalid_values(x_values[:, i].reshape(-1, 1)).numpy()
+        
+        scaler = StandardScaler()
+        print(f"Scaler created for x values at index {i}: {scaler}")
+        scaler.fit(all_node_features)
+        list_of_scalers_to_save.append(scaler)
+
+        for data in dataset:
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
+
+    joblib.dump(list_of_scalers_to_save, os.path.join(directory_path, 'x_scaler.pkl'))
+
+    for data in dataset:
+        data.x = data.normalized_x
+        del data.normalized_x
+    return dataset, list_of_scalers_to_save
+
+
+
 def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
     all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
     all_pos_features = replace_invalid_values(all_pos_features).numpy()
@@ -204,6 +234,23 @@ def normalize_positional_features(dataset, pos_scalar=None, directory_path=None)
         data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
     return dataset
 
+def normalize_positional_features_and_create_scaler(dataset, directory_path):
+    all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
+    all_pos_features = replace_invalid_values(all_pos_features).numpy()
+
+    scaler = StandardScaler()
+    print(f"Scaler created for pos features: {scaler}")
+    scaler.fit(all_pos_features)
+    joblib.dump(scaler, os.path.join(directory_path, 'pos_scaler.pkl'))
+
+    for data in dataset:
+        data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
+    
+    return dataset, scaler
+
+
+
+
 def normalize_y_values(dataset, y_scalar=None, directory_path=None):
     all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
     all_y_values = replace_invalid_values(all_y_values).numpy()
@@ -219,6 +266,21 @@ def normalize_y_values(dataset, y_scalar=None, directory_path=None):
     for data in dataset:
         data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
     return dataset
+
+def normalize_y_values_and_create_scaler_for_it(dataset, directory_path):
+    all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
+    all_y_values = replace_invalid_values(all_y_values).numpy()
+
+    scaler = StandardScaler()
+    print(f"Scaler created for y values: {scaler}")
+    scaler.fit(all_y_values)
+    joblib.dump(scaler, os.path.join(directory_path, 'y_scaler.pkl'))
+
+    for data in dataset:
+        data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
+    
+    return dataset, scaler
+
 
 def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
     dataset_with_fewer_dimensions = dataset.copy()
@@ -279,22 +341,27 @@ def compute_baseline_of_mean_target(dataset, loss_fct):
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
-    # print("mean_y_normalized: ")
     # print(mean_y_normalized)
+    print("mean_y_normalized: ")
+    print(mean_y_normalized)
     
-    # median_y_normalized = np.median(y_values_normalized)   
-    # print("median_y_normalized: ")
-    # print(median_y_normalized)
+    median_y_normalized = np.median(y_values_normalized)   
+    print("median_y_normalized: ")
+    print(median_y_normalized)
 
     # Convert numpy arrays to torch tensors
     y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
     mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32)
 
+    print("Mean y normalized tensor: ")
+    print(y_values_normalized_tensor.shape)
+    print(y_values_normalized_tensor[:10])
+    
     # Create the target tensor with the same shape as y_values_normalized_tensor
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
-
-    # Instantiate the MSELoss function
-    # mse_loss = torch.nn.MSELoss()
+    print("Target tensor: ")
+    print(target_tensor.shape)
+    print(target_tensor[:10])
 
     # Compute the MSE
     loss = loss_fct(y_values_normalized_tensor, target_tensor)
@@ -319,6 +386,11 @@ def compute_baseline_of_no_policies(dataset, loss_fct):
     target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
     actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
     
+    print('no policies ')
+    print(target_tensor.shape)
+    print(target_tensor[:10])
+    print(actual_difference_vol_car.shape)
+    print(actual_difference_vol_car[:10])
     # Compute the loss
     loss = loss_fct(actual_difference_vol_car, target_tensor)
     return loss.item()
