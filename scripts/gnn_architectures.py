@@ -139,7 +139,7 @@ def load_checkpoint(checkpoint_path, model, optimizer):
 def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, compute_r_squared:bool = False, model_save_path:str=None): 
     scaler = GradScaler()
     total_steps = config.epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=3000, total_steps=total_steps)
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=10000, total_steps=total_steps)
     best_val_loss = float('inf')
     for epoch in range(config.epochs):
         model.train()
@@ -166,23 +166,23 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
                 
             # Do not log train loss at every iteration, as it uses CPU
             if (idx + 1) % 300 == 0:
-                wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx, "lr_train": lr})
+                wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
         
         if len(train_dl) % accumulation_steps != 0:
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-            
-        val_loss, r_squared = validate_model(model, valid_dl, loss_fct, device)
+        
+        val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device)
         wandb.log({"test_loss": val_loss, "epoch": epoch, "lr_test": lr, "r^2": r_squared})
-        print(f"epoch: {epoch}, validation loss: {val_loss}, lr_test: {lr}, r^2: {r_squared}")
+        print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss   
             if model_save_path:         
                 torch.save(model.state_dict(), model_save_path)
                 print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
-
+        
         early_stopping(val_loss)
         if early_stopping.early_stop:
             print("Early stopping triggered. Stopping training.")
@@ -193,7 +193,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
     wandb.finish()
     return val_loss, epoch
 
-def validate_model(model, valid_dl, loss_func, device):
+def validate_model_during_training(model, valid_dl, loss_func, device):
     model.eval()
     val_loss = 0
     num_batches = 0
@@ -213,7 +213,40 @@ def validate_model(model, valid_dl, loss_func, device):
     actual_vals=torch.cat(actual_vals)
     predictions = torch.cat(predictions)
     r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
-    return val_loss / num_batches if num_batches > 0 else 0, r_squared, actual_vals, predictions
+    return val_loss / num_batches if num_batches > 0 else 0, r_squared
+
+
+        # t = torch.cuda.get_device_properties(0).total_memory
+        # r = torch.cuda.memory_reserved(0)
+        # a = torch.cuda.memory_allocated(0)
+        # f = r-a  # free inside reserved
+        # print('Memory allocation after training, before validation: ')
+        # print(t/1073741824)
+        # print(r/1073741824)
+        # print(a/1073741824)
+        # print(f/1073741824)
+
+# def validate_model(model, valid_dl, loss_func, device):
+#     model.eval()
+#     val_loss = 0
+#     num_batches = 0
+    
+#     actual_vals = []
+#     predictions = []
+    
+#     with torch.inference_mode():
+#         for idx, data in enumerate(valid_dl):
+#             input_node_features, targets = data.x.to(device), data.y.to(device)
+#             predicted = model(data.to(device))
+#             actual_vals.append(targets)
+#             predictions.append(predicted)
+#             val_loss += loss_func(predicted, targets).item()
+#             num_batches += 1
+            
+#     actual_vals=torch.cat(actual_vals)
+#     predictions = torch.cat(predictions)
+#     r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
+#     return val_loss / num_batches if num_batches > 0 else 0, r_squared, actual_vals, predictions
 
 def compute_r2_torch(preds, targets):
     """Compute R^2 score using PyTorch."""
@@ -222,8 +255,6 @@ def compute_r2_torch(preds, targets):
     ss_res = torch.sum((targets - preds) ** 2)
     r2 = 1 - ss_res / ss_tot
     return r2
-
-
 
 def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path):
     checkpoint = {

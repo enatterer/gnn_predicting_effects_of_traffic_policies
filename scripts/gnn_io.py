@@ -10,7 +10,7 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -23,6 +23,8 @@ from torch_geometric.transforms import LineGraph
 from shapely.geometry import LineString
 import tqdm
 import wandb
+import copy
+
 import os 
 
 import json
@@ -96,7 +98,7 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False)
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
+def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio):
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
@@ -121,11 +123,7 @@ def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
     print(f"Validation subset length: {len(val_subset)}")
     print(f"Test subset length: {len(test_subset)}")
     
-    # Create data loaders
-    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn)
-    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn)
-    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn)
-    return train_loader, val_loader, test_loader
+    return train_subset, val_subset, test_subset
 
 def save_dataloader(dataloader, file_path):
     # Extract the dataset from the DataLoader
@@ -145,31 +143,38 @@ def save_dataloader_params(dataloader, file_path):
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
+# Function to copy a Subset
+def copy_subset(subset):
+    return Subset(copy.deepcopy(subset.dataset), copy.deepcopy(subset.indices))
+
 # Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
-def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
-    dataset = normalize_x_values(dataset, x_scalar_list, directory_path)
-    dataset = normalize_positional_features(dataset, pos_scalar, directory_path)
-    dataset = normalize_y_values(dataset, y_scalar, directory_path)
+def normalize_dataset_create_scaler(dataset_input, directory_path, normalize_y, normalize_pos):
+    dataset = copy_subset(dataset_input)
+    dataset, x_scaler = normalize_x_values_create_scalers(dataset, directory_path)
+    if normalize_pos:
+        dataset, pos_scaler = normalize_positional_features_create_scaler(dataset, directory_path)
+    if normalize_y:
+        dataset, y_scaler = normalize_y_values_create_scaler(dataset, directory_path)
+        if normalize_pos:
+            return dataset, x_scaler, pos_scaler, y_scaler 
+        else:
+            return dataset, x_scaler, y_scaler
+    else:
+        return dataset, x_scaler, pos_scaler if normalize_pos else dataset, x_scaler
+
+def normalize_dataset_with_given_scaler(dataset_input, x_scalar_list = None, pos_scalar=None, y_scalar=None, normalize_y=False, normalize_pos=False):
+    dataset = copy_subset(dataset_input)
+    dataset = normalize_x_values_given_scaler(dataset, x_scalar_list)
+    if normalize_pos:
+        dataset = normalize_positional_features_given_scaler(dataset, pos_scalar)
+    if normalize_y:
+        dataset = normalize_y_values_given_scaler(dataset, y_scalar)
     return dataset
 
-def normalize_x_values(dataset, x_scaler_list, directory_path=None):
+def normalize_x_values_given_scaler(dataset, x_scaler_list):
     shape_of_x = dataset[0].x.shape[1]
-    list_of_scalers_to_save = []
-    create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
-    x_values = torch.cat([data.x for data in dataset], dim=0)
-
     for i in range(shape_of_x):
-        all_node_features = replace_invalid_values(x_values[:, i].reshape(-1, 1)).numpy()
-
-        if create_scaler:
-            scaler = StandardScaler()
-            print(f"Scaler created for x values: {scaler}")
-            scaler.fit(all_node_features)
-            list_of_scalers_to_save.append(scaler)
-        else:
-            scaler = x_scaler_list[i]
-            # scaler.fit(all_node_features)
-
+        scaler = x_scaler_list[i]
         for data in dataset:
             data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
             normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
@@ -177,18 +182,22 @@ def normalize_x_values(dataset, x_scaler_list, directory_path=None):
                 data.normalized_x = normalized_x_dim
             else:
                 data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
-
-    if create_scaler:
-        joblib.dump(list_of_scalers_to_save, os.path.join(directory_path, 'x_scaler.pkl'))
-
     for data in dataset:
         data.x = data.normalized_x
         del data.normalized_x
     return dataset
 
+def normalize_positional_features_given_scaler(dataset, pos_scalar=None):
+    for data in dataset:
+        data.pos = torch.tensor(pos_scalar.transform(data.pos.numpy()), dtype=torch.float)
+    return dataset
 
+def normalize_y_values_given_scaler(dataset, y_scalar=None):
+    for data in dataset:
+        data.y = torch.tensor(y_scalar.transform(data.y.numpy()), dtype=torch.float)
+    return dataset
 
-def normalize_x_values_and_create_scalers(dataset, directory_path):
+def normalize_x_values_create_scalers(dataset, directory_path):
     shape_of_x = dataset[0].x.shape[1]
     list_of_scalers_to_save = []
     x_values = torch.cat([data.x for data in dataset], dim=0)
@@ -216,69 +225,29 @@ def normalize_x_values_and_create_scalers(dataset, directory_path):
         del data.normalized_x
     return dataset, list_of_scalers_to_save
 
-
-
-def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
+def normalize_positional_features_create_scaler(dataset, directory_path):
     all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
     all_pos_features = replace_invalid_values(all_pos_features).numpy()
-
-    if pos_scalar is None:
-        scaler = StandardScaler()
-        print(f"Scaler created for pos features: {scaler}")
-        scaler.fit(all_pos_features)
-        joblib.dump(scaler, os.path.join(directory_path, 'pos_scaler.pkl'))
-    else:
-        scaler = pos_scalar
-
-    for data in dataset:
-        data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
-    return dataset
-
-def normalize_positional_features_and_create_scaler(dataset, directory_path):
-    all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
-    all_pos_features = replace_invalid_values(all_pos_features).numpy()
-
     scaler = StandardScaler()
     print(f"Scaler created for pos features: {scaler}")
     scaler.fit(all_pos_features)
     joblib.dump(scaler, os.path.join(directory_path, 'pos_scaler.pkl'))
-
     for data in dataset:
         data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
-    
     return dataset, scaler
 
 
-
-
-def normalize_y_values(dataset, y_scalar=None, directory_path=None):
+def normalize_y_values_create_scaler(dataset, directory_path):
     all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
     all_y_values = replace_invalid_values(all_y_values).numpy()
 
-    if y_scalar is None:
-        scaler = StandardScaler()
-        print(f"Scaler created for y values: {scaler}")
-        scaler.fit(all_y_values)
-        joblib.dump(scaler, os.path.join(directory_path, 'y_scaler.pkl'))
-    else:
-        scaler = y_scalar
-
-    for data in dataset:
-        data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
-    return dataset
-
-def normalize_y_values_and_create_scaler_for_it(dataset, directory_path):
-    all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
-    all_y_values = replace_invalid_values(all_y_values).numpy()
-
-    scaler = StandardScaler()
+    scaler = RobustScaler()
     print(f"Scaler created for y values: {scaler}")
     scaler.fit(all_y_values)
     joblib.dump(scaler, os.path.join(directory_path, 'y_scaler.pkl'))
 
     for data in dataset:
         data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
-    
     return dataset, scaler
 
 
@@ -341,27 +310,15 @@ def compute_baseline_of_mean_target(dataset, loss_fct):
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
-    # print(mean_y_normalized)
-    print("mean_y_normalized: ")
-    print(mean_y_normalized)
     
-    median_y_normalized = np.median(y_values_normalized)   
-    print("median_y_normalized: ")
-    print(median_y_normalized)
+    # median_y_normalized = np.median(y_values_normalized)   
 
     # Convert numpy arrays to torch tensors
     y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
     mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32)
-
-    print("Mean y normalized tensor: ")
-    print(y_values_normalized_tensor.shape)
-    print(y_values_normalized_tensor[:10])
     
     # Create the target tensor with the same shape as y_values_normalized_tensor
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
-    print("Target tensor: ")
-    print(target_tensor.shape)
-    print(target_tensor[:10])
 
     # Compute the MSE
     loss = loss_fct(y_values_normalized_tensor, target_tensor)
@@ -385,12 +342,7 @@ def compute_baseline_of_no_policies(dataset, loss_fct):
     
     target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
     actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
-    
-    print('no policies ')
-    print(target_tensor.shape)
-    print(target_tensor[:10])
-    print(actual_difference_vol_car.shape)
-    print(actual_difference_vol_car[:10])
+
     # Compute the loss
     loss = loss_fct(actual_difference_vol_car, target_tensor)
     return loss.item()
