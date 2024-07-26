@@ -15,7 +15,7 @@ import os
 from torch.cuda.amp import GradScaler, autocast
 import math
 import torch.nn.init as init
-from torch_geometric.nn import PointNetConv, GATConv, Sequential as GeoSequential
+from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
 
 
 def initialize_weights(self):
@@ -26,43 +26,67 @@ def initialize_weights(self):
             init.zeros_(m.bias)
             
 class MyGnn(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, hidden_layers_base_for_point_net_conv: int, hidden_layer_structure: list):
+    def __init__(self, in_channels: int, out_channels: int, point_net_conv_layer_structure_local_mlp: list, point_net_conv_layer_structure_global_mlp: list, gat_conv_layer_structure: list, dropout: int):
         super().__init__()
-        
-        # Hyperparameters 
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.hidden_size = hidden_layers_base_for_point_net_conv
-        self.hidden_layer_structure = hidden_layer_structure
+        self.point_net_conv_layer_structure_local_mlp = point_net_conv_layer_structure_local_mlp
+        self.point_net_conv_layer_structure_global_mlp = point_net_conv_layer_structure_global_mlp
+        self.gat_conv_layer_structure = gat_conv_layer_structure
         self.graph_layers = []
-        layers = []
         
-        # Architecture of PointNetConv
-        local_MLP_1 = nn.Sequential(
-            nn.Linear(in_channels, hidden_layers_base_for_point_net_conv),
-            nn.ReLU(),
-            nn.Linear(hidden_layers_base_for_point_net_conv, hidden_layers_base_for_point_net_conv),
-        )
-        global_MLP_1 = nn.Sequential(
-            nn.Linear(hidden_layers_base_for_point_net_conv, int(hidden_layers_base_for_point_net_conv/2)),
-            nn.ReLU(),
-            nn.Linear(int(hidden_layers_base_for_point_net_conv/2), int(hidden_layers_base_for_point_net_conv*2)),
-            nn.ReLU(),
-            nn.Linear(int(hidden_layers_base_for_point_net_conv*2), hidden_layers_base_for_point_net_conv)
-        )
-        self.pointLayer = PointNetConv(local_nn = local_MLP_1, global_nn = global_MLP_1)
-        layers = define_layers(hidden_layer_structure=hidden_layer_structure, out_channels = out_channels)
-        
-        # Create the Sequential module with the layers
-        if layers:
-            self.graph_layers = GeoSequential('x, edge_index', layers)
-        else:
-            self.graph_layers= None
-                
+        point_net_conv_local_mlp, point_net_conv_global_conv = self.create_point_net_layer(in_channels= in_channels, dropout=dropout, 
+                                                                                            local_structure = point_net_conv_layer_structure_local_mlp, 
+                                                                                            global_structure = point_net_conv_layer_structure_global_mlp,
+                                                                                            gat_conv_starts_with_layer= gat_conv_layer_structure[0])
+        self.point_net_layer = PointNetConv(local_nn = point_net_conv_local_mlp, global_nn = point_net_conv_global_conv)
+
+        layers = self.define_layers(hidden_layer_structure=gat_conv_layer_structure, out_channels = out_channels, dropout=dropout)
+        self.graph_layers = GeoSequential('x, edge_index', layers)
+
         self.initialize_weights()
-                
         print("Model initialized")
         print(self)
+        
+    def forward(self, data):
+        x = data.x
+        edge_index = data.edge_index
+        x = self.point_net_layer(x, data.pos, edge_index)
+        if self.graph_layers:
+            x = self.graph_layers(x, edge_index)
+        return x
+    
+    def create_point_net_layer(self, in_channels:int, dropout:int, local_structure:list, global_structure:list, gat_conv_starts_with_layer:int):
+        local_MLP_layers = []
+        local_MLP_layers.append(nn.Linear(in_channels, local_structure[0]))
+        local_MLP_layers.append(nn.ReLU())
+        local_MLP_layers.append(nn.Dropout(p=dropout))
+        for idx in range(len(local_structure)-1):
+            local_MLP_layers.append(nn.Linear(local_structure[idx], local_structure[idx + 1]))
+            local_MLP_layers.append(nn.ReLU())
+            local_MLP_layers.append(nn.Dropout(p=dropout))
+        local_MLP = nn.Sequential(local_MLP_layers)
+        
+        global_MLP_layers = []
+        global_MLP_layers.append(nn.Linear(local_structure[-1], global_structure[0]))
+        for idx in range(len(global_structure) - 1):
+            global_MLP_layers.append(nn.Linear(global_structure[idx], global_structure[idx + 1]))
+            global_MLP_layers.append(nn.ReLU())
+            global_MLP_layers.append(nn.Dropout(p=dropout))
+        global_MLP_layers.append(nn.Linear(global_structure[ - 1], gat_conv_starts_with_layer))
+        global_MLP_layers.append(nn.ReLU())
+        global_MLP_layers.append(nn.Dropout(p=dropout))
+        global_MLP = nn.Sequential(global_MLP_layers)
+        return local_MLP, global_MLP
+    
+    def define_layers(hidden_layer_structure: list, out_channels: int, dropout:float= 0.3):
+        layers = []
+        for idx in range(len(hidden_layer_structure) - 1):
+            layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
+            layers.append(nn.ReLU(inplace=True))
+            layers.append(nn.Dropout(p= dropout))
+        layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[-1], out_channels), 'x, edge_index -> x'))
+        return layers
     
     def initialize_weights(self):
         for m in self.modules():
@@ -103,21 +127,6 @@ class MyGnn(torch.nn.Module):
                 else:
                     print(f"Warning: {m} does not have att_dst or it is None")
 
-    def forward(self, data):
-        x = data.x
-        edge_index = data.edge_index
-        x = self.pointLayer(x, data.pos, edge_index)
-        if self.graph_layers:
-            x = self.graph_layers(x, edge_index)
-        return x
-    
-def define_layers(hidden_layer_structure: list, out_channels: int):
-    layers = []
-    for idx in range(len(hidden_layer_structure) - 1):
-        layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
-        layers.append(torch.nn.ReLU(inplace=True))
-    layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[-1], out_channels), 'x, edge_index -> x'))
-    return layers
 
 def get_latest_checkpoint(checkpoint_dir):
     checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
@@ -136,11 +145,18 @@ def load_checkpoint(checkpoint_path, model, optimizer):
     print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
     return model, optimizer, epoch, val_loss, train_loss
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, compute_r_squared:bool = False, model_save_path:str=None): 
+def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, 
+          valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, 
+          compute_r_squared:bool = True, model_save_path:str=None): 
     scaler = GradScaler()
     total_steps = config.epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=10000, total_steps=total_steps)
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=30000, total_steps=total_steps)
     best_val_loss = float('inf')
+    
+    # Create a directory for checkpoints if it doesn't exist
+    checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    
     for epoch in range(config.epochs):
         model.train()
         optimizer.zero_grad()
@@ -158,6 +174,9 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
                 
             # Backward pass
             scaler.scale(train_loss).backward() 
+            
+            # Gradient clipping
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             if (idx + 1) % accumulation_steps == 0:
                 scaler.step(optimizer)
@@ -173,9 +192,14 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
             scaler.update()
             optimizer.zero_grad()
         
-        val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device)
-        wandb.log({"test_loss": val_loss, "epoch": epoch, "lr_test": lr, "r^2": r_squared})
-        print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+        if compute_r_squared:
+            val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device, compute_r_squared=True)
+            wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+        else:
+            val_loss, r_squared = validate_model_during_training(model=model, dataset=valid_dl, loss_func=loss_fct, device=device, compute_r_squared=False)
+            wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr})
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}")
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss   
@@ -183,17 +207,32 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
                 torch.save(model.state_dict(), model_save_path)
                 print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
         
+            # Save checkpoint
+        if epoch % 20 == 0:
+            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+            torch.save({
+                'epoch': epoch,
+                'model_state_dict': model.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                # 'scheduler_lr': scheduler.get_lr(),
+                # 'scaler_state_dict': scaler.get(),
+                'best_val_loss': best_val_loss,
+                'val_loss': val_loss,
+                # 'r_squared': r_squared
+            }, checkpoint_path)
+            print(f'Checkpoint saved to {checkpoint_path}')
+        
         early_stopping(val_loss)
         if early_stopping.early_stop:
             print("Early stopping triggered. Stopping training.")
             break
     
-    print("Best validation loss: ", val_loss)
-    wandb.summary["val_loss"] = val_loss
+    print("Best validation loss: ", best_val_loss)
+    wandb.summary["best_val_loss"] = best_val_loss
     wandb.finish()
     return val_loss, epoch
 
-def validate_model_during_training(model, valid_dl, loss_func, device):
+def validate_model_during_training(model, dataset, loss_func, device, compute_r_squared):
     model.eval()
     val_loss = 0
     num_batches = 0
@@ -202,19 +241,24 @@ def validate_model_during_training(model, valid_dl, loss_func, device):
     predictions = []
     
     with torch.inference_mode():
-        for idx, data in enumerate(valid_dl):
+        for idx, data in enumerate(dataset):
             input_node_features, targets = data.x.to(device), data.y.to(device)
             predicted = model(data.to(device))
-            actual_vals.append(targets)
-            predictions.append(predicted)
+            
+            if compute_r_squared:
+                actual_vals.append(targets)
+                predictions.append(predicted)
             val_loss += loss_func(predicted, targets).item()
             num_batches += 1
-            
-    actual_vals=torch.cat(actual_vals)
-    predictions = torch.cat(predictions)
-    r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
-    return val_loss / num_batches if num_batches > 0 else 0, r_squared
-
+    
+    total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
+    if compute_r_squared:
+        actual_vals=torch.cat(actual_vals)
+        predictions = torch.cat(predictions)
+        r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
+        return total_validation_loss, r_squared
+    else: 
+        return total_validation_loss
 
         # t = torch.cuda.get_device_properties(0).total_memory
         # r = torch.cuda.memory_reserved(0)
@@ -226,27 +270,6 @@ def validate_model_during_training(model, valid_dl, loss_func, device):
         # print(a/1073741824)
         # print(f/1073741824)
 
-# def validate_model(model, valid_dl, loss_func, device):
-#     model.eval()
-#     val_loss = 0
-#     num_batches = 0
-    
-#     actual_vals = []
-#     predictions = []
-    
-#     with torch.inference_mode():
-#         for idx, data in enumerate(valid_dl):
-#             input_node_features, targets = data.x.to(device), data.y.to(device)
-#             predicted = model(data.to(device))
-#             actual_vals.append(targets)
-#             predictions.append(predicted)
-#             val_loss += loss_func(predicted, targets).item()
-#             num_batches += 1
-            
-#     actual_vals=torch.cat(actual_vals)
-#     predictions = torch.cat(predictions)
-#     r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
-#     return val_loss / num_batches if num_batches > 0 else 0, r_squared, actual_vals, predictions
 
 def compute_r2_torch(preds, targets):
     """Compute R^2 score using PyTorch."""
@@ -293,18 +316,37 @@ class LinearWarmupCosineDecayScheduler:
         self.initial_lr = initial_lr
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
+        # self.decay_rate = decay_rate
+        self.decay_steps = total_steps - warmup_steps
 
     def get_lr(self, step):
         if step < self.warmup_steps:
             return self.initial_lr * (step / self.warmup_steps)
         else:
-            progress = (step - self.warmup_steps) / (self.total_steps - self.warmup_steps)
+            progress = (step - self.warmup_steps) / (self.decay_steps)
             cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+            # accelerated_decay = cosine_decay * math.exp(-self.decay_rate * progress)
             return self.initial_lr * cosine_decay 
         
-def initialize_weights(self):
-    for m in self.modules():
-        if isinstance(m, nn.Linear):
-            # You can choose a different initialization method
-            init.xavier_normal_(m.weight)
-            init.zeros_(m.bias)
+# def initialize_weights(self):
+#     for m in self.modules():
+#         if isinstance(m, nn.Linear):
+#             # You can choose a different initialization method
+#             init.xavier_normal_(m.weight)
+#             init.zeros_(m.bias)
+            
+            
+            
+             # Architecture of PointNetConv
+        # local_MLP_1 = nn.Sequential(
+        #     nn.Linear(in_channels, hidden_layers_base_for_point_net_conv),
+        #     nn.ReLU(),
+        #     nn.Linear(hidden_layers_base_for_point_net_conv, hidden_layers_base_for_point_net_conv),
+        # )
+        # global_MLP_1 = nn.Sequential(
+        #     nn.Linear(hidden_layers_base_for_point_net_conv, int(hidden_layers_base_for_point_net_conv/2)),
+        #     nn.ReLU(),
+        #     nn.Linear(int(hidden_layers_base_for_point_net_conv/2), int(hidden_layers_base_for_point_net_conv*2)),
+        #     nn.ReLU(),
+        #     nn.Linear(int(hidden_layers_base_for_point_net_conv*2), hidden_layers_base_for_point_net_conv)
+        # )

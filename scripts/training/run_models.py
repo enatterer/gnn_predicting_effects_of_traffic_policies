@@ -61,47 +61,6 @@ def get_paths(base_dir, unique_model_description):
     data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-5000.pt')
     return data_dict_list, model_save_path, path_to_save_dataloader
 
-# Define parameters
-def get_parameters(args):
-        project_name = "runs_y_normalized_robust_scaler"
-        indices_of_datasets_to_use = [0, 1, 3, 4]
-        num_epochs = 1000
-        in_channels = len(indices_of_datasets_to_use) + 2
-        out_channels = 1
-        lr = float(args.lr)
-        batch_size = int(args.batch_size)
-        hidden_layers_base_for_point_net_conv = int(args.hidden_layers_base_for_point_net_conv)
-        hidden_layer_structure = [int(x) for x in args.hidden_layer_structure.split(',')]
-        gradient_accumulation_steps = int(args.gradient_accumulation_steps)
-        early_stopping_patience = int(args.early_stopping_patience)
-
-        unique_model_description = (
-            # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
-            # f"batch_{batch_size}_"
-            f"hidden_{hidden_layers_base_for_point_net_conv}_"
-            f"hidden_layer_str_{gio.int_list_to_string(lst = hidden_layer_structure, delimiter='_')}_"
-            # f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
-            # f"lr_{lr}_"
-            # f"g_accumulation_steps_{gradient_accumulation_steps}"
-            # f"early_stopping_{early_stopping_patience}"
-            # f"in_channels_{in_channels}_"
-            # f"out_channels_{out_channels}_"
-        )
-        return {
-            "project_name": project_name,
-            "indices_of_datasets_to_use": indices_of_datasets_to_use,
-            "num_epochs": num_epochs,
-            "batch_size": batch_size,
-            "hidden_layers_base_for_point_net_conv": hidden_layers_base_for_point_net_conv,
-            "hidden_layer_structure": hidden_layer_structure,
-            "lr": lr,
-            "gradient_accumulation_steps": gradient_accumulation_steps,
-            "in_channels": in_channels,
-            "out_channels": out_channels,
-            "early_stopping_patience": early_stopping_patience,
-            "unique_model_description": unique_model_description
-        }
-        
 def set_random_seeds(seed_value=42):
     # Set environment variable for reproducibility
     os.environ['PYTHONHASHSEED'] = str(seed_value)
@@ -130,7 +89,7 @@ def set_random_seeds(seed_value=42):
 def prepare_data(data_dict_list, indices_of_datasets_to_use, batch_size, path_to_save_dataloader, normalize_y, normalize_pos):
     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
     dataset_only_relevant_dimensions = gio.cut_dimensions(dataset=datalist, indices_of_dimensions_to_keep=indices_of_datasets_to_use)
-    train_set, valid_set, test_set = gio.split_into_subsets(dataset=dataset_only_relevant_dimensions, train_ratio=0.7, val_ratio=0.15, test_ratio=0.15)
+    train_set, valid_set, test_set = gio.split_into_subsets(dataset=dataset_only_relevant_dimensions, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
     if normalize_y and normalize_pos:
         train_set_normalized, x_scaler, pos_scaler, y_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=True, normalize_pos=True)
         valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar=y_scaler, normalize_y=True, normalize_pos=True)
@@ -164,15 +123,66 @@ def setup_wandb(project_name, config):
     wandb.login()
     wandb.init(project=project_name, config=config)
     return wandb.config
+
+# Define parameters
+def get_parameters(args):
+        project_name = "runs_y_not_normalized"
+        indices_of_datasets_to_use = [0, 1, 3, 4]
+        num_epochs = 1000
+        in_channels = len(indices_of_datasets_to_use) + 2
+        out_channels = 1
+        lr = float(args.lr)
+        batch_size = int(args.batch_size)
+        point_net_conv_layer_structure_local_mlp = [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')]
+        point_net_conv_layer_structure_global_mlp = [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')]
+        gat_conv_layer_structure = [int(x) for x in args.hidden_layer_structure.split(',')]
+        gradient_accumulation_steps = int(args.gradient_accumulation_steps)
+        early_stopping_patience = int(args.early_stopping_patience)
+        dropout = float(args.dropout)
+
+        unique_model_description = (
+            # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
+            # f"batch_{batch_size}_"
+            f"pnc_local_{gio.int_list_to_string(lst = point_net_conv_layer_structure_local_mlp, delimiter='_')}_"
+            f"pnc_global_{gio.int_list_to_string(lst = point_net_conv_layer_structure_global_mlp, delimiter='_')}_"
+            f"hidden_layer_str_{gio.int_list_to_string(lst = gat_conv_layer_structure, delimiter='_')}_"
+            f"dropout_{dropout}_"
+            # f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
+            # f"lr_{lr}_"
+            # f"g_accumulation_steps_{gradient_accumulation_steps}"
+            # f"early_stopping_{early_stopping_patience}"
+            # f"in_channels_{in_channels}_"
+            # f"out_channels_{out_channels}_"
+        )
+        return {
+            "project_name": project_name,
+            "indices_of_datasets_to_use": indices_of_datasets_to_use,
+            "num_epochs": num_epochs,
+            "batch_size": batch_size,
+            "point_net_conv_layer_structure_local_mlp": point_net_conv_layer_structure_local_mlp,
+            "point_net_conv_layer_structure_global_mlp": point_net_conv_layer_structure_global_mlp,
+            "gat_conv_layer_structure": gat_conv_layer_structure,
+            "lr": lr,
+            "gradient_accumulation_steps": gradient_accumulation_steps,
+            "in_channels": in_channels,
+            "out_channels": out_channels,
+            "early_stopping_patience": early_stopping_patience,
+            "unique_model_description": unique_model_description,
+            "dropout": dropout
+        }
         
 def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path):
-    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, hidden_layer_structure=config.hidden_layer_structure)
+    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, 
+                               point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
+                               point_net_conv_layer_structure_global_mlp = config.point_net_conv_layer_structure_global_mlp,
+                               gat_conv_layer_structure=config.gat_conv_layer_structure,
+                               dropout=config.dropout)
     model = gnn_instance.to(device)
     loss_fct = torch.nn.MSELoss()
     best_val_loss, best_epoch = garch.train(model=model, 
                 config=config, 
                 loss_fct=loss_fct,
-                optimizer=torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=0.0),
+                optimizer=torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=1e-4),
                 train_dl=train_dl, 
                 valid_dl=valid_dl,
                 device=device, 
@@ -187,13 +197,15 @@ def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_d
 def main():
     # Command-line arguments
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--hidden_layers_base_for_point_net_conv", type=int, default=64, help="Size of hidden layers.")
+    parser.add_argument("--pnc_local", type=str, default="[64]", help="Size of hidden layers.")
+    parser.add_argument("--pnc_global", type=str, default="[64]", help="Size of hidden layers.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--hidden_layer_structure", type=str, default="[64]", help="Structure of hidden layer sizes (comma-separated).")
+    parser.add_argument("--gat_conv_layer_structure", type=str, default="[64]", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
     parser.add_argument("--early_stopping_patience", type=str, default=20, help="The early stopping patience.")
     parser.add_argument("--gradient_accumulation_steps", type=str, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--device_nr", type=str, default="1", help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
+    parser.add_argument("--dropout", type=str, default=0.3, help="The dropout rate.")
     args = parser.parse_args()
     
     set_random_seeds()
@@ -211,7 +223,7 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         data_dict_list, model_save_path, path_to_save_dataloader = get_paths(base_dir, params['unique_model_description'])
-        train_dl, valid_dl = prepare_data(data_dict_list=data_dict_list, indices_of_datasets_to_use=params['indices_of_datasets_to_use'], batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, normalize_y=True, normalize_pos=True)
+        train_dl, valid_dl = prepare_data(data_dict_list=data_dict_list, indices_of_datasets_to_use=params['indices_of_datasets_to_use'], batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, normalize_y=False, normalize_pos=True)
         
         config = setup_wandb(params['project_name'], {
             "epochs": params['num_epochs'],
@@ -219,14 +231,16 @@ def main():
             "lr": params['lr'],
             "gradient_accumulation_steps": params['gradient_accumulation_steps'],
             "early_stopping_patience": params['early_stopping_patience'],
-            "hidden_layers_base_for_point_net_conv": params['hidden_layers_base_for_point_net_conv'],
-            "hidden_layer_structure": params['hidden_layer_structure'],
+            "point_net_conv_layer_structure_local_mlp": params['point_net_conv_layer_structure_local_mlp'],
+            "point_net_conv_layer_structure_global_mlp": params['point_net_conv_layer_structure_global_mlp'],
+            "gat_conv_layer_structure": params['gat_conv_layer_structure'],
             "indices_to_use": params['indices_of_datasets_to_use'],
             "in_channels": params['in_channels'],
             "out_channels": params['out_channels'],
+            "dropout": params['dropout']
         })
 
-        gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, hidden_layer_structure=config.hidden_layer_structure)
+        gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, gat_conv_layer_structure=config.hidden_layer_structure, dropout=config.dropout)
         model = gnn_instance.to(device)
         loss_fct = torch.nn.MSELoss()
         
@@ -235,14 +249,11 @@ def main():
         print("baseline loss mean " + str(baseline_loss_mean_target))
         print("baseline loss no  " +str(baseline_loss) )
 
-        # print("Check dataset")
-        # print(next(iter(train_dl)).y[:10])
-        # print(next(iter(valid_dl)).y[:10])
         early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
         best_val_loss, best_epoch = garch.train(model=model, 
                     config=config, 
                     loss_fct=loss_fct,
-                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=0.0),
+                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 
