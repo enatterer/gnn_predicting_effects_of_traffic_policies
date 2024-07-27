@@ -124,21 +124,30 @@ def setup_wandb(project_name, config):
     wandb.init(project=project_name, config=config)
     return wandb.config
 
+def str_to_bool(value):
+    if isinstance(value, str):
+        if value.lower() in ['true', '1', 'yes', 'y']:
+            return True
+        elif value.lower() in ['false', '0', 'no', 'n']:
+            return False
+    raise ValueError(f"Cannot convert {value} to a boolean.")
+
 # Define parameters
 def get_parameters(args):
-        project_name = "runs_y_not_normalized"
+        project_name = "runs_optimized"
         indices_of_datasets_to_use = [0, 1, 3, 4]
         num_epochs = 1000
         in_channels = len(indices_of_datasets_to_use) + 2
         out_channels = 1
         lr = float(args.lr)
         batch_size = int(args.batch_size)
-        point_net_conv_layer_structure_local_mlp = [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')]
-        point_net_conv_layer_structure_global_mlp = [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')]
-        gat_conv_layer_structure = [int(x) for x in args.hidden_layer_structure.split(',')]
+        point_net_conv_layer_structure_local_mlp = [int(x) for x in args.pnc_local.split(',')]
+        point_net_conv_layer_structure_global_mlp = [int(x) for x in args.pnc_global.split(',')]
+        gat_conv_layer_structure = [int(x) for x in args.gat_conv_layer_structure.split(',')]
         gradient_accumulation_steps = int(args.gradient_accumulation_steps)
         early_stopping_patience = int(args.early_stopping_patience)
         dropout = float(args.dropout)
+        use_dropout = str_to_bool(args.use_dropout)
 
         unique_model_description = (
             # f"features_{gio.int_list_to_string(lst = indices_of_datasets_to_use, delimiter= '_')}_"
@@ -147,6 +156,7 @@ def get_parameters(args):
             f"pnc_global_{gio.int_list_to_string(lst = point_net_conv_layer_structure_global_mlp, delimiter='_')}_"
             f"hidden_layer_str_{gio.int_list_to_string(lst = gat_conv_layer_structure, delimiter='_')}_"
             f"dropout_{dropout}_"
+            f"use_dropout_{use_dropout}"
             # f"gat_and_conv_structure_{gio.int_list_to_string(lst = gat_and_conv_structure, delimiter='_')}"
             # f"lr_{lr}_"
             # f"g_accumulation_steps_{gradient_accumulation_steps}"
@@ -168,31 +178,9 @@ def get_parameters(args):
             "out_channels": out_channels,
             "early_stopping_patience": early_stopping_patience,
             "unique_model_description": unique_model_description,
-            "dropout": dropout
-        }
-        
-def train_model(config, train_dl, valid_dl, device, early_stopping, checkpoint_dir, model_save_path):
-    gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, 
-                               point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
-                               point_net_conv_layer_structure_global_mlp = config.point_net_conv_layer_structure_global_mlp,
-                               gat_conv_layer_structure=config.gat_conv_layer_structure,
-                               dropout=config.dropout)
-    model = gnn_instance.to(device)
-    loss_fct = torch.nn.MSELoss()
-    best_val_loss, best_epoch = garch.train(model=model, 
-                config=config, 
-                loss_fct=loss_fct,
-                optimizer=torch.optim.Adam(model.parameters(), lr=config.lr, weight_decay=1e-4),
-                train_dl=train_dl, 
-                valid_dl=valid_dl,
-                device=device, 
-                early_stopping=early_stopping,
-                accumulation_steps=config.gradient_accumulation_steps,
-                use_existing_checkpoint=False, 
-                path_existing_checkpoints=checkpoint_dir,
-                compute_r_squared=False,
-                model_save_path=model_save_path)
-    print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
+            "dropout": dropout,
+            "use_dropout": use_dropout
+        } 
 
 def main():
     # Command-line arguments
@@ -206,6 +194,7 @@ def main():
     parser.add_argument("--lr", type=str, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--device_nr", type=str, default="1", help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
     parser.add_argument("--dropout", type=str, default=0.3, help="The dropout rate.")
+    parser.add_argument("--use_dropout", type=str, default="false", help="Whether to use or not use dropout.")
     args = parser.parse_args()
     
     set_random_seeds()
@@ -231,16 +220,20 @@ def main():
             "lr": params['lr'],
             "gradient_accumulation_steps": params['gradient_accumulation_steps'],
             "early_stopping_patience": params['early_stopping_patience'],
-            "point_net_conv_layer_structure_local_mlp": params['point_net_conv_layer_structure_local_mlp'],
-            "point_net_conv_layer_structure_global_mlp": params['point_net_conv_layer_structure_global_mlp'],
+            "point_net_conv_local_mlp": params['point_net_conv_layer_structure_local_mlp'],
+            "point_net_conv_global_mlp": params['point_net_conv_layer_structure_global_mlp'],
             "gat_conv_layer_structure": params['gat_conv_layer_structure'],
             "indices_to_use": params['indices_of_datasets_to_use'],
             "in_channels": params['in_channels'],
             "out_channels": params['out_channels'],
-            "dropout": params['dropout']
+            "dropout": params['dropout'],
+            "use_dropout": params['use_dropout']
         })
 
-        gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, hidden_layers_base_for_point_net_conv=config.hidden_layers_base_for_point_net_conv, gat_conv_layer_structure=config.hidden_layer_structure, dropout=config.dropout)
+        gnn_instance = garch.MyGnn(in_channels=config.in_channels, out_channels=config.out_channels, point_net_conv_layer_structure_local_mlp=config.point_net_conv_local_mlp,
+                                   point_net_conv_layer_structure_global_mlp=config.point_net_conv_global_mlp,
+                                   gat_conv_layer_structure=config.gat_conv_layer_structure,
+                                   dropout=config.dropout, use_dropout=config.use_dropout)
         model = gnn_instance.to(device)
         loss_fct = torch.nn.MSELoss()
         
@@ -259,8 +252,11 @@ def main():
                     device=device, 
                     early_stopping=early_stopping,
                     accumulation_steps=config.gradient_accumulation_steps,
-                    compute_r_squared=False,
-                    model_save_path=model_save_path)
+                    compute_r_squared=True,
+                    model_save_path=model_save_path,
+                    use_gradient_clipping=True,
+                    lr_scheduler_warmup_steps=20000,
+                    lr_scheduler_cosine_decay_rate=0.5)
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:
