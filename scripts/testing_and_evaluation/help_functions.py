@@ -80,15 +80,12 @@ def validate_trained_model(model, valid_dl, loss_func, device):
 
 def validate_one_model(model, data, loss_func, device):
     model.eval()
-    val_loss = 0
-    num_batches = 0
     with torch.inference_mode():
         input_node_features, targets = data.x.to(device), data.y.to(device)
         predicted = model(data.to(device))
-        val_loss += loss_func(predicted, targets).item()
-        num_batches += 1
+        val_loss = loss_func(predicted, targets).item()
     r_squared = compute_r2_torch(preds=predicted, targets=targets)
-    return val_loss / num_batches if num_batches > 0 else 0, r_squared, targets, predicted
+    return val_loss, r_squared, targets, predicted
 
 def compute_r2_torch(preds, targets):
     """Compute R^2 score using PyTorch."""
@@ -182,9 +179,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
     if save_it:
         p = "predicted" if is_predicted else "actual"
-        n = "normalized_y" if normalized_y else "not_normalized_y"
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier + "_" + n + "_" + p, bbox_inches='tight')
+        plt.savefig("results/" + identifier + "_" + p, bbox_inches='tight')
     plt.show()
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
@@ -213,9 +209,8 @@ def plot_difference_output(gdf_input: gpd.GeoDataFrame, column1: str, column2: s
     cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
     cbar.set_label('Difference between predicted and actual (%)', fontname=font, fontsize=15)
     if save_it:
-        n = "normalized_y" if normalized_y else "not_normalized_y"
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier  + "_" +  n + "_difference", bbox_inches='tight')
+        plt.savefig("results/" + identifier  + "_difference", bbox_inches='tight')
     plt.show()
 
 def filter_for_geographic_section(gdf):

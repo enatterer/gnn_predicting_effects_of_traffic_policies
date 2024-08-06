@@ -16,6 +16,7 @@ from torch.cuda.amp import GradScaler, autocast
 import math
 import torch.nn.init as init
 from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
+import torch.optim as optim
 
 
 def initialize_weights(self):
@@ -26,22 +27,22 @@ def initialize_weights(self):
             init.zeros_(m.bias)
             
 class MyGnn(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, point_net_conv_layer_structure_local_mlp: list, point_net_conv_layer_structure_global_mlp: list, gat_conv_layer_structure: list, dropout: int):
+    def __init__(self, in_channels: int, out_channels: int, point_net_conv_layer_structure_local_mlp: list, point_net_conv_layer_structure_global_mlp: list, gat_conv_layer_structure: list, dropout: float, use_dropout: bool):
         super().__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.point_net_conv_layer_structure_local_mlp = point_net_conv_layer_structure_local_mlp
-        self.point_net_conv_layer_structure_global_mlp = point_net_conv_layer_structure_global_mlp
+        self.pnc_local = point_net_conv_layer_structure_local_mlp
+        self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv_layer_structure = gat_conv_layer_structure
         self.graph_layers = []
+        self.use_dropout = use_dropout
+        if use_dropout:
+            self.dropout_layer = nn.Dropout(dropout)
         
-        point_net_conv_local_mlp, point_net_conv_global_conv = self.create_point_net_layer(in_channels= in_channels, dropout=dropout, 
-                                                                                            local_structure = point_net_conv_layer_structure_local_mlp, 
-                                                                                            global_structure = point_net_conv_layer_structure_global_mlp,
-                                                                                            gat_conv_starts_with_layer= gat_conv_layer_structure[0])
+        point_net_conv_local_mlp, point_net_conv_global_conv = self.create_point_net_layer(gat_conv_starts_with_layer= gat_conv_layer_structure[0])
         self.point_net_layer = PointNetConv(local_nn = point_net_conv_local_mlp, global_nn = point_net_conv_global_conv)
 
-        layers = self.define_layers(hidden_layer_structure=gat_conv_layer_structure, out_channels = out_channels, dropout=dropout)
+        layers = self.define_layers()
         self.graph_layers = GeoSequential('x, edge_index', layers)
 
         self.initialize_weights()
@@ -56,36 +57,41 @@ class MyGnn(torch.nn.Module):
             x = self.graph_layers(x, edge_index)
         return x
     
-    def create_point_net_layer(self, in_channels:int, dropout:int, local_structure:list, global_structure:list, gat_conv_starts_with_layer:int):
+    def create_point_net_layer(self, gat_conv_starts_with_layer:int):
         local_MLP_layers = []
-        local_MLP_layers.append(nn.Linear(in_channels, local_structure[0]))
+        local_MLP_layers.append(nn.Linear(self.in_channels, self.pnc_local[0]))
         local_MLP_layers.append(nn.ReLU())
-        local_MLP_layers.append(nn.Dropout(p=dropout))
-        for idx in range(len(local_structure)-1):
-            local_MLP_layers.append(nn.Linear(local_structure[idx], local_structure[idx + 1]))
+        if self.use_dropout:
+            local_MLP_layers.append(self.dropout_layer)
+        for idx in range(len(self.pnc_local)-1):
+            local_MLP_layers.append(nn.Linear(self.pnc_local[idx], self.pnc_local[idx + 1]))
             local_MLP_layers.append(nn.ReLU())
-            local_MLP_layers.append(nn.Dropout(p=dropout))
-        local_MLP = nn.Sequential(local_MLP_layers)
+            if self.use_dropout:
+                local_MLP_layers.append(self.dropout_layer)
+        local_MLP = nn.Sequential(*local_MLP_layers)
         
         global_MLP_layers = []
-        global_MLP_layers.append(nn.Linear(local_structure[-1], global_structure[0]))
-        for idx in range(len(global_structure) - 1):
-            global_MLP_layers.append(nn.Linear(global_structure[idx], global_structure[idx + 1]))
+        global_MLP_layers.append(nn.Linear(self.pnc_local[-1], self.pnc_global[0]))
+        for idx in range(len(self.pnc_global) - 1):
+            global_MLP_layers.append(nn.Linear(self.pnc_global[idx], self.pnc_global[idx + 1]))
             global_MLP_layers.append(nn.ReLU())
-            global_MLP_layers.append(nn.Dropout(p=dropout))
-        global_MLP_layers.append(nn.Linear(global_structure[ - 1], gat_conv_starts_with_layer))
+            if self.use_dropout:
+                global_MLP_layers.append(self.dropout_layer)
+        global_MLP_layers.append(nn.Linear(self.pnc_global[ - 1], gat_conv_starts_with_layer))
         global_MLP_layers.append(nn.ReLU())
-        global_MLP_layers.append(nn.Dropout(p=dropout))
-        global_MLP = nn.Sequential(global_MLP_layers)
+        if self.use_dropout:
+            global_MLP_layers.append(self.dropout_layer)
+        global_MLP = nn.Sequential(*global_MLP_layers)
         return local_MLP, global_MLP
     
-    def define_layers(hidden_layer_structure: list, out_channels: int, dropout:float= 0.3):
+    def define_layers(self):
         layers = []
-        for idx in range(len(hidden_layer_structure) - 1):
-            layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[idx], hidden_layer_structure[idx + 1]), 'x, edge_index -> x'))
+        for idx in range(len(self.gat_conv_layer_structure) - 1):
+            layers.append((torch_geometric.nn.GATConv(self.gat_conv_layer_structure[idx], self.gat_conv_layer_structure[idx + 1]), 'x, edge_index -> x'))
             layers.append(nn.ReLU(inplace=True))
-            layers.append(nn.Dropout(p= dropout))
-        layers.append((torch_geometric.nn.GATConv(hidden_layer_structure[-1], out_channels), 'x, edge_index -> x'))
+            if self.use_dropout:
+                layers.append(self.dropout_layer)
+        layers.append((torch_geometric.nn.GATConv(self.gat_conv_layer_structure[-1], self.out_channels), 'x, edge_index -> x'))
         return layers
     
     def initialize_weights(self):
@@ -147,7 +153,9 @@ def load_checkpoint(checkpoint_path, model, optimizer):
 
 def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, 
           valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, 
-          compute_r_squared:bool = True, model_save_path:str=None): 
+          compute_r_squared: bool = True, model_save_path:str=None, use_gradient_clipping:bool = True,
+          lr_scheduler_warmup_steps:int = 20000, lr_scheduler_cosine_decay_rate: float=0.2
+          ): 
     scaler = GradScaler()
     total_steps = config.epochs * len(train_dl)
     scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=30000, total_steps=total_steps)
@@ -176,7 +184,8 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
             scaler.scale(train_loss).backward() 
             
             # Gradient clipping
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            if use_gradient_clipping:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             if (idx + 1) % accumulation_steps == 0:
                 scaler.step(optimizer)
@@ -191,15 +200,16 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-        
-        if compute_r_squared:
-            val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device, compute_r_squared=True)
-            wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
-        else:
-            val_loss, r_squared = validate_model_during_training(model=model, dataset=valid_dl, loss_func=loss_fct, device=device, compute_r_squared=False)
-            wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr})
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}")
+        # print("Now about to compute r squared! ")
+        # if compute_r_squared == True:
+        # print("We compute r squared")
+        val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device, compute_r_squared=True)
+        wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
+        print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+        # else:
+        #     val_loss = validate_model_during_training(model=model, dataset=valid_dl, loss_func=loss_fct, device=device, compute_r_squared=False)
+        #     wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr})
+        #     print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}")
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss   
@@ -207,7 +217,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
                 torch.save(model.state_dict(), model_save_path)
                 print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
         
-            # Save checkpoint
+        # Save checkpoint
         if epoch % 20 == 0:
             checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
             torch.save({
@@ -312,10 +322,11 @@ def load_model(model_path):
     return model, config
 
 class LinearWarmupCosineDecayScheduler:
-    def __init__(self, initial_lr, warmup_steps, total_steps):
+    def __init__(self, initial_lr, warmup_steps, total_steps, cosine_decay_rate=0.5):
         self.initial_lr = initial_lr
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
+        self.cosine_decay_rate = cosine_decay_rate
         # self.decay_rate = decay_rate
         self.decay_steps = total_steps - warmup_steps
 
@@ -324,9 +335,26 @@ class LinearWarmupCosineDecayScheduler:
             return self.initial_lr * (step / self.warmup_steps)
         else:
             progress = (step - self.warmup_steps) / (self.decay_steps)
-            cosine_decay = 0.5 * (1 + math.cos(math.pi * progress))
+            cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             # accelerated_decay = cosine_decay * math.exp(-self.decay_rate * progress)
             return self.initial_lr * cosine_decay 
+        
+        
+class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
+    def __init__(self, optimizer, warmup, max_iters):
+        self.warmup = warmup
+        self.max_num_iters = max_iters
+        super().__init__(optimizer)
+ 
+    def get_lr(self):
+        lr_factor = self.get_lr_factor(epoch=self.last_epoch)
+        return [base_lr * lr_factor for base_lr in self.base_lrs]
+ 
+    def get_lr_factor(self, epoch):
+        lr_factor = 0.5 * (1 + np.cos(np.pi * epoch / self.max_num_iters))
+        if epoch <= self.warmup:
+            lr_factor *= epoch * 1.0 / self.warmup
+        return lr_factor
         
 # def initialize_weights(self):
 #     for m in self.modules():

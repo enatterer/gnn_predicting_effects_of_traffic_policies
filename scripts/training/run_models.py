@@ -136,7 +136,7 @@ def str_to_bool(value):
 def get_parameters(args):
         project_name = "runs_optimized"
         indices_of_datasets_to_use = [0, 1, 3, 4]
-        num_epochs = 1000
+        num_epochs = 3000
         in_channels = len(indices_of_datasets_to_use) + 2
         out_channels = 1
         lr = float(args.lr)
@@ -256,7 +256,7 @@ def main():
                     model_save_path=model_save_path,
                     use_gradient_clipping=True,
                     lr_scheduler_warmup_steps=20000,
-                    lr_scheduler_cosine_decay_rate=0.5)
+                    lr_scheduler_cosine_decay_rate=0.2)
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:

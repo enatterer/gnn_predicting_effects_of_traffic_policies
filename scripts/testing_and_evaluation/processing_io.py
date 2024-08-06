@@ -68,11 +68,9 @@ def create_test_data_object(base_case, test_data):
 
     edges = test_data[['from_idx', 'to_idx']].values
     edge_car_volumes = test_data['vol_car'].values
-    capacities = test_data['capacity'].values
-    # freespeeds = test_data['freespeed'].values  
-    # lengths = test_data['length'].values  
-    # modes = test_data['modes'].values
-    # modes_encoded = np.vectorize(encode_modes)(modes)
+    capacities_new = test_data['capacity'].values
+    capacity_reduction= capacities_new - capacity_base_case
+    
     highway = test_data['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
 
     edge_positions = np.array([((geom.coords[0][0] + geom.coords[-1][0]) / 2, 
@@ -94,7 +92,7 @@ def create_test_data_object(base_case, test_data):
     linegraph_data = linegraph_transformation(data)
 
     # Prepare the x for line graph: index and capacity
-    linegraph_x = torch.tensor(np.column_stack((vol_base_case, capacity_base_case, capacities, highway)), dtype=torch.float)
+    linegraph_x = torch.tensor(np.column_stack((vol_base_case, capacity_base_case, capacities_new, capacity_reduction, highway)), dtype=torch.float)
 
     linegraph_data.x = linegraph_x
 

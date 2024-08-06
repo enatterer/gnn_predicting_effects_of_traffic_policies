@@ -160,7 +160,10 @@ def normalize_dataset_create_scaler(dataset_input, directory_path, normalize_y, 
         else:
             return dataset, x_scaler, y_scaler
     else:
-        return dataset, x_scaler, pos_scaler if normalize_pos else dataset, x_scaler
+        if normalize_pos:
+            return dataset, x_scaler, pos_scaler 
+        else:
+            return dataset, x_scaler
 
 def normalize_dataset_with_given_scaler(dataset_input, x_scalar_list = None, pos_scalar=None, y_scalar=None, normalize_y=False, normalize_pos=False):
     dataset = copy_subset(dataset_input)

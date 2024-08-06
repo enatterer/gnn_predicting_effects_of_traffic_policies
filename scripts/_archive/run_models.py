@@ -30,7 +30,7 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, vali
             wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "step": idx})
             # print(f"epoch: {epoch}, step: {idx}, loss: {train_loss.item()}")
         
-        val_loss = garch.validate_model_pos_features(model, valid_dl, loss_fct, device)
+        val_loss = garch.validate_model(model, valid_dl, loss_fct, device)
         print(f"epoch: {epoch}, validation loss: {val_loss}")
         wandb.log({"loss": val_loss, "epoch": epoch})
             

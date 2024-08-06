@@ -60,7 +60,6 @@ def plot_simulation_output(df, districts_of_interest: list, is_for_1pm: str, in_
     gdf = gdf[gdf["highway"].isin(highway_types)]
     
     target_districts = districts[districts['c_ar'].isin(districts_of_interest)]
-
     gdf['intersects_target_districts'] = gdf.apply(lambda row: target_districts.intersects(row.geometry).any(), axis=1)
 
     # Use TwoSlopeNorm for custom normalization
