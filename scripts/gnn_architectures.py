@@ -80,6 +80,7 @@ class MyGnn(torch.nn.Module):
             x = self.graph_layers(x, edge_index)
         return x
     
+    # TODO Elena: introduce smooth transition from one layer to the next. 
     def create_point_net_layer(self, gat_conv_starts_with_layer:int):
         """
         Create PointNetConv layers with specified configurations.
@@ -144,7 +145,7 @@ class MyGnn(torch.nn.Module):
                 init.zeros_(m.bias)
             elif isinstance(m, PointNetConv):
                 self._initialize_pointnetconv(m)
-            elif isinstance(m, torch_geometric.nnGATConv):
+            elif isinstance(m, torch_geometric.nn.GATConv):
                 self._initialize_gatconv(m)
 
     def _initialize_pointnetconv(self, m: PointNetConv):

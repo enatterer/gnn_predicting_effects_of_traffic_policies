@@ -157,133 +157,6 @@ def list_to_string(integers, delimiter=', '):
     """
     return delimiter.join(map(str, integers))
 
-def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font: str = 'Times New Roman', 
-                         save_it: bool = False, number_to_plot: int = 0,
-                         zone_to_plot:str= "this_zone",
-                         is_predicted: bool = False, alpha:int=100, 
-                         use_fixed_norm:bool=True, 
-                         fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
-    # call with known_districts if call with 0 or 1
-
-    gdf = gdf_input.copy()
-    gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
-    gdf = gdf[gdf["og_highway"].isin([1, 2, 3])]
-
-    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
-    norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
-    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm)
-    relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
-
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
-    
-    cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
-    if save_it:
-        p = "predicted" if is_predicted else "actual"
-        identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier + "_" + p, bbox_inches='tight')
-    plt.show()
-
-def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
-    if use_fixed_norm:
-        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
-    else:
-        norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
-    return norm
-    
-def plot_difference_output(gdf_input: gpd.GeoDataFrame, column1: str, column2: str, diff_column: str = 'difference', font: str = 'Times New Roman', save_it: bool = False, number_to_plot: int = 0,
-                           zone_to_plot:str= "this_zone", alpha:int=100, 
-                         use_fixed_norm:bool=True, 
-                         fixed_norm_max: int= 10, normalized_y: bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
-    gdf = gdf_input.copy()
-    gdf[diff_column] = gdf[column1] - gdf[column2]
-    column_to_plot = diff_column
-
-    gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
-    gdf = gdf[gdf["og_highway"].isin([1, 2, 3])]
-
-    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
-    norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
-    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm)
-    relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
-
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
-    cbar.set_label('Difference between predicted and actual (%)', fontname=font, fontsize=15)
-    if save_it:
-        identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier  + "_difference", bbox_inches='tight')
-    plt.show()
-
-def filter_for_geographic_section(gdf):
-    x_min = gdf.total_bounds[0] + 0.05
-    y_min = gdf.total_bounds[1] + 0.05
-    x_max = gdf.total_bounds[2]
-    y_max = gdf.total_bounds[3]
-    bbox = box(x_min, y_min, x_max, y_max)
-
-    # Filter the network to include only the data within the bounding box
-    gdf = gdf[gdf.intersects(bbox)]
-    return gdf,x_min,y_min,x_max,y_max
-
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm):
-    plt.xlim(x_min, x_max)
-    plt.ylim(y_min, y_max)
-    plt.xlabel("Longitude", fontname=font, fontsize=15)
-    plt.ylabel("Latitude", fontname=font, fontsize=15)
-
-    # Customize tick labels
-    ax.tick_params(axis='both', which='major', labelsize=10)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontname(font)
-        label.set_fontsize(15)
-    
-    # Create custom legend
-    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Higher order street network'),# Add more lines for other labels as needed
-                    Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
-
-    ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
-    ax.set_position([0.1, 0.1, 0.75, 0.75])
-    cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])  # Manually position the color bar
-    
-    # Create the color bar
-    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
-    sm._A = []
-    cbar = plt.colorbar(sm, cax=cax)
-
-    # Set color bar font properties
-    cbar.ax.tick_params(labelsize=15)
-    for t in cbar.ax.get_yticklabels():
-        t.set_fontname(font)
-    cbar.ax.yaxis.label.set_fontname(font)
-    cbar.ax.yaxis.label.set_size(15)
-    return cbar
-
-def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm):
-    if known_districts:
-        target_districts = districts[districts['c_ar'].isin(districts_of_interest)]
-        gdf['intersects_target_districts'] = gdf.apply(lambda row: target_districts.intersects(row.geometry).any(), axis=1)
-        gdf[gdf['intersects_target_districts']].plot(column=column_to_plot, cmap='coolwarm', linewidth=5, ax=ax, legend=False,
-                norm=norm, label = "Higher order roads", zorder=2)
-        gdf[~gdf['intersects_target_districts']].plot(column=column_to_plot, cmap='coolwarm', linewidth=3, ax=ax, legend=False,
-                norm=norm, zorder=1)
-
-        buffered_target_districts = target_districts.copy()
-        buffered_target_districts['geometry'] = buffered_target_districts.buffer(buffer)
-        if buffered_target_districts.crs != gdf.crs:
-            buffered_target_districts.to_crs(gdf.crs, inplace=True)
-        outer_boundary = unary_union(buffered_target_districts.geometry).boundary
-        relevant_area_to_plot = gpd.GeoSeries(outer_boundary, crs=gdf.crs)
-        
-    else:
-        gdf['og_capacity_reduction_rounded'] = gdf['og_capacity_reduction'].round(decimals=3)
-        tolerance = 1e-3
-        edges_with_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) > tolerance]
-        coords = [(x, y) for geom in edges_with_capacity_reduction.geometry for x, y in zip(geom.xy[0], geom.xy[1])]
-        alpha_shape = alphashape.alphashape(coords, alpha)
-        relevant_area_to_plot = gpd.GeoSeries([alpha_shape], crs=gdf.crs)
-    return relevant_area_to_plot
-    
-
-
 def plot_districts_of_capacity_reduction(gdf_input:gpd.GeoDataFrame, font:str ='DejaVu Serif', save_it: bool=False, number_to_plot : int=0):    
     gdf = gdf_input.copy()
     x_min = gdf.total_bounds[0] + 0.05
@@ -343,64 +216,227 @@ def plot_districts_of_capacity_reduction(gdf_input:gpd.GeoDataFrame, font:str ='
     if save_it:
         plt.savefig("results/gdf_capacity_reduction_" + str(number_to_plot), bbox_inches='tight')
     plt.show()
-    
-# def plot_simulation_output(gdf_input:gpd.GeoDataFrame, column_to_plot: str, font:str ='DejaVu Serif', save_it: bool=False, number_to_plot : int=0, is_predicted:bool= False):    
-#     gdf = gdf_input.copy()
-#     x_min = gdf.total_bounds[0] + 0.05
-#     y_min = gdf.total_bounds[1] + 0.05
-#     x_max = gdf.total_bounds[2]
-#     y_max = gdf.total_bounds[3]
-#     bbox = box(x_min, y_min, x_max, y_max)
-    
-#     # Filter the network to include only the data within the bounding box
-#     gdf = gdf[gdf.intersects(bbox)]
-    
-#     # Set up the plot
-#     fig, ax = plt.subplots(1, 1, figsize=(15, 15))
-#     gdf = gdf[gdf["og_highway"].isin([1, 2, 3])]
-    
-#     # Round og_capacity_reduction and filter
-#     gdf['og_capacity_reduction_rounded'] = gdf['og_capacity_reduction'].round(decimals=3)
-#     tolerance = 1e-3
-#     edges_with_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) > tolerance]
-#     edges_without_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) <= tolerance]
 
-#     norm = TwoSlopeNorm(vmin=-20, vcenter=0, vmax=20)
+def replace_invalid_values(tensor):
+    tensor[tensor != tensor] = 0  # replace NaNs with 0
+    tensor[tensor == float('inf')] = 0  # replace inf with 0
+    tensor[tensor == float('-inf')] = 0  # replace -inf with 0
+    return tensor
+
+def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font: str = 'Times New Roman', 
+                         save_it: bool = False, number_to_plot: int = 0,
+                         zone_to_plot:str= "this_zone",
+                         is_predicted: bool = False, alpha:int=100, 
+                         use_fixed_norm:bool=True, 
+                         fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
+    # call with known_districts if call with 0 or 1
+
+    gdf = gdf_input.copy()
+    gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
+    # gdf = gdf[gdf["og_highway"].isin([1])]
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+    norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
+    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm, "og_highway")
+    relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
     
-#     edges_without_capacity_reduction.plot(
-#         ax=ax, column=column_to_plot, cmap='coolwarm', linewidth=3, legend=False, norm=norm, zorder=1, label = "Edges without capacity reduction")
-#     edges_with_capacity_reduction.plot(
-#         ax=ax, column=column_to_plot, cmap='coolwarm', linewidth=5, legend=False, norm=norm, zorder=2, label = "Edges with capacity reduction")
+    cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
+    if save_it:
+        p = "predicted" if is_predicted else "actual"
+        identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
+        plt.savefig("results/" + identifier + "_" + p, bbox_inches='tight')
+    plt.show()
+
+def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
+    if use_fixed_norm:
+        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+    else:
+        norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
+    return norm
+    
+def filter_for_geographic_section(gdf):
+    x_min = gdf.total_bounds[0] + 0.05
+    y_min = gdf.total_bounds[1] + 0.05
+    x_max = gdf.total_bounds[2]
+    y_max = gdf.total_bounds[3]
+    bbox = box(x_min, y_min, x_max, y_max)
+
+    # Filter the network to include only the data within the bounding box
+    gdf = gdf[gdf.intersects(bbox)]
+    return gdf,x_min,y_min,x_max,y_max
+
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm):
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.xlabel("Longitude", fontname=font, fontsize=15)
+    plt.ylabel("Latitude", fontname=font, fontsize=15)
+
+    # Customize tick labels
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname(font)
+        label.set_fontsize(15)
+    
+    # Create custom legend
+    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network'),# Add more lines for other labels as needed
+                    Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
+
+    ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
+    ax.set_position([0.1, 0.1, 0.75, 0.75])
+    cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])  # Manually position the color bar
+    
+    # Create the color bar
+    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
+    sm._A = []
+    cbar = plt.colorbar(sm, cax=cax)
+
+    # Set color bar font properties
+    cbar.ax.tick_params(labelsize=15)
+    for t in cbar.ax.get_yticklabels():
+        t.set_fontname(font)
+    cbar.ax.yaxis.label.set_fontname(font)
+    cbar.ax.yaxis.label.set_size(15)
+    return cbar
+
+def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm, highway_column):
+    if known_districts:
+        # Apply the linewidth mapping
+        linewidths = gdf[highway_column].apply(get_linewidth)
+        gdf['linewidth'] = linewidths
+        # Separate the GeoDataFrame into two groups based on linewidth
+        large_lines = gdf[gdf['linewidth'] > 1]
+        small_lines = gdf[gdf['linewidth'] == 1]
         
-#     plt.xlim(x_min, x_max)
-#     plt.ylim(y_min, y_max)
-    
-#     # Customize the plot with Times New Roman font and size 15
-#     plt.xlabel("Longitude", fontname=font, fontsize=15)
-#     plt.ylabel("Latitude", fontname=font, fontsize=15)
+        target_districts = districts[districts['c_ar'].isin(districts_of_interest)]
+        gdf['intersects_target_districts'] = gdf.apply(lambda row: target_districts.intersects(row.geometry).any(), axis=1)
+        
+        # Plot small lines first
+        small_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=small_lines['linewidth'], ax=ax, legend=False,
+                        norm=norm, label="Street network", zorder=1)
+        
+        # Plot large lines after
+        large_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+                        norm=norm, label="Street network", zorder=2)
+        
+        buffered_target_districts = target_districts.copy()
+        buffered_target_districts['geometry'] = buffered_target_districts.buffer(buffer)
+        if buffered_target_districts.crs != gdf.crs:
+            buffered_target_districts.to_crs(gdf.crs, inplace=True)
+        outer_boundary = unary_union(buffered_target_districts.geometry).boundary
+        relevant_area_to_plot = gpd.GeoSeries(outer_boundary, crs=gdf.crs)
+        
+    else:
+        gdf['og_capacity_reduction_rounded'] = gdf['og_capacity_reduction'].round(decimals=3)
+        tolerance = 1e-3
+        edges_with_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) > tolerance]
+        coords = [(x, y) for geom in edges_with_capacity_reduction.geometry for x, y in zip(geom.xy[0], geom.xy[1])]
+        alpha_shape = alphashape.alphashape(coords, alpha)
+        relevant_area_to_plot = gpd.GeoSeries([alpha_shape], crs=gdf.crs)
+    return relevant_area_to_plot
 
-#     # Customize tick labels
-#     ax.tick_params(axis='both', which='major', labelsize=10)
-#     for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-#         label.set_fontname(font)
-#         label.set_fontsize(15)
-#     ax.legend(prop={'family': font, 'size': 15})
-#     ax.set_position([0.1, 0.1, 0.75, 0.75])
-#     cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])  # Manually position the color bar
+def get_linewidth(value):
+        if value in [0, 1]:
+            return 5
+        elif value == 2:
+            return 3
+        elif value == 3:
+            return 2
+        else:
+            return 1
+        
+def normalize_one_dataset_given_scaler(dataset_input, x_scalar_list = None, pos_scalar=None):
+    dataset = normalize_x_values_given_scaler(dataset_input, x_scalar_list)
+    dataset.pos = torch.tensor(pos_scalar.transform(dataset.pos.numpy()), dtype=torch.float)
+    return dataset
 
-#     # Create the color bar
-#     sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
-#     sm._A = []
-#     cbar = plt.colorbar(sm, cax=cax)
+def normalize_x_values_given_scaler(dataset, x_scaler_list):
+    for i in range(4):
+        scaler = x_scaler_list[i]
+        data_x_dim = replace_invalid_values(dataset.x[:, i].reshape(-1, 1))
+        normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+        dataset.x[:, i]=  normalized_x_dim.squeeze()
+    return dataset
+
+def compute_r2_torch_with_mean_targets(mean_targets, preds, targets):
+    ss_tot = torch.sum((targets - mean_targets) ** 2)
+    ss_res = torch.sum((targets - preds) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
+def validate_one_model(model, data, loss_func, device):
+    model.eval()
+    pred = []
+    actual = []
+    with torch.inference_mode():
+        input_node_features, targets = data.x.to(device), data.y.to(device)
+        predicted = model(data.to(device))
+        # print(predicted.shape)
+        pred.append(predicted)
+        actual.append(targets)
+        val_loss = loss_func(predicted, targets).item()
+    actual_vals = torch.cat(actual)
+    predicted_vals = torch.cat(pred)
     
-#     # Set color bar font properties
-#     cbar.ax.tick_params(labelsize=15)
-#     for t in cbar.ax.get_yticklabels():
-#         t.set_fontname(font)
-#     cbar.ax.yaxis.label.set_fontname(font)
-#     cbar.ax.yaxis.label.set_size(15)
-#     cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
+    mean_targets = torch.mean(targets)
+    r_squared = compute_r2_torch_with_mean_targets(mean_targets = mean_targets, preds=predicted_vals, targets=actual_vals)
+    baseline_loss = loss_func(targets, torch.full_like(predicted_vals, mean_targets))
+    return val_loss, r_squared, targets, predicted, baseline_loss
+
+def compute_r2_torch(preds, targets):
+    """Compute R^2 score using PyTorch."""
+    print(targets.shape)
+    mean_targets = torch.mean(targets)
+    ss_tot = torch.sum((targets - mean_targets) ** 2)
+    ss_res = torch.sum((targets - preds) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
+def data_to_geodataframe(data, original_gdf, predicted_values):
+    # Extract the edge index and node features
+    node_features = data.x.cpu().numpy()
+    target_values = data.y.cpu().numpy()
+    predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
+
+    # Create edge data
+    edge_data = {
+        'from_node': original_gdf["from_node"].values,
+        'to_node': original_gdf["to_node"].values,
+        'vol_base_case': node_features[:, 0],  # Assuming capacity is the first feature, and so on
+        'capacity_base_case': node_features[:, 1],  
+        'capacity_reduction': node_features[:, 2],  
+        'highway': node_features[:, 3],  
+        'vol_car_change_actual': target_values.squeeze(),  # Assuming target values are car volumes
+        'vol_car_change_predicted': predicted_values.squeeze()
+    }
+    # Convert to DataFrame
+    edge_df = pd.DataFrame(edge_data)
+    # Create LineString geometry
+    edge_df['geometry'] = original_gdf["geometry"].values
+    # Create GeoDataFrame
+    gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
+    return gdf
+
+
+# def plot_difference_output(gdf_input: gpd.GeoDataFrame, column1: str, column2: str, diff_column: str = 'difference', font: str = 'Times New Roman', save_it: bool = False, number_to_plot: int = 0,
+#                            zone_to_plot:str= "this_zone", alpha:int=100, 
+#                          use_fixed_norm:bool=True, 
+#                          fixed_norm_max: int= 10, normalized_y: bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
+#     gdf = gdf_input.copy()
+#     gdf[diff_column] = gdf[column1] - gdf[column2]
+#     column_to_plot = diff_column
+
+#     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
+
+#     fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+#     norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
+#     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm, "og_highway")
+#     relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+
+#     cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
+#     cbar.set_label('Difference between predicted and actual (%)', fontname=font, fontsize=15)
 #     if save_it:
-#         p = "predicted" if is_predicted else "actual"
-#         plt.savefig("results/gdf_" + str(number_to_plot) + "_" + p, bbox_inches='tight')
-#     plt.show()
+#         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
+#         plt.savefig("results/" + identifier  + "_difference", bbox_inches='tight')
+    # plt.show()
