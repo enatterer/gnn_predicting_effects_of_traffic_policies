@@ -145,7 +145,6 @@ def main():
                     device=device, 
                     early_stopping=early_stopping,
                     accumulation_steps=config.gradient_accumulation_steps,
-                    compute_r_squared=True,
                     model_save_path=model_save_path,
                     use_gradient_clipping=True,
                     lr_scheduler_warmup_steps=20000,

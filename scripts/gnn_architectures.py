@@ -1,55 +1,78 @@
+import numpy as np
+from tqdm import tqdm
+import wandb
+from sklearn.metrics import r2_score
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+import torch.optim as optim
+import torch.nn.init as init
+from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset, Subset
+
 import torch_geometric
 from torch_geometric.data import Data, Batch
-from sklearn.metrics import r2_score
-
-from torch_geometric.nn import PointNetConv
-from tqdm import tqdm
-import wandb
-import numpy as np
-import os
-from torch.cuda.amp import GradScaler, autocast
-import math
-import torch.nn.init as init
 from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
-import torch.optim as optim
 
 
-def initialize_weights(self):
-    for m in self.modules():
-        if isinstance(m, nn.Linear):
-            # You can choose a different initialization method
-            init.xavier_normal_(m.weight)
-            init.zeros_(m.bias)
-            
 class MyGnn(torch.nn.Module):
-    def __init__(self, in_channels: int, out_channels: int, point_net_conv_layer_structure_local_mlp: list, point_net_conv_layer_structure_global_mlp: list, gat_conv_layer_structure: list, dropout: float, use_dropout: bool):
-        super().__init__()
+    def __init__(self, 
+                in_channels: int, 
+                out_channels: int, 
+                point_net_conv_layer_structure_local_mlp: list, 
+                point_net_conv_layer_structure_global_mlp: list, 
+                gat_conv_layer_structure: list, 
+                dropout: float = 0.0, 
+                use_dropout: bool = False):
+        """
+        Initialize the GNN model with specified configurations.
+
+        Parameters:
+        - in_channels (int): Number of input channels.
+        - out_channels (int): Number of output channels.
+        - point_net_conv_layer_structure_local_mlp (list): Layer structure for local MLP in PointNetConv.
+        - point_net_conv_layer_structure_global_mlp (list): Layer structure for global MLP in PointNetConv.
+        - gat_conv_layer_structure (list): Layer structure for GATConv layers.
+        - dropout (float, optional): Dropout rate. Default is 0.0.
+        - use_dropout (bool, optional): Whether to use dropout. Default is False.
+        """
+        super(MyGnn, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv_layer_structure = gat_conv_layer_structure
-        self.graph_layers = []
         self.use_dropout = use_dropout
+
         if use_dropout:
             self.dropout_layer = nn.Dropout(dropout)
         
-        point_net_conv_local_mlp, point_net_conv_global_conv = self.create_point_net_layer(gat_conv_starts_with_layer= gat_conv_layer_structure[0])
-        self.point_net_layer = PointNetConv(local_nn = point_net_conv_local_mlp, global_nn = point_net_conv_global_conv)
+        point_net_conv_local_mlp, point_net_conv_global_conv = self.create_point_net_layer(
+            gat_conv_starts_with_layer=gat_conv_layer_structure[0]
+        )
+        self.point_net_layer = PointNetConv(
+            local_nn=point_net_conv_local_mlp, 
+            global_nn=point_net_conv_global_conv
+        )
 
         layers = self.define_layers()
         self.graph_layers = GeoSequential('x, edge_index', layers)
 
         self.initialize_weights()
         print("Model initialized")
-        print(self)
-        
+    
+    
     def forward(self, data):
+        """
+        Forward pass for the GNN model.
+
+        Parameters:
+        - data (Data): Input data containing node features and edge indices.
+
+        Returns:
+        - torch.Tensor: Output features after passing through the model.
+        """
         x = data.x
         edge_index = data.edge_index
         x = self.point_net_layer(x, data.pos, edge_index)
@@ -58,6 +81,17 @@ class MyGnn(torch.nn.Module):
         return x
     
     def create_point_net_layer(self, gat_conv_starts_with_layer:int):
+        """
+        Create PointNetConv layers with specified configurations.
+
+        Parameters:
+        - gat_conv_starts_with_layer (int): Starting layer size for GATConv.
+
+        Returns:
+        - Tuple[nn.Sequential, nn.Sequential]: Local and global MLP layers.
+        """
+        # Create local MLP layers
+        
         local_MLP_layers = []
         local_MLP_layers.append(nn.Linear(self.in_channels, self.pnc_local[0]))
         local_MLP_layers.append(nn.ReLU())
@@ -85,6 +119,12 @@ class MyGnn(torch.nn.Module):
         return local_MLP, global_MLP
     
     def define_layers(self):
+        """
+        Define layers for GATConv based on configuration.
+
+        Returns:
+        - List: Layers for GATConv.
+        """
         layers = []
         for idx in range(len(self.gat_conv_layer_structure) - 1):
             layers.append((torch_geometric.nn.GATConv(self.gat_conv_layer_structure[idx], self.gat_conv_layer_structure[idx + 1]), 'x, edge_index -> x'))
@@ -95,70 +135,90 @@ class MyGnn(torch.nn.Module):
         return layers
     
     def initialize_weights(self):
+        """
+        Initialize model weights using Xavier and Kaiming initialization.
+        """
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                print(f"Initializing {m}")
                 init.xavier_normal_(m.weight)
                 init.zeros_(m.bias)
             elif isinstance(m, PointNetConv):
-                print(f"Initializing {m}")
-                for name, param in m.local_nn.named_parameters():
-                    if param.dim() > 1:  # weight parameters
-                        print(f"Initializing {name} with kaiming_normal")
-                        init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
-                    else:  # bias parameters
-                        print(f"Initializing {name} with zeros")
-                        init.zeros_(param)
-                for name, param in m.global_nn.named_parameters():
-                    if param.dim() > 1:  # weight parameters
-                        print(f"Initializing {name} with kaiming_normal")
-                        init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
-                    else:  # bias parameters
-                        print(f"Initializing {name} with zeros")
-                        init.zeros_(param)
-            elif isinstance(m, torch_geometric.nn.GATConv):
-                print(f"Initializing {m}")
-                if hasattr(m, 'lin') and m.lin is not None:
-                    init.xavier_normal_(m.lin.weight)
-                    if m.lin.bias is not None:
-                        init.zeros_(m.lin.bias)
-                else:
-                    print(f"Warning: {m} does not have lin or it is None")
-                if hasattr(m, 'att_src') and m.att_src is not None:
-                    init.xavier_normal_(m.att_src)
-                else:
-                    print(f"Warning: {m} does not have att_src or it is None")
-                if hasattr(m, 'att_dst') and m.att_dst is not None:
-                    init.xavier_normal_(m.att_dst)
-                else:
-                    print(f"Warning: {m} does not have att_dst or it is None")
+                self._initialize_pointnetconv(m)
+            elif isinstance(m, torch_geometric.nnGATConv):
+                self._initialize_gatconv(m)
+
+    def _initialize_pointnetconv(self, m: PointNetConv):
+        """
+        Initialize weights for PointNetConv layers.
+
+        Parameters:
+        - m (PointNetConv): PointNetConv layer to initialize.
+        """
+        for name, param in m.local_nn.named_parameters():
+            if param.dim() > 1:  # weight parameters
+                init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+            else:  # bias parameters
+                init.zeros_(param)
+        for name, param in m.global_nn.named_parameters():
+            if param.dim() > 1:  # weight parameters
+                init.kaiming_normal_(param, mode='fan_out', nonlinearity='relu')
+            else:  # bias parameters
+                init.zeros_(param)
+
+    def _initialize_gatconv(self, m: torch_geometric.nn.GATConv):
+        """
+        Initialize weights for GATConv layers.
+
+        Parameters:
+        - m (GATConv): GATConv layer to initialize.
+        """
+        if hasattr(m, 'lin') and m.lin is not None:
+            init.xavier_normal_(m.lin.weight)
+            if m.lin.bias is not None:
+                init.zeros_(m.lin.bias)
+        if hasattr(m, 'att_src') and m.att_src is not None:
+            init.xavier_normal_(m.att_src)
+        if hasattr(m, 'att_dst') and m.att_dst is not None:
+            init.xavier_normal_(m.att_dst)
 
 
-def get_latest_checkpoint(checkpoint_dir):
-    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
-    if not checkpoint_files:
-        return None
-    checkpoint_files.sort(key=lambda f: int(f.split('_')[-1].split('.')[0]))
-    return os.path.join(checkpoint_dir, checkpoint_files[-1])
+def train(model: nn.Module, 
+          config: object = None, 
+          loss_fct: nn.Module = None, 
+          optimizer: optim.Optimizer = None, 
+          train_dl: DataLoader = None, 
+          valid_dl: DataLoader = None, 
+          device: torch.device = None, 
+          early_stopping: object = None, 
+          accumulation_steps: int = 3, 
+          model_save_path: str = None, 
+          use_gradient_clipping: bool = True,
+          lr_scheduler_warmup_steps: int = 20000, 
+          lr_scheduler_cosine_decay_rate: float = 0.2) -> tuple:
+    """
+    Train the GNN model.
 
-def load_checkpoint(checkpoint_path, model, optimizer):
-    checkpoint = torch.load(checkpoint_path)
-    model.load_state_dict(checkpoint['model_state_dict'])
-    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-    epoch = checkpoint['epoch']
-    val_loss = checkpoint['val_loss']
-    train_loss = checkpoint['train_loss']
-    print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
-    return model, optimizer, epoch, val_loss, train_loss
+    Parameters:
+    - model (nn.Module): The model to train.
+    - config (object, optional): Configuration object containing training parameters.
+    - loss_fct (nn.Module, optional): Loss function for training.
+    - optimizer (optim.Optimizer, optional): Optimizer for model training.
+    - train_dl (DataLoader, optional): DataLoader for training data.
+    - valid_dl (DataLoader, optional): DataLoader for validation data.
+    - device (torch.device, optional): Device to use for training.
+    - early_stopping (object, optional): Early stopping mechanism.
+    - accumulation_steps (int, optional): Number of steps for gradient accumulation. Default is 3.
+    - model_save_path (str, optional): Path to save the best model.
+    - use_gradient_clipping (bool, optional): Whether to use gradient clipping. Default is True.
+    - lr_scheduler_warmup_steps (int, optional): Number of warmup steps for learning rate scheduler. Default is 20000.
+    - lr_scheduler_cosine_decay_rate (float, optional): Cosine decay rate for learning rate scheduler. Default is 0.2.
 
-def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None, 
-          valid_dl=None, device=None, early_stopping=None, accumulation_steps:int=3, 
-          compute_r_squared: bool = True, model_save_path:str=None, use_gradient_clipping:bool = True,
-          lr_scheduler_warmup_steps:int = 20000, lr_scheduler_cosine_decay_rate: float=0.2
-          ): 
+    Returns:
+    - tuple: Validation loss and the best epoch.
+    """
     scaler = GradScaler()
     total_steps = config.epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=30000, total_steps=total_steps)
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=lr_scheduler_cosine_decay_rate)
     best_val_loss = float('inf')
     
     # Create a directory for checkpoints if it doesn't exist
@@ -200,16 +260,9 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
-        # print("Now about to compute r squared! ")
-        # if compute_r_squared == True:
-        # print("We compute r squared")
-        val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device, compute_r_squared=True)
+        val_loss, r_squared = validate_model_during_training(model, valid_dl, loss_fct, device)
         wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
-        # else:
-        #     val_loss = validate_model_during_training(model=model, dataset=valid_dl, loss_func=loss_fct, device=device, compute_r_squared=False)
-        #     wandb.log({"test_loss": val_loss, "epoch": epoch, "lr": lr})
-        #     print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}")
         
         if val_loss < best_val_loss:
             best_val_loss = val_loss   
@@ -224,8 +277,6 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
                 'epoch': epoch,
                 'model_state_dict': model.state_dict(),
                 'optimizer_state_dict': optimizer.state_dict(),
-                # 'scheduler_lr': scheduler.get_lr(),
-                # 'scaler_state_dict': scaler.get(),
                 'best_val_loss': best_val_loss,
                 'val_loss': val_loss,
                 # 'r_squared': r_squared
@@ -242,54 +293,114 @@ def train(model, config=None, loss_fct=None, optimizer=None, train_dl=None,
     wandb.finish()
     return val_loss, epoch
 
-def validate_model_during_training(model, dataset, loss_func, device, compute_r_squared):
+def validate_model_during_training(model: nn.Module, 
+                                   dataset: DataLoader, 
+                                   loss_func: nn.Module, 
+                                   device: torch.device) -> tuple:
+    """
+    Validate the model during training and compute validation loss and R^2 score.
+
+    Parameters:
+    - model (nn.Module): The model to validate.
+    - dataset (DataLoader): DataLoader for validation data.
+    - loss_func (nn.Module): Loss function to compute validation loss.
+    - device (torch.device): Device to use for validation.
+
+    Returns:
+    - tuple: Total validation loss and R^2 score.
+    """
     model.eval()
     val_loss = 0
     num_batches = 0
-    
     actual_vals = []
     predictions = []
-    
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             input_node_features, targets = data.x.to(device), data.y.to(device)
             predicted = model(data.to(device))
-            
-            if compute_r_squared:
-                actual_vals.append(targets)
-                predictions.append(predicted)
+
+            actual_vals.append(targets)
+            predictions.append(predicted)
             val_loss += loss_func(predicted, targets).item()
             num_batches += 1
     
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
-    if compute_r_squared:
-        actual_vals=torch.cat(actual_vals)
-        predictions = torch.cat(predictions)
-        r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
-        return total_validation_loss, r_squared
-    else: 
-        return total_validation_loss
+    actual_vals=torch.cat(actual_vals)
+    predictions = torch.cat(predictions)
+    r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
+    return total_validation_loss, r_squared
 
-        # t = torch.cuda.get_device_properties(0).total_memory
-        # r = torch.cuda.memory_reserved(0)
-        # a = torch.cuda.memory_allocated(0)
-        # f = r-a  # free inside reserved
-        # print('Memory allocation after training, before validation: ')
-        # print(t/1073741824)
-        # print(r/1073741824)
-        # print(a/1073741824)
-        # print(f/1073741824)
+def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+    """
+    Compute R^2 score using PyTorch.
 
+    Parameters:
+    - preds (torch.Tensor): Predicted values.
+    - targets (torch.Tensor): Actual target values.
 
-def compute_r2_torch(preds, targets):
-    """Compute R^2 score using PyTorch."""
+    Returns:
+    - torch.Tensor: Computed R^2 score.
+    """
     mean_targets = torch.mean(targets)
     ss_tot = torch.sum((targets - mean_targets) ** 2)
     ss_res = torch.sum((targets - preds) ** 2)
     r2 = 1 - ss_res / ss_tot
     return r2
 
-def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_path):
+def get_latest_checkpoint(checkpoint_dir: str) -> str:
+    """
+    Retrieve the latest checkpoint file from the specified directory.
+
+    Parameters:
+    - checkpoint_dir (str): Directory where checkpoint files are stored.
+
+    Returns:
+    - str: Path to the latest checkpoint file if it exists, otherwise None.
+    """
+    checkpoint_files = [f for f in os.listdir(checkpoint_dir) if f.startswith('checkpoint_epoch_') and f.endswith('.pth')]
+    if not checkpoint_files:
+        return None
+    checkpoint_files.sort(key=lambda f: int(f.split('_')[-1].split('.')[0]))
+    return os.path.join(checkpoint_dir, checkpoint_files[-1])
+
+def load_checkpoint(checkpoint_path: str, model: nn.Module, optimizer: optim.Optimizer = None) -> tuple:
+    """
+    Load a checkpoint and restore the model and optimizer states.
+
+    Parameters:
+    - checkpoint_path (str): Path to the checkpoint file.
+    - model (nn.Module): The model to load the state dict into.
+    - optimizer (optim.Optimizer, optional): The optimizer to load the state dict into.
+
+    Returns:
+    - tuple: Restored model, optimizer, epoch, validation loss, and training loss.
+    """
+    checkpoint = torch.load(checkpoint_path)
+    model.load_state_dict(checkpoint['model_state_dict'])
+    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+    epoch = checkpoint['epoch']
+    val_loss = checkpoint['val_loss']
+    train_loss = checkpoint['train_loss']
+    print(f'Loaded checkpoint from epoch {epoch} with val_loss {val_loss} and train_loss {train_loss}')
+    return model, optimizer, epoch, val_loss, train_loss
+
+def save_checkpoint(model: nn.Module, 
+                    optimizer: optim.Optimizer, 
+                    epoch: int, 
+                    val_loss: float, 
+                    train_loss: float, 
+                    checkpoint_path: str) -> None:
+    """
+    Save a checkpoint of the model and optimizer states.
+
+    Parameters:
+    - model (nn.Module): The model to save.
+    - optimizer (optim.Optimizer): The optimizer to save.
+    - epoch (int): The current epoch.
+    - val_loss (float): Validation loss at the current epoch.
+    - train_loss (float): Training loss at the current epoch.
+    - checkpoint_path (str): Path to save the checkpoint.
+    """
     checkpoint = {
         'epoch': epoch,
         'model_state_dict': model.state_dict(),
@@ -300,8 +411,16 @@ def save_checkpoint(model, optimizer, epoch, val_loss, train_loss, checkpoint_pa
     torch.save(checkpoint, checkpoint_path)
     print(f'Model checkpoint saved at epoch {epoch}')
 
-def load_model(model_path):
-    # Load the saved model checkpoint
+def load_model(model_path: str) -> tuple:
+    """
+    Load a saved model checkpoint and initialize the model with the configuration.
+
+    Parameters:
+    - model_path (str): Path to the model checkpoint file.
+
+    Returns:
+    - tuple: Loaded model and configuration.
+    """
     checkpoint = torch.load(model_path)
     
     # Extract the state dictionary and configuration
@@ -322,59 +441,39 @@ def load_model(model_path):
     return model, config
 
 class LinearWarmupCosineDecayScheduler:
-    def __init__(self, initial_lr, warmup_steps, total_steps, cosine_decay_rate=0.5):
+    def __init__(self, 
+                 initial_lr: float, 
+                 warmup_steps: int, 
+                 total_steps: int, 
+                 cosine_decay_rate: float = 0.5):
+        """
+        Linear warmup and cosine decay scheduler.
+
+        Parameters:
+        - initial_lr (float): Initial learning rate.
+        - warmup_steps (int): Number of warmup steps.
+        - total_steps (int): Total number of steps.
+        - cosine_decay_rate (float, optional): Cosine decay rate. Default is 0.5.
+        """
         self.initial_lr = initial_lr
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
         self.cosine_decay_rate = cosine_decay_rate
-        # self.decay_rate = decay_rate
         self.decay_steps = total_steps - warmup_steps
 
-    def get_lr(self, step):
+    def get_lr(self, step: int) -> float:
+        """
+        Get the learning rate at a specific step.
+
+        Parameters:
+        - step (int): The current step.
+
+        Returns:
+        - float: Calculated learning rate.
+        """
         if step < self.warmup_steps:
             return self.initial_lr * (step / self.warmup_steps)
         else:
-            progress = (step - self.warmup_steps) / (self.decay_steps)
+            progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
-            # accelerated_decay = cosine_decay * math.exp(-self.decay_rate * progress)
             return self.initial_lr * cosine_decay 
-        
-        
-class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
-    def __init__(self, optimizer, warmup, max_iters):
-        self.warmup = warmup
-        self.max_num_iters = max_iters
-        super().__init__(optimizer)
- 
-    def get_lr(self):
-        lr_factor = self.get_lr_factor(epoch=self.last_epoch)
-        return [base_lr * lr_factor for base_lr in self.base_lrs]
- 
-    def get_lr_factor(self, epoch):
-        lr_factor = 0.5 * (1 + np.cos(np.pi * epoch / self.max_num_iters))
-        if epoch <= self.warmup:
-            lr_factor *= epoch * 1.0 / self.warmup
-        return lr_factor
-        
-# def initialize_weights(self):
-#     for m in self.modules():
-#         if isinstance(m, nn.Linear):
-#             # You can choose a different initialization method
-#             init.xavier_normal_(m.weight)
-#             init.zeros_(m.bias)
-            
-            
-            
-             # Architecture of PointNetConv
-        # local_MLP_1 = nn.Sequential(
-        #     nn.Linear(in_channels, hidden_layers_base_for_point_net_conv),
-        #     nn.ReLU(),
-        #     nn.Linear(hidden_layers_base_for_point_net_conv, hidden_layers_base_for_point_net_conv),
-        # )
-        # global_MLP_1 = nn.Sequential(
-        #     nn.Linear(hidden_layers_base_for_point_net_conv, int(hidden_layers_base_for_point_net_conv/2)),
-        #     nn.ReLU(),
-        #     nn.Linear(int(hidden_layers_base_for_point_net_conv/2), int(hidden_layers_base_for_point_net_conv*2)),
-        #     nn.ReLU(),
-        #     nn.Linear(int(hidden_layers_base_for_point_net_conv*2), hidden_layers_base_for_point_net_conv)
-        # )
