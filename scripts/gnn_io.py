@@ -221,7 +221,7 @@ def normalize_x_values_create_scalers(dataset, directory_path):
             else:
                 data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
 
-    joblib.dump(list_of_scalers_to_save, os.path.join(directory_path, 'x_scaler.pkl'))
+    joblib.dump(list_of_scalers_to_save, (directory_path + 'x_scaler.pkl'))
 
     for data in dataset:
         data.x = data.normalized_x
