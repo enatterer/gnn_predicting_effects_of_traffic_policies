@@ -59,8 +59,10 @@ class MyGnn(torch.nn.Module):
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
         self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
     
-        layers = self.define_layers()
-        self.gat_graph_layers = GeoSequential('x, edge_index', layers)
+        layers_global = self.define_layers()
+        layers_local = self.define_layers()
+        self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
+        self.gat_graph_layers_local = GeoSequential('x, edge_index', layers_local)
         
         graph_mlp_layers = []
         graph_mlp_layers.append(nn.Linear(2, self.graph_mlp_structure[0]))
@@ -88,7 +90,6 @@ class MyGnn(torch.nn.Module):
         
         x = data.x
         edge_index = data.edge_index
-        mode_stats = data.mode_stats
         
         pos1 = data.pos[:, 0, :]  # First set of positions
         pos2 = data.pos[:, 1, :]  # Second set of positions
@@ -99,8 +100,12 @@ class MyGnn(torch.nn.Module):
         x = self.point_net_conv_3(x, pos3, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
+        # here you can add a global pooling layer
+        # graph_feature = pooling(x, data.batch)
+        # graph_output = self.graph_mlp(graph_feature)
+        # x = self.gat_graph_layers_local(x, edge_index)
         
-        graph_output = self.graph_mlp(mode_stats)
+        # graph_output = self.graph_mlp(mode_stats)
         
         return x, graph_output
     
@@ -284,7 +289,7 @@ def train(model: nn.Module,
                 param_group['lr'] = lr
                 
             data = data.to(device)
-            targets, graph_attributes = data.y, data.mode_stats
+            targets, target_graph_attributes = data.y, data.mode_stats
            
             with autocast():
                 # Forward pass
@@ -293,7 +298,7 @@ def train(model: nn.Module,
                 # Compute losses
                 node_edge_loss = loss_fct(predicted, targets)
                 # print(f"node_edge_loss: {node_edge_loss}")
-                graph_loss = loss_fct(output_graph_attributes, graph_attributes)
+                graph_loss = loss_fct(output_graph_attributes, target_graph_attributes)
                 # print(f"graph_loss: {graph_loss}")
                 
                 # Normalize losses to have equal weight
