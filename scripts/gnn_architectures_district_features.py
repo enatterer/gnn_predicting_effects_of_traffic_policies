@@ -75,6 +75,7 @@ class MyGnn(torch.nn.Module):
         self.graph_mlp = nn.Sequential(*graph_mlp_layers)
         self.initialize_weights()
         print("Model initialized")
+        print(self)
     
     
     def forward(self, data):
@@ -128,8 +129,7 @@ class MyGnn(torch.nn.Module):
                 layers.append(self.dropout_layer)        
         return layers
     
-    # TODO Elena: introduce smooth transition from one layer to the next. 
-    def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool = False, is_last_layer:bool = False):
+    def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool=False, is_last_layer:bool=False):
         """
         Create PointNetConv layers with specified configurations.
 
@@ -140,13 +140,13 @@ class MyGnn(torch.nn.Module):
         - Tuple[nn.Sequential, nn.Sequential]: Local and global MLP layers.
         """
         # Create local MLP layers
-        
+        offset_due_to_first_layer = 1
+        offset_due_to_next_layers = 2
         local_MLP_layers = []
-        offset_for_first_layer = 2
-        if is_first_layer:  
-            local_MLP_layers.append(nn.Linear(self.in_channels + offset_for_first_layer, self.pnc_local[0]))
+        if is_first_layer:
+            local_MLP_layers.append(nn.Linear(self.in_channels + offset_due_to_first_layer, self.pnc_local[0]))
         else:
-            local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_for_first_layer, self.pnc_local[0]))
+            local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_due_to_next_layers, self.pnc_local[0]))
         local_MLP_layers.append(nn.ReLU())
         if self.use_dropout:
             local_MLP_layers.append(self.dropout_layer)
@@ -162,11 +162,13 @@ class MyGnn(torch.nn.Module):
         for idx in range(len(self.pnc_global) - 1):
             global_MLP_layers.append(nn.Linear(self.pnc_global[idx], self.pnc_global[idx + 1]))
             global_MLP_layers.append(nn.ReLU())
-            if self.use_dropout:
-                global_MLP_layers.append(self.dropout_layer)
+                
         if is_last_layer:
-            global_MLP_layers.append(nn.Linear(self.pnc_global[ - 1], gat_conv_starts_with_layer))
-            global_MLP_layers.append(nn.ReLU())
+            global_MLP_layers.append(nn.Linear(self.pnc_global[- 1], gat_conv_starts_with_layer))
+        else:
+            global_MLP_layers.append(nn.Linear(self.pnc_global[-1], self.pnc_global[-1]))
+        
+        global_MLP_layers.append(nn.ReLU())
         if self.use_dropout:
             global_MLP_layers.append(self.dropout_layer)
         global_MLP = nn.Sequential(*global_MLP_layers)
@@ -536,3 +538,54 @@ class LinearWarmupCosineDecayScheduler:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             return self.initial_lr * cosine_decay 
+        
+        
+        
+    # TODO Elena: introduce smooth transition from one layer to the next. 
+    # def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool = False, is_last_layer:bool = False):
+    #     """
+    #     Create PointNetConv layers with specified configurations.
+
+    #     Parameters:
+    #     - gat_conv_starts_with_layer (int): Starting layer size for GATConv.
+
+    #     Returns:
+    #     - Tuple[nn.Sequential, nn.Sequential]: Local and global MLP layers.
+    #     """
+    #     # Create local MLP layers
+        
+    #     local_MLP_layers = []
+    #     offset_for_first_layer = 2
+    #     print("in_channels: ", self.in_channels)
+    #     print("pnc_local: ", self.pnc_local)
+    #     print("pnc_global: ", self.pnc_global)
+        
+    #     if is_first_layer:  
+    #         local_MLP_layers.append(nn.Linear(self.in_channels + offset_for_first_layer, self.pnc_local[0]))
+    #     else:
+    #         local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_for_first_layer, self.pnc_local[0]))
+    #     local_MLP_layers.append(nn.ReLU())
+    #     if self.use_dropout:
+    #         local_MLP_layers.append(self.dropout_layer)
+    #     for idx in range(len(self.pnc_local)-1):
+    #         local_MLP_layers.append(nn.Linear(self.pnc_local[idx], self.pnc_local[idx + 1]))
+    #         local_MLP_layers.append(nn.ReLU())
+    #         if self.use_dropout:
+    #             local_MLP_layers.append(self.dropout_layer)
+    #     local_MLP = nn.Sequential(*local_MLP_layers)
+        
+    #     global_MLP_layers = []
+    #     global_MLP_layers.append(nn.Linear(self.pnc_local[-1], self.pnc_global[0]))
+    #     for idx in range(len(self.pnc_global) - 1):
+    #         global_MLP_layers.append(nn.Linear(self.pnc_global[idx], self.pnc_global[idx + 1]))
+    #         global_MLP_layers.append(nn.ReLU())
+    #         if self.use_dropout:
+    #             global_MLP_layers.append(self.dropout_layer)
+                
+    #     if is_last_layer:
+    #         global_MLP_layers.append(nn.Linear(self.pnc_global[ - 1], gat_conv_starts_with_layer))
+    #         global_MLP_layers.append(nn.ReLU())
+    #     if self.use_dropout:
+    #         global_MLP_layers.append(self.dropout_layer)
+    #     global_MLP = nn.Sequential(*global_MLP_layers)
+    #     return local_MLP, global_MLP
