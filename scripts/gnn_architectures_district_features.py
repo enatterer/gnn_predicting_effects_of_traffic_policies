@@ -107,7 +107,7 @@ class MyGnn(torch.nn.Module):
         
         # graph_output = self.graph_mlp(mode_stats)
         
-        return x, graph_output
+        return x
     
     def process_global_graph_attributes(self):
         """
@@ -289,22 +289,12 @@ def train(model: nn.Module,
                 param_group['lr'] = lr
                 
             data = data.to(device)
-            targets, target_graph_attributes = data.y, data.mode_stats
+            targets = data.y
            
             with autocast():
                 # Forward pass
-                predicted, output_graph_attributes = model(data)
-                
-                # Compute losses
-                node_edge_loss = loss_fct(predicted, targets)
-                # print(f"node_edge_loss: {node_edge_loss}")
-                graph_loss = loss_fct(output_graph_attributes, target_graph_attributes)
-                # print(f"graph_loss: {graph_loss}")
-                
-                # Normalize losses to have equal weight
-                node_edge_loss_weight = node_edge_loss / (node_edge_loss + graph_loss)
-                graph_loss_weight = graph_loss / (node_edge_loss + graph_loss)
-                train_loss = graph_loss_weight * node_edge_loss + node_edge_loss_weight * graph_loss
+                predicted = model(data)
+                train_loss = loss_fct(predicted, targets)
                 
             # Backward pass
             scaler.scale(train_loss).backward() 
@@ -384,16 +374,13 @@ def validate_model_during_training(model: nn.Module,
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
-            input_node_features, targets, graph_attributes = data.x, data.y, data.mode_stats
-            predicted, output_graph_attributes = model(data)
+            input_node_features, targets = data.x, data.y
+            predicted = model(data)
 
             actual_vals.append(targets)
             predictions.append(predicted)
             
-            node_edge_loss = loss_func(predicted, targets).item()
-            graph_loss = loss_func(output_graph_attributes, graph_attributes).item()
-
-            val_loss += node_edge_loss + graph_loss
+            val_loss += loss_func(predicted, targets).item()
             num_batches += 1
             
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
