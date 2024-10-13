@@ -10,6 +10,7 @@ import torch.optim as optim
 import torch.nn.init as init
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader, Dataset, Subset
+import torch_geometric.nn as geo_nn
 
 import torch_geometric
 from torch_geometric.data import Data, Batch
@@ -59,6 +60,13 @@ class MyGnn(torch.nn.Module):
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
         self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
     
+        self.graph_predictor = nn.Sequential(
+            nn.Linear(gat_conv_layer_structure[-1] + 12, graph_mlp_layer_structure[0]),
+            nn.ReLU(),
+            nn.Linear(graph_mlp_layer_structure[0], out_channels)
+        )
+    
+    
         layers_global = self.define_layers()
         layers_local = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
@@ -77,7 +85,6 @@ class MyGnn(torch.nn.Module):
         print("Model initialized")
         print(self)
     
-    
     def forward(self, data):
         """
         Forward pass for the GNN model.
@@ -91,6 +98,7 @@ class MyGnn(torch.nn.Module):
         
         x = data.x
         edge_index = data.edge_index
+        mode_stats = data.mode_stats
         
         pos1 = data.pos[:, 0, :]  # First set of positions
         pos2 = data.pos[:, 1, :]  # Second set of positions
@@ -101,6 +109,19 @@ class MyGnn(torch.nn.Module):
         x = self.point_net_conv_3(x, pos3, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
+        
+        
+        # Graph-level prediction logic
+        # graph_x = geo_nn.global_mean_pool(x, data.batch)  # Aggregate node features
+        
+        # Combine aggregated node features with mode_stats
+        # combined_graph_features = torch.cat([graph_x, mode_stats], dim=1)
+        
+        # Make graph-level prediction
+        # graph_pred = self.graph_predictor(combined_graph_features)
+        
+        # return x, graph_pred
+        
         # here you can add a global pooling layer
         # graph_feature = pooling(x, data.batch)
         # graph_output = self.graph_mlp(graph_feature)
