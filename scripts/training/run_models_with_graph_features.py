@@ -38,14 +38,16 @@ def get_parameters(args):
         graph_mlp_layer_structure = [int(x) for x in args.graph_mlp_layer_structure.split(',')]
         lr = float(args.lr)
         batch_size = int(args.batch_size)
-        point_net_conv_layer_structure_local_mlp = [int(x) for x in args.pnc_local.split(',')]
-        point_net_conv_layer_structure_global_mlp = [int(x) for x in args.pnc_global.split(',')]
+        point_net_conv_layer_structure_local_mlp = [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')]
+        point_net_conv_layer_structure_global_mlp = [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')]
         gat_conv_layer_structure = [int(x) for x in args.gat_conv_layer_structure.split(',')]
+        graph_mlp_layer_structure = [int(x) for x in args.graph_mlp_layer_structure.split(',')]
         gradient_accumulation_steps = args.gradient_accumulation_steps
         early_stopping_patience = args.early_stopping_patience
         dropout =args.dropout 
         use_dropout = args.use_dropout
         use_graph_features = args.use_graph_features
+        device_nr = args.device_nr
         
         unique_model_description = (
             f"pnc_local_{gio.int_list_to_string(lst = point_net_conv_layer_structure_local_mlp, delimiter='_')}_"
@@ -71,7 +73,8 @@ def get_parameters(args):
             "early_stopping_patience": early_stopping_patience,
             "unique_model_description": unique_model_description,
             "dropout": dropout,
-            "use_dropout": use_dropout
+            "use_dropout": use_dropout,
+            "device_nr": device_nr
         } 
         
 def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth'):
@@ -257,7 +260,7 @@ def main():
     parser.add_argument("--out_channels", type=int, default=1, help="The early stopping patience.")
     parser.add_argument("--early_stopping_patience", type=int, default=100, help="The early stopping patience.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
-    parser.add_argument("--device_nr", type=int, default=1, help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
+    parser.add_argument("--device_nr", type=int, default=0, help="The device that this model should run for. The Retina Roaster has two GPUs, so the values 0 and 1 are allowed here.")
     parser.add_argument("--use_dropout", type=hf.str_to_bool, default=False, help="Whether to use or not use dropout.")
     parser.add_argument("--use_graph_features", type=hf.str_to_bool, default=False, help="Whether to use or not use graph features.")
 
