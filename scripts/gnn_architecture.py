@@ -321,6 +321,9 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
+    print("total_steps: ", total_steps)
+    print("config.lr_scheduler_warmup_steps: ", config.lr_scheduler_warmup_steps)
+    print("config.lr_scheduler_cosine_decay_rate: ", config.lr_scheduler_cosine_decay_rate)
     scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=config.lr_scheduler_cosine_decay_rate)
     best_val_loss = float('inf')
     
@@ -334,6 +337,7 @@ def train(model: nn.Module,
         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
             step = epoch * len(train_dl) + idx
             lr = scheduler.get_lr(step)
+            print("lr: ", lr)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
                 
@@ -580,10 +584,15 @@ class LinearWarmupCosineDecayScheduler:
         - float: Calculated learning rate.
         """
         if step < self.warmup_steps:
+            print("step: ", step)
+            print("self.warmup_steps: ", self.warmup_steps)
+            print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * (step / self.warmup_steps)
         else:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
+            print("cosine_decay: ", cosine_decay)
+            print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * cosine_decay 
         
         
