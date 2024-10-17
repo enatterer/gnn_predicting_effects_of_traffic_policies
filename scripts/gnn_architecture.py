@@ -29,6 +29,7 @@ class MyGnn(torch.nn.Module):
                 graph_mlp_layer_structure: list = [],
                 dropout: float = 0.0, 
                 use_dropout: bool = False):
+        
         """
         Initialize the GNN model with specified configurations.
 

@@ -25,9 +25,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
     
 import gnn_io as gio
-import gnn_architectures_improved as garch
-
-
+import scripts._archive.gnn_architectures as garch
 
 # Define parameters
 def get_parameters(args):

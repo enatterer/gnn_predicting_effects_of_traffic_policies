@@ -18,6 +18,8 @@ from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
 import os
 import math
 
+# THIS IS SUPPOSED TO BE DELETED, AND ONLY GNN_ARCHITECTURES_WITH_GRAPH_FEATURES.PY SHOULD BE USED
+
 class MyGnn(torch.nn.Module):
     def __init__(self, 
                 in_channels: int, 
@@ -65,7 +67,6 @@ class MyGnn(torch.nn.Module):
             nn.ReLU(),
             nn.Linear(graph_mlp_layer_structure[0], out_channels)
         )
-    
     
         layers_global = self.define_layers()
         layers_local = self.define_layers()

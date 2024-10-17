@@ -23,7 +23,9 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
     
 import gnn_io as gio
-import gnn_architectures as garch
+import scripts._archive.gnn_architecture_basic as garch
+
+# THIS IS SUPPOSED TO BE DELETED, AND RUN_MODELS_WITH_GRAPH_FEATURES.PY SHOULD BE USED
 
 # Define parameters
 def get_parameters(args):

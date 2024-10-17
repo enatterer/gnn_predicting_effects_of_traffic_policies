@@ -22,7 +22,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
     
 import gnn_io as gio
-import gnn_architectures as garch
+import scripts._archive.gnn_architecture_basic as garch
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
