@@ -29,7 +29,7 @@ import gnn_architecture as garch
 
 dataset_path = '../../data/train_data/sim_output_1pm_capacity_reduction_10k_15_10_2024/'
 
-PARAMETER_ORDER = [
+PARAMETERS = [
     "project_name",
     "predict_mode_stats",
     "in_channels",
@@ -44,13 +44,17 @@ PARAMETER_ORDER = [
     "use_dropout",
     "dropout",
     "gradient_accumulation_steps",
+    "use_gradient_clipping",
+    "lr_scheduler_warmup_steps",
+    "lr_scheduler_cosine_decay_rate",
     "device_nr",
     "unique_model_description"
 ]
 
 def get_parameters(args):
     params = {
-        "project_name": "runs_17_10_2024",
+        # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
+        "project_name": "runs_this_is_a_test",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "out_channels": args.out_channels,
@@ -64,18 +68,19 @@ def get_parameters(args):
         "use_dropout": args.use_dropout,
         "dropout": args.dropout,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
+        "use_gradient_clipping": args.use_gradient_clipping,
+        "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
+        "lr_scheduler_cosine_decay_rate": args.lr_scheduler_cosine_decay_rate,
         "device_nr": args.device_nr
     }
-    
     params["unique_model_description"] = (
         f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
         f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-        f"hidden_layer_str_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-        f"dropout_{params['dropout']}_"
+        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
         f"use_dropout_{params['use_dropout']}_"
+        f"dropout_{params['dropout']}_"
         f"predict_mode_stats_{params['predict_mode_stats']}"
     )
-    
     return params
 
 def main():
@@ -106,7 +111,7 @@ def main():
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="64,128", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="256,64", help="Structure of PointNet Conv global MLP (comma-separated).")
-    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,256,128", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
+    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,128", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -114,6 +119,9 @@ def main():
     parser.add_argument("--use_dropout", type=hf.str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
+    parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
+    parser.add_argument("--lr_scheduler_warmup_steps", type=int, default=30000, help="The number of steps for the warmup phase of the learning rate scheduler.")
+    parser.add_argument("--lr_scheduler_cosine_decay_rate", type=float, default=0.01, help="The rate of the cosine decay of the learning rate scheduler.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
     args = parser.parse_args()
@@ -134,25 +142,24 @@ def main():
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
         train_dl, valid_dl, scalers_train, scalers_validation = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader)
         
-        config = hf.setup_wandb(params['project_name'], {param: params[param] for param in PARAMETER_ORDER})
+        config = hf.setup_wandb(params['project_name'], {param: params[param] for param in PARAMETERS})
 
         gnn_instance = garch.MyGnn(in_channels=config.in_channels, 
                         out_channels=config.out_channels, 
                         point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
                         point_net_conv_layer_structure_global_mlp=config.point_net_conv_layer_structure_global_mlp,
                         gat_conv_layer_structure=config.gat_conv_layer_structure,
-                        dropout=config.dropout, 
                         use_dropout=config.use_dropout, 
+                        dropout=config.dropout, 
                         predict_mode_stats=config.predict_mode_stats)
         
-        print(gnn_instance)
         model = gnn_instance.to(device)
         loss_fct = torch.nn.MSELoss()
         
         baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct)
         baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct)
         print("baseline loss mean " + str(baseline_loss_mean_target))
-        print("baseline loss no  " +str(baseline_loss) )
+        print("baseline loss no  " + str(baseline_loss) )
 
         early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
         best_val_loss, best_epoch = garch.train(model=model, 
@@ -163,10 +170,7 @@ def main():
                     valid_dl=valid_dl,
                     device=device, 
                     early_stopping=early_stopping,
-                    model_save_path=model_save_path,
-                    use_gradient_clipping=True,
-                    lr_scheduler_warmup_steps=30000,
-                    lr_scheduler_cosine_decay_rate=0.01)
+                    model_save_path=model_save_path)
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:

@@ -67,8 +67,8 @@ class MyGnn(torch.nn.Module):
         #     nn.Linear(graph_mlp_layer_structure[0], out_channels)
         # )
     
-        layers_global = self.define_layers()
         layers_local = self.define_layers()
+        layers_global = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
         self.gat_graph_layers_local = GeoSequential('x, edge_index', layers_local)
         
@@ -271,10 +271,7 @@ def train(model: nn.Module,
           valid_dl: DataLoader = None, 
           device: torch.device = None, 
           early_stopping: object = None, 
-          model_save_path: str = None, 
-          use_gradient_clipping: bool = True,
-          lr_scheduler_warmup_steps: int = 20000, 
-          lr_scheduler_cosine_decay_rate: float = 0.2) -> tuple:
+          model_save_path: str = None) -> tuple:
     """
     Train the GNN model.
 
@@ -289,16 +286,13 @@ def train(model: nn.Module,
     - early_stopping (object, optional): Early stopping mechanism.
     - accumulation_steps (int, optional): Number of steps for gradient accumulation. Default is 3.
     - model_save_path (str, optional): Path to save the best model.
-    - use_gradient_clipping (bool, optional): Whether to use gradient clipping. Default is True.
-    - lr_scheduler_warmup_steps (int, optional): Number of warmup steps for learning rate scheduler. Default is 20000.
-    - lr_scheduler_cosine_decay_rate (float, optional): Cosine decay rate for learning rate scheduler. Default is 0.2.
 
     Returns:
     - tuple: Validation loss and the best epoch.
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=lr_scheduler_cosine_decay_rate)
+    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=config.lr_scheduler_cosine_decay_rate)
     best_val_loss = float('inf')
     
     # Create a directory for checkpoints if it doesn't exist
@@ -326,7 +320,7 @@ def train(model: nn.Module,
             scaler.scale(train_loss).backward() 
             
             # Gradient clipping
-            if use_gradient_clipping:
+            if config.use_gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
             if (idx + 1) % config.gradient_accumulation_steps == 0:
