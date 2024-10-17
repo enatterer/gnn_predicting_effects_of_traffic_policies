@@ -18,6 +18,32 @@ from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
 import os
 import math
 
+"""
+PointNet Convolution Layers:
+The model creates three PointNetConv layers (point_net_conv_1, point_net_conv_2, and point_net_conv_3). Each PointNetConv layer consists of a local_nn and a global_nn.
+Local MLP (specified by point_net_conv_layer_structure_local_mlp = [64, 128]):
+For point_net_conv_1: Input features are 16 (15 input channels + 1)
+For point_net_conv_2 and point_net_conv_3: Input features are 66 (64 from previous layer + 2)
+Two linear layers: 16/66 -> 64 -> 128, with ReLU activations
+Global MLP (specified by point_net_conv_layer_structure_global_mlp = [256, 64]):
+Input features are 128 (from the local MLP output)
+Three linear layers: 128 -> 256 -> 64 -> 64/128, with ReLU activations
+The last layer outputs 64 for point_net_conv_1 and point_net_conv_2, but 128 for point_net_conv_3
+GAT (Graph Attention) Layers:
+The model creates two sets of GAT layers: gat_graph_layers and gat_graph_layers_local. Both have the same structure, specified by gat_conv_layer_structure = [128, 256, 512, 128].
+Four GATConv layers:
+1. 128 -> 256
+256 -> 512
+512 -> 128
+128 -> 1 (output layer)
+ReLU activations are applied after each GATConv layer, except the last one
+The layer creation process:
+The PointNetConv layers are created first, with their local and global MLPs structured according to the input parameters.
+The GAT layers are then created, following the structure specified in gat_conv_layer_structure.
+3. The final output layer (GATConv 128 -> 1) is added to produce the desired output dimension.
+This architecture allows the model to first process local point features using PointNet convolutions, then aggregate global graph information using Graph Attention mechanisms. The multiple PointNetConv layers enable hierarchical feature extraction, while the GAT layers allow for learning complex relationships between nodes in the graph.
+"""
+
 class MyGnn(torch.nn.Module):
     def __init__(self, 
                 in_channels: int = 0, 
@@ -40,22 +66,24 @@ class MyGnn(torch.nn.Module):
         - gat_conv_layer_structure (list): Layer structure for GATConv layers.
         - dropout (float, optional): Dropout rate. Default is 0.0.
         - use_dropout (bool, optional): Whether to use dropout. Default is False.
+        - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
         """
         super(MyGnn, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
-        self.gat_conv_layer_structure = gat_conv_layer_structure
+        self.gat_conv = gat_conv_layer_structure
         self.use_dropout = use_dropout
+        self.dropout = dropout
         self.predict_mode_stats = predict_mode_stats
 
-        if use_dropout:
-            self.dropout_layer = nn.Dropout(dropout)
+        if self.use_dropout:
+            self.dropout_layer = nn.Dropout(self.dropout)
         
-        local_nn_1, global_nn_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv_layer_structure[0], is_first_layer=True, is_last_layer=False)
-        local_nn_2, global_nn_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv_layer_structure[0], is_first_layer=False, is_last_layer=False)
-        local_nn_3, global_nn_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv_layer_structure[0], is_first_layer=False, is_last_layer=True)
+        local_nn_1, global_nn_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
+        local_nn_2, global_nn_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=False)
+        local_nn_3, global_nn_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
         
         self.point_net_conv_1 = PointNetConv(local_nn=local_nn_1, global_nn=global_nn_1)
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
@@ -67,10 +95,8 @@ class MyGnn(torch.nn.Module):
         #     nn.Linear(graph_mlp_layer_structure[0], out_channels)
         # )
     
-        layers_local = self.define_layers()
         layers_global = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
-        self.gat_graph_layers_local = GeoSequential('x, edge_index', layers_local)
         
         # graph_mlp_layers = []
         # graph_mlp_layers.append(nn.Linear(2, self.graph_mlp_structure[0]))
@@ -207,13 +233,16 @@ class MyGnn(torch.nn.Module):
         - List: Layers for GATConv.
         """
         layers = []
-        for idx in range(len(self.gat_conv_layer_structure) - 1):
-            layers.append((torch_geometric.nn.GATConv(self.gat_conv_layer_structure[idx], self.gat_conv_layer_structure[idx + 1]), 'x, edge_index -> x'))
+        for idx in range(len(self.gat_conv) - 1):
+            layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
             layers.append(nn.ReLU(inplace=True))
             if self.use_dropout:
                 layers.append(self.dropout_layer)
-        layers.append((torch_geometric.nn.GATConv(self.gat_conv_layer_structure[-1], self.out_channels), 'x, edge_index -> x'))
+        layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))
         return layers
+    
+    
+    # INITIALIZION
     
     def initialize_weights(self):
         """
