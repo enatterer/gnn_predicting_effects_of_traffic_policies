@@ -15,14 +15,12 @@ import json
 import os
 import subprocess
 from torch.utils.data import DataLoader, Dataset, Subset
-
+from sklearn.preprocessing import StandardScaler
 
 scripts_path = os.path.abspath(os.path.join('..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
-    
 import gnn_io as gio
-import scripts._archive.gnn_architecture_basic as garch
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -74,34 +72,131 @@ def set_random_seeds(seed_value=42):
     # If using torch.distributed for distributed training, set the seed
     if torch.distributed.is_initialized():
         torch.distributed.manual_seed_all(seed_value)
-
-def prepare_data(data_dict_list, indices_of_datasets_to_use, batch_size, path_to_save_dataloader, normalize_y, normalize_pos):
-    datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
-    dataset_only_relevant_dimensions = gio.cut_dimensions(dataset=datalist, indices_of_dimensions_to_keep=indices_of_datasets_to_use)
-    train_set, valid_set, test_set = gio.split_into_subsets(dataset=dataset_only_relevant_dimensions, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-    if normalize_y and normalize_pos:
-        train_set_normalized, x_scaler, pos_scaler, y_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=True, normalize_pos=True)
-        valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar=y_scaler, normalize_y=True, normalize_pos=True)
-        test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar=y_scaler, normalize_y=True, normalize_pos=True) 
-    if normalize_y and not normalize_pos:
-        train_set_normalized, x_scaler, y_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=True, normalize_pos=False)
-        valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=y_scaler, normalize_y=True, normalize_pos=False)
-        test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=y_scaler, normalize_y=True, normalize_pos=False) 
-    if not normalize_y and normalize_pos:
-        train_set_normalized, x_scaler, pos_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=False, normalize_pos=True)
-        valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar= None,normalize_y=False, normalize_pos=True)
-        test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler,y_scalar=None, normalize_y=False, normalize_pos=True)
-    if not normalize_y and not normalize_pos:
-        train_set_normalized, x_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=False, normalize_pos=False)
-        valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar= None, normalize_y=False, normalize_pos=False)
-        test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=None, normalize_y=False, normalize_pos=False)
         
-    train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
-    val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
-    test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
-    gio.save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-    gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-    return train_loader, val_loader
+        
+def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth'):
+    data_path = os.path.join(base_dir, unique_model_description)
+    os.makedirs(data_path, exist_ok=True)
+    model_save_to = os.path.join(data_path, model_save_path)
+    path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
+    os.makedirs(os.path.dirname(model_save_to), exist_ok=True)
+    os.makedirs(path_to_save_dataloader, exist_ok=True)
+    return model_save_to, path_to_save_dataloader
+
+def get_memory_info():
+    """Get memory information using psutil."""
+    import psutil
+    total_memory = psutil.virtual_memory().total / (1024 ** 3)  # Convert to GB
+    available_memory = psutil.virtual_memory().available / (1024 ** 3)  # Convert to GB
+    used_memory = total_memory - available_memory
+    return total_memory, available_memory, used_memory
+
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader):
+    print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
+    
+    try:
+        print("Splitting into subsets...")
+        train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+        print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+        
+        print("Normalizing train set...")
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, directory_path=path_to_save_dataloader + "train_")
+        print("Train set normalized")
+        
+        print("Normalizing validation set...")
+        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, directory_path=path_to_save_dataloader + "valid_")
+        print("Validation set normalized")
+        print(len(valid_set_normalized))
+        
+        print("Creating train loader...")
+        train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+        print("Train loader created")
+        
+        print("Creating validation loader...")
+        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+        print("Validation loader created")
+        
+        return train_loader, val_loader, scalers_train, scalers_validation
+    except Exception as e:
+        print(f"Error in prepare_data_with_graph_features: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+        
+def normalize_dataset(dataset_input, directory_path):
+    data_list = [dataset_input.dataset[idx] for idx in dataset_input.indices]
+
+    print("Fitting and normalizing x features...")
+    normalized_data_list, x_scaler = normalize_x_features_batched(data_list)
+    print("x features normalized")
+    
+    print("Fitting and normalizing pos features...")
+    normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
+    print("Pos features normalized")
+    
+    print("Fitting and normalizing modestats features...")
+    normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
+    print("Modestats features normalized")
+    
+    return normalized_data_list, (x_scaler, pos_scaler, modestats_scaler)
+
+def normalize_x_features_batched(data_list, batch_size=100):
+    scaler = StandardScaler()
+    
+    # First pass: Fit the scaler
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x.numpy() for data in batch])
+        scaler.partial_fit(batch_x)
+    
+    # Second pass: Transform the data
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x.numpy() for data in batch])
+        batch_x_normalized = scaler.transform(batch_x)
+        for j, data in enumerate(batch):
+            data.x = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=torch.float32)
+    
+    return data_list, scaler
+
+def normalize_pos_features_batched(data_list, batch_size=1000):
+    scaler = StandardScaler()
+    
+    # First pass: Fit the scaler
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+        batch = data_list[i:i+batch_size]
+        batch_pos = np.vstack([data.pos.numpy().reshape(-1, 6) for data in batch])
+        scaler.partial_fit(batch_pos)
+    
+    # Second pass: Transform the data
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing pos features"):
+        batch = data_list[i:i+batch_size]
+        for data in batch:
+            pos_reshaped = data.pos.numpy().reshape(-1, 6)
+            pos_normalized = scaler.transform(pos_reshaped)
+            data.pos = torch.tensor(pos_normalized.reshape(31140, 3, 2), dtype=torch.float32)
+    
+    return data_list, scaler
+
+def normalize_modestats_features_batched(data_list, batch_size=1000):
+    scaler = StandardScaler()
+    
+    # First pass: Fit the scaler
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+        batch = data_list[i:i+batch_size]
+        batch_modestats = np.vstack([data.mode_stats.numpy().reshape(1, -1) for data in batch])
+        scaler.partial_fit(batch_modestats)
+    
+    # Second pass: Transform the data
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing modestats features"):
+        batch = data_list[i:i+batch_size]
+        for data in batch:
+            modestats_reshaped = data.mode_stats.numpy().reshape(1, -1)
+            modestats_normalized = scaler.transform(modestats_reshaped)
+            data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
+    
+    return data_list, scaler
+
 
 def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
@@ -122,13 +217,41 @@ def str_to_bool(value):
     raise ValueError(f"Cannot convert {value} to a boolean.")
 
 # Define the paths here
-def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth', dataset_path: str = '../../data/train_data/dataset_1pm_0-5000.pt'):
-    data_path = os.path.join(base_dir, unique_model_description)
-    os.makedirs(data_path, exist_ok=True)
-    model_save_to = os.path.join(data_path, model_save_path)
-    path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
-    os.makedirs(os.path.dirname(model_save_to), exist_ok=True)
-    os.makedirs(path_to_save_dataloader, exist_ok=True)
-    data_dict_list = torch.load(dataset_path)
-    # data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-5000.pt')
-    return data_dict_list, model_save_to, path_to_save_dataloader
+# def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth', dataset_path: str = '../../data/train_data/dataset_1pm_0-5000.pt'):
+#     data_path = os.path.join(base_dir, unique_model_description)
+#     os.makedirs(data_path, exist_ok=True)
+#     model_save_to = os.path.join(data_path, model_save_path)
+#     path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
+#     os.makedirs(os.path.dirname(model_save_to), exist_ok=True)
+#     os.makedirs(path_to_save_dataloader, exist_ok=True)
+#     data_dict_list = torch.load(dataset_path)
+#     # data_dict_list = torch.load('../../data/train_data/dataset_1pm_0-5000.pt')
+#     return data_dict_list, model_save_to, path_to_save_dataloader
+
+# def prepare_data(data_dict_list, indices_of_datasets_to_use, batch_size, path_to_save_dataloader, normalize_y, normalize_pos):
+#     datalist = [Data(x=d['x'], edge_index=d['edge_index'], pos=d['pos'], y=d['y']) for d in data_dict_list]
+#     dataset_only_relevant_dimensions = gio.cut_dimensions(dataset=datalist, indices_of_dimensions_to_keep=indices_of_datasets_to_use)
+#     train_set, valid_set, test_set = gio.split_into_subsets(dataset=dataset_only_relevant_dimensions, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+#     if normalize_y and normalize_pos:
+#         train_set_normalized, x_scaler, pos_scaler, y_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=True, normalize_pos=True)
+#         valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar=y_scaler, normalize_y=True, normalize_pos=True)
+#         test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar=y_scaler, normalize_y=True, normalize_pos=True) 
+#     if normalize_y and not normalize_pos:
+#         train_set_normalized, x_scaler, y_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=True, normalize_pos=False)
+#         valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=y_scaler, normalize_y=True, normalize_pos=False)
+#         test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=y_scaler, normalize_y=True, normalize_pos=False) 
+#     if not normalize_y and normalize_pos:
+#         train_set_normalized, x_scaler, pos_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=False, normalize_pos=True)
+#         valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler, y_scalar= None,normalize_y=False, normalize_pos=True)
+#         test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=pos_scaler,y_scalar=None, normalize_y=False, normalize_pos=True)
+#     if not normalize_y and not normalize_pos:
+#         train_set_normalized, x_scaler = gio.normalize_dataset_create_scaler(dataset_input = train_set, directory_path=path_to_save_dataloader, normalize_y=False, normalize_pos=False)
+#         valid_set_normalized = gio.normalize_dataset_with_given_scaler(dataset_input=valid_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar= None, normalize_y=False, normalize_pos=False)
+#         test_set_normalized =  gio.normalize_dataset_with_given_scaler(dataset_input=test_set, x_scalar_list=x_scaler, pos_scalar=None, y_scalar=None, normalize_y=False, normalize_pos=False)
+        
+#     train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+#     val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+#     test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+#     gio.save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+#     gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+#     return train_loader, val_loader

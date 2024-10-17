@@ -20,15 +20,14 @@ import math
 
 class MyGnn(torch.nn.Module):
     def __init__(self, 
-                predict_mode_stats: bool = False,
                 in_channels: int = 0, 
                 out_channels: int = 0, 
                 point_net_conv_layer_structure_local_mlp: list = [], 
                 point_net_conv_layer_structure_global_mlp: list = [], 
                 gat_conv_layer_structure: list = [], 
-                graph_mlp_layer_structure: list = [],
                 dropout: float = 0.0, 
-                use_dropout: bool = False):
+                use_dropout: bool = False,
+                predict_mode_stats: bool = False):
         
         """
         Initialize the GNN model with specified configurations.
@@ -43,14 +42,13 @@ class MyGnn(torch.nn.Module):
         - use_dropout (bool, optional): Whether to use dropout. Default is False.
         """
         super(MyGnn, self).__init__()
-        self.predict_mode_stats = predict_mode_stats
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv_layer_structure = gat_conv_layer_structure
-        self.graph_mlp_structure = graph_mlp_layer_structure
         self.use_dropout = use_dropout
+        self.predict_mode_stats = predict_mode_stats
 
         if use_dropout:
             self.dropout_layer = nn.Dropout(dropout)
@@ -63,26 +61,26 @@ class MyGnn(torch.nn.Module):
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
         self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
     
-        self.graph_predictor = nn.Sequential(
-            nn.Linear(gat_conv_layer_structure[-1] + 12, graph_mlp_layer_structure[0]),
-            nn.ReLU(),
-            nn.Linear(graph_mlp_layer_structure[0], out_channels)
-        )
+        # self.graph_predictor = nn.Sequential(
+        #     nn.Linear(gat_conv_layer_structure[-1] + 12, graph_mlp_layer_structure[0]),
+        #     nn.ReLU(),
+        #     nn.Linear(graph_mlp_layer_structure[0], out_channels)
+        # )
     
         layers_global = self.define_layers()
         layers_local = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
         self.gat_graph_layers_local = GeoSequential('x, edge_index', layers_local)
         
-        graph_mlp_layers = []
-        graph_mlp_layers.append(nn.Linear(2, self.graph_mlp_structure[0]))
-        for idx in range(len(self.graph_mlp_structure) - 1):
-            graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[idx], self.graph_mlp_structure[idx + 1]))
-            graph_mlp_layers.append(nn.ReLU())
-            if use_dropout:
-                graph_mlp_layers.append(self.dropout_layer)
-        graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[-1], out_channels))
-        self.graph_mlp = nn.Sequential(*graph_mlp_layers)
+        # graph_mlp_layers = []
+        # graph_mlp_layers.append(nn.Linear(2, self.graph_mlp_structure[0]))
+        # for idx in range(len(self.graph_mlp_structure) - 1):
+        #     graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[idx], self.graph_mlp_structure[idx + 1]))
+        #     graph_mlp_layers.append(nn.ReLU())
+        #     if use_dropout:
+        #         graph_mlp_layers.append(self.dropout_layer)
+        # graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[-1], out_channels))
+        # self.graph_mlp = nn.Sequential(*graph_mlp_layers)
         self.initialize_weights()
         print("Model initialized")
         print(self)
@@ -273,7 +271,6 @@ def train(model: nn.Module,
           valid_dl: DataLoader = None, 
           device: torch.device = None, 
           early_stopping: object = None, 
-          accumulation_steps: int = 3, 
           model_save_path: str = None, 
           use_gradient_clipping: bool = True,
           lr_scheduler_warmup_steps: int = 20000, 
@@ -300,7 +297,7 @@ def train(model: nn.Module,
     - tuple: Validation loss and the best epoch.
     """
     scaler = GradScaler()
-    total_steps = config.epochs * len(train_dl)
+    total_steps = config.num_epochs * len(train_dl)
     scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=lr_scheduler_cosine_decay_rate)
     best_val_loss = float('inf')
     
@@ -308,10 +305,10 @@ def train(model: nn.Module,
     checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
     os.makedirs(checkpoint_dir, exist_ok=True)
     
-    for epoch in range(config.epochs):
+    for epoch in range(config.num_epochs):
         model.train()
         optimizer.zero_grad()
-        for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.epochs}"):
+        for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
             step = epoch * len(train_dl) + idx
             lr = scheduler.get_lr(step)
             for param_group in optimizer.param_groups:
@@ -332,7 +329,7 @@ def train(model: nn.Module,
             if use_gradient_clipping:
                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
 
-            if (idx + 1) % accumulation_steps == 0:
+            if (idx + 1) % config.gradient_accumulation_steps == 0:
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
@@ -341,7 +338,7 @@ def train(model: nn.Module,
             if (idx + 1) % 10 == 0:
                 wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
         
-        if len(train_dl) % accumulation_steps != 0:
+        if len(train_dl) % config.gradient_accumulation_steps != 0:
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
