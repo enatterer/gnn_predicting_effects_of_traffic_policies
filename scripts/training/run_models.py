@@ -27,6 +27,8 @@ if scripts_path not in sys.path:
 import gnn_io as gio
 import gnn_architecture as garch
 
+dataset_path = '../../data/train_data/sim_output_1pm_capacity_reduction_10k_15_10_2024/'
+
 PARAMETER_ORDER = [
     "project_name",
     "predict_mode_stats",
@@ -78,10 +80,9 @@ def get_parameters(args):
 
 def main():
     try:
-        dataset_path = '../../data/train_data/sim_output_1pm_capacity_reduction_10k_15_10_2024/'
         datalist = []
         batch_num = 1
-        while True and batch_num < 10:
+        while True:
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
