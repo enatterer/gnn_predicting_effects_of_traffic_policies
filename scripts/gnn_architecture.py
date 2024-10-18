@@ -321,10 +321,9 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    print("total_steps: ", total_steps)
-    print("config.lr_scheduler_warmup_steps: ", config.lr_scheduler_warmup_steps)
-    print("config.lr_scheduler_cosine_decay_rate: ", config.lr_scheduler_cosine_decay_rate)
-    scheduler = LinearWarmupCosineDecayScheduler(optimizer.param_groups[0]['lr'], warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps, cosine_decay_rate=config.lr_scheduler_cosine_decay_rate)
+    # print("total_steps: ", total_steps)
+    # print("config.lr_scheduler_warmup_steps: ", config.lr_scheduler_warmup_steps)
+    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/2)
     best_val_loss = float('inf')
     
     # Create a directory for checkpoints if it doesn't exist
@@ -556,8 +555,7 @@ class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
                  initial_lr: float, 
                  warmup_steps: int, 
-                 total_steps: int, 
-                 cosine_decay_rate: float = 0.5):
+                 total_steps: int):
         """
         Linear warmup and cosine decay scheduler.
 
@@ -565,13 +563,12 @@ class LinearWarmupCosineDecayScheduler:
         - initial_lr (float): Initial learning rate.
         - warmup_steps (int): Number of warmup steps.
         - total_steps (int): Total number of steps.
-        - cosine_decay_rate (float, optional): Cosine decay rate. Default is 0.5.
         """
         self.initial_lr = initial_lr
         self.warmup_steps = warmup_steps
         self.total_steps = total_steps
-        self.cosine_decay_rate = cosine_decay_rate
         self.decay_steps = total_steps - warmup_steps
+        self.cosine_decay_rate = 0.5
 
     def get_lr(self, step: int) -> float:
         """
@@ -584,15 +581,15 @@ class LinearWarmupCosineDecayScheduler:
         - float: Calculated learning rate.
         """
         if step < self.warmup_steps:
-            print("step: ", step)
-            print("self.warmup_steps: ", self.warmup_steps)
-            print("self.initial_lr: ", self.initial_lr)
+            # print("step: ", step)
+            # print("self.warmup_steps: ", self.warmup_steps)
+            # print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * (step / self.warmup_steps)
         else:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
-            print("cosine_decay: ", cosine_decay)
-            print("self.initial_lr: ", self.initial_lr)
+            # print("cosine_decay: ", cosine_decay)
+            # print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * cosine_decay 
         
         
@@ -645,3 +642,26 @@ class LinearWarmupCosineDecayScheduler:
     #         global_MLP_layers.append(self.dropout_layer)
     #     global_MLP = nn.Sequential(*global_MLP_layers)
     #     return local_MLP, global_MLP
+    
+    
+# class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
+ 
+#     def __init__(self, optimizer, warmup, max_iters):
+#         self.warmup = warmup
+#         self.max_num_iters = max_iters
+#         super().__init__(optimizer)
+ 
+#     def get_lr(self):
+#         lr_factor = self.get_lr_factor(epoch=self.last_epoch)
+#         print("self.last_epoch: ", self.last_epoch)
+#         print("lr_factor: ", lr_factor)
+#         return [base_lr * lr_factor for base_lr in self.base_lrs]
+ 
+#     def get_lr_factor(self, epoch):
+#         print("epoch: ", epoch)
+#         print("self.max_num_iters: ", self.max_num_iters)
+#         lr_factor = 0.5 * (1 + np.cos(np.pi * epoch / self.max_num_iters))
+#         print("lr_factor: ", lr_factor)
+#         if epoch <= self.warmup:
+#             lr_factor *= epoch * 1.0 / self.warmup
+#         return lr_factor

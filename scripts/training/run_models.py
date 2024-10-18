@@ -46,7 +46,6 @@ PARAMETERS = [
     "gradient_accumulation_steps",
     "use_gradient_clipping",
     "lr_scheduler_warmup_steps",
-    "lr_scheduler_cosine_decay_rate",
     "device_nr",
     "unique_model_description"
 ]
@@ -54,7 +53,7 @@ PARAMETERS = [
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_this_is_a_test",
+        "project_name": "runs_18_05_2024",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "out_channels": args.out_channels,
@@ -70,7 +69,6 @@ def get_parameters(args):
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "use_gradient_clipping": args.use_gradient_clipping,
         "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
-        "lr_scheduler_cosine_decay_rate": args.lr_scheduler_cosine_decay_rate,
         "device_nr": args.device_nr
     }
     params["unique_model_description"] = (
@@ -87,7 +85,7 @@ def main():
     try:
         datalist = []
         batch_num = 1
-        while True:
+        while True
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
@@ -111,7 +109,7 @@ def main():
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="64,128", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="256,64", help="Structure of PointNet Conv global MLP (comma-separated).")
-    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,1024,128", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
+    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,1024,512,128", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -121,7 +119,6 @@ def main():
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--lr_scheduler_warmup_steps", type=int, default=10000, help="The number of steps for the warmup phase of the learning rate scheduler.")
-    parser.add_argument("--lr_scheduler_cosine_decay_rate", type=float, default=0.5, help="The rate of the cosine decay of the learning rate scheduler.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
     args = parser.parse_args()
