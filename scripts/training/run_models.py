@@ -85,7 +85,7 @@ def main():
     try:
         datalist = []
         batch_num = 1
-        while True
+        while True:
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
