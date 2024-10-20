@@ -134,17 +134,14 @@ class MyGnn(torch.nn.Module):
             batch = data.batch
             
             pooled_node_predictions = geo_nn.global_mean_pool(node_predictions, batch)
-            # print("pooled_node_predictions: ", pooled_node_predictions)
-            # print("pooled_node_predictions shape: ", pooled_node_predictions.shape)
-            
             shape_node_preds = pooled_node_predictions.shape[0]
-            tensor_for_pooling = torch.repeat_interleave(torch.arange(shape_node_preds), 6).to(x.device)
+            shape_mode_stats = mode_stats.shape[0]
+            # ELENA CHECK IT IN NEXT RUN (vorher shape_mode_stats:6)
+            tensor_for_pooling = torch.repeat_interleave(torch.arange(shape_node_preds), shape_mode_stats).to(x.device)
             mode_stats_pooled = geo_nn.global_mean_pool(mode_stats, tensor_for_pooling)
             
             mode_stats_pred = self.mode_stat_predictor(mode_stats_pooled)
-            # print("mode_stats_pred shape: ", mode_stats_pred.shape)
-            mode_stats_pred = mode_stats_pred.repeat_interleave(6, dim=0)
-            # print("mode_stats_pred in right format shape: ", mode_stats_pred.shape)
+            mode_stats_pred = mode_stats_pred.repeat_interleave(shape_mode_stats, dim=0)
             return node_predictions, mode_stats_pred
         
         return x
@@ -229,9 +226,7 @@ class MyGnn(torch.nn.Module):
         layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))
         return layers
     
-    
     # INITIALIZION
-    
     def initialize_weights(self):
         """
         Initialize model weights using Xavier and Kaiming initialization.
@@ -309,7 +304,6 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    # print("config.lr_scheduler_warmup_steps: ", config.lr_scheduler_warmup_steps)
     scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/2)
     best_val_loss = float('inf')
     
