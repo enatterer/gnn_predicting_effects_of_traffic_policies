@@ -88,25 +88,18 @@ class MyGnn(torch.nn.Module):
         self.point_net_conv_1 = PointNetConv(local_nn=local_nn_1, global_nn=global_nn_1)
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
         self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
-    
-        # self.graph_predictor = nn.Sequential(
-        #     nn.Linear(gat_conv_layer_structure[-1] + 12, graph_mlp_layer_structure[0]),
-        #     nn.ReLU(),
-        #     nn.Linear(graph_mlp_layer_structure[0], out_channels)
-        # )
-    
+        
         layers_global = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
         
-        # graph_mlp_layers = []
-        # graph_mlp_layers.append(nn.Linear(2, self.graph_mlp_structure[0]))
-        # for idx in range(len(self.graph_mlp_structure) - 1):
-        #     graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[idx], self.graph_mlp_structure[idx + 1]))
-        #     graph_mlp_layers.append(nn.ReLU())
-        #     if use_dropout:
-        #         graph_mlp_layers.append(self.dropout_layer)
-        # graph_mlp_layers.append(nn.Linear(self.graph_mlp_structure[-1], out_channels))
-        # self.graph_mlp = nn.Sequential(*graph_mlp_layers)
+        self.mode_stat_predictor = nn.Sequential(
+            nn.Linear(2, 64),
+            nn.ReLU(),
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            nn.Linear(64, 2)
+        )
+
         self.initialize_weights()
         print("Model initialized")
         print(self)
@@ -137,27 +130,22 @@ class MyGnn(torch.nn.Module):
         x = self.gat_graph_layers(x, edge_index)
         
         if self.predict_mode_stats:
-            # TODO Implement logic to predict mode stats
-            pass
-        
-        
-        # Graph-level prediction logic
-        # graph_x = geo_nn.global_mean_pool(x, data.batch)  # Aggregate node features
-        
-        # Combine aggregated node features with mode_stats
-        # combined_graph_features = torch.cat([graph_x, mode_stats], dim=1)
-        
-        # Make graph-level prediction
-        # graph_pred = self.graph_predictor(combined_graph_features)
-        
-        # return x, graph_pred
-        
-        # here you can add a global pooling layer
-        # graph_feature = pooling(x, data.batch)
-        # graph_output = self.graph_mlp(graph_feature)
-        # x = self.gat_graph_layers_local(x, edge_index)
-        
-        # graph_output = self.graph_mlp(mode_stats)
+            node_predictions = x
+            batch = data.batch
+            
+            pooled_node_predictions = geo_nn.global_mean_pool(node_predictions, batch)
+            # print("pooled_node_predictions: ", pooled_node_predictions)
+            # print("pooled_node_predictions shape: ", pooled_node_predictions.shape)
+            
+            shape_node_preds = pooled_node_predictions.shape[0]
+            tensor_for_pooling = torch.repeat_interleave(torch.arange(shape_node_preds), 6).to(x.device)
+            mode_stats_pooled = geo_nn.global_mean_pool(mode_stats, tensor_for_pooling)
+            
+            mode_stats_pred = self.mode_stat_predictor(mode_stats_pooled)
+            # print("mode_stats_pred shape: ", mode_stats_pred.shape)
+            mode_stats_pred = mode_stats_pred.repeat_interleave(6, dim=0)
+            # print("mode_stats_pred in right format shape: ", mode_stats_pred.shape)
+            return node_predictions, mode_stats_pred
         
         return x
     
@@ -321,7 +309,6 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    # print("total_steps: ", total_steps)
     # print("config.lr_scheduler_warmup_steps: ", config.lr_scheduler_warmup_steps)
     scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/2)
     best_val_loss = float('inf')
@@ -336,18 +323,24 @@ def train(model: nn.Module,
         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
             step = epoch * len(train_dl) + idx
             lr = scheduler.get_lr(step)
-            print("lr: ", lr)
             for param_group in optimizer.param_groups:
                 param_group['lr'] = lr
                 
             data = data.to(device)
-            targets = data.y
+            targets_node_predictions = data.y
+            targets_mode_stats = data.mode_stats
            
             with autocast():
                 # Forward pass
-                predicted = model(data)
-                train_loss = loss_fct(predicted, targets)
-                
+                if config.predict_mode_stats:
+                    predicted, mode_stats_pred = model(data)
+                    train_loss_node_predictions = loss_fct(predicted, targets_node_predictions)
+                    train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats)
+                    train_loss = train_loss_node_predictions + train_loss_mode_stats
+                else:
+                    predicted = model(data)
+                    train_loss = loss_fct(predicted, targets_node_predictions)
+      
             # Backward pass
             scaler.scale(train_loss).backward() 
             
@@ -362,15 +355,22 @@ def train(model: nn.Module,
                 
             # Do not log train loss at every iteration, as it uses CPU
             if (idx + 1) % 10 == 0:
-                wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
+                if config.predict_mode_stats:
+                    wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
+                else:   
+                    wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
         
         if len(train_dl) % config.gradient_accumulation_steps != 0:
             scaler.step(optimizer)
             scaler.update()
             optimizer.zero_grad()
             
-        val_loss, r_squared = validate_model_during_training(model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
-        wandb.log({"val_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
+        if config.predict_mode_stats:
+            val_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            wandb.log({ "val_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared,"val_loss_node_predictions": val_loss_node_predictions, "val_loss_mode_stats": val_loss_mode_stats})
+        else:
+            val_loss, r_squared = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            wandb.log({"val_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
         
         if val_loss < best_val_loss:
@@ -402,7 +402,8 @@ def train(model: nn.Module,
     wandb.finish()
     return val_loss, epoch
 
-def validate_model_during_training(model: nn.Module, 
+def validate_model_during_training(config: object, 
+                                   model: nn.Module, 
                                    dataset: DataLoader, 
                                    loss_func: nn.Module, 
                                    device: torch.device) -> tuple:
@@ -423,23 +424,32 @@ def validate_model_during_training(model: nn.Module,
     num_batches = 0
     actual_vals = []
     predictions = []
+    
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
-            input_node_features, targets = data.x, data.y
-            predicted = model(data)
-
-            actual_vals.append(targets)
+            input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
+            if config.predict_mode_stats:
+                predicted, mode_stats_pred = model(data)
+                val_loss_node_predictions = loss_func(predicted, targets_node_predictions).item()
+                val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
+                val_loss += val_loss_node_predictions + val_loss_mode_stats
+            else:
+                predicted = model(data)
+                val_loss += loss_func(predicted, targets_node_predictions).item()
+                
+            actual_vals.append(targets_node_predictions)
             predictions.append(predicted)
-            
-            val_loss += loss_func(predicted, targets).item()
             num_batches += 1
             
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
     actual_vals=torch.cat(actual_vals)
     predictions = torch.cat(predictions)
     r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
-    return total_validation_loss, r_squared
+    if config.predict_mode_stats:
+        return total_validation_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats
+    else:
+        return total_validation_loss, r_squared
 
 def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
