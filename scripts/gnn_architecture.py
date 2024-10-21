@@ -18,6 +18,7 @@ from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
 import os
 import math
 from torch.nn import TransformerEncoderLayer, TransformerEncoder
+from torch_geometric.nn import TransformerConv
 
 class MyGnn(torch.nn.Module):
     def __init__(self, 
@@ -173,9 +174,21 @@ class MyGnn(torch.nn.Module):
         - List: Layers for GATConv.
         """
         layers = []
+        # for idx in range(len(self.gat_conv) - 1):
+        #     layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+        #     layers.append(nn.ReLU(inplace=True))
+        #     if self.use_dropout:
+        #         layers.append(self.dropout_layer)
+                
         for idx in range(len(self.gat_conv) - 1):
-            layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            # GAT layer
+            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            # layers.append(nn.ReLU(inplace=True))
+            
+            # Transformer layer
+            layers.append((TransformerConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
             layers.append(nn.ReLU(inplace=True))
+            
             if self.use_dropout:
                 layers.append(self.dropout_layer)
         layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))

@@ -53,7 +53,7 @@ PARAMETERS = [
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_18_05_2024",
+        "project_name": "runs_21_10_2024",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "out_channels": args.out_channels,
@@ -85,7 +85,7 @@ def main():
     try:
         datalist = []
         batch_num = 1
-        while True and batch_num<2:
+        while True:
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
