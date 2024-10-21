@@ -17,32 +17,7 @@ from torch_geometric.data import Data, Batch
 from torch_geometric.nn import PointNetConv, Sequential as GeoSequential
 import os
 import math
-
-"""
-PointNet Convolution Layers:
-The model creates three PointNetConv layers (point_net_conv_1, point_net_conv_2, and point_net_conv_3). Each PointNetConv layer consists of a local_nn and a global_nn.
-Local MLP (specified by point_net_conv_layer_structure_local_mlp = [64, 128]):
-For point_net_conv_1: Input features are 16 (15 input channels + 1)
-For point_net_conv_2 and point_net_conv_3: Input features are 66 (64 from previous layer + 2)
-Two linear layers: 16/66 -> 64 -> 128, with ReLU activations
-Global MLP (specified by point_net_conv_layer_structure_global_mlp = [256, 64]):
-Input features are 128 (from the local MLP output)
-Three linear layers: 128 -> 256 -> 64 -> 64/128, with ReLU activations
-The last layer outputs 64 for point_net_conv_1 and point_net_conv_2, but 128 for point_net_conv_3
-GAT (Graph Attention) Layers:
-The model creates two sets of GAT layers: gat_graph_layers and gat_graph_layers_local. Both have the same structure, specified by gat_conv_layer_structure = [128, 256, 512, 128].
-Four GATConv layers:
-1. 128 -> 256
-256 -> 512
-512 -> 128
-128 -> 1 (output layer)
-ReLU activations are applied after each GATConv layer, except the last one
-The layer creation process:
-The PointNetConv layers are created first, with their local and global MLPs structured according to the input parameters.
-The GAT layers are then created, following the structure specified in gat_conv_layer_structure.
-3. The final output layer (GATConv 128 -> 1) is added to produce the desired output dimension.
-This architecture allows the model to first process local point features using PointNet convolutions, then aggregate global graph information using Graph Attention mechanisms. The multiple PointNetConv layers enable hierarchical feature extraction, while the GAT layers allow for learning complex relationships between nodes in the graph.
-"""
+from torch.nn import TransformerEncoderLayer, TransformerEncoder
 
 class MyGnn(torch.nn.Module):
     def __init__(self, 
@@ -91,12 +66,11 @@ class MyGnn(torch.nn.Module):
         
         layers_global = self.define_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
-        
+                
         self.mode_stat_predictor = nn.Sequential(
             nn.Linear(2, 64),
             nn.ReLU(),
-            nn.Linear(64, 64),
-            nn.ReLU(),
+            TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
             nn.Linear(64, 2)
         )
 
@@ -135,8 +109,8 @@ class MyGnn(torch.nn.Module):
             
             pooled_node_predictions = geo_nn.global_mean_pool(node_predictions, batch)
             shape_node_preds = pooled_node_predictions.shape[0]
-            shape_mode_stats = mode_stats.shape[0]
-            # ELENA CHECK IT IN NEXT RUN (vorher shape_mode_stats:6)
+            shape_mode_stats = int(mode_stats.shape[0]/shape_node_preds)
+            
             tensor_for_pooling = torch.repeat_interleave(torch.arange(shape_node_preds), shape_mode_stats).to(x.device)
             mode_stats_pooled = geo_nn.global_mean_pool(mode_stats, tensor_for_pooling)
             
@@ -145,25 +119,6 @@ class MyGnn(torch.nn.Module):
             return node_predictions, mode_stats_pred
         
         return x
-    
-    def process_global_graph_attributes(self):
-        """
-        Process graph-level attributes.
-
-        Parameters:
-        - mode_stats (torch.Tensor): Graph-level attributes.
-
-        Returns:
-        - torch.Tensor: Processed graph-level attributes.
-        """
-        layers = []
-        for i in range(len(self.graph_mlp_layer_structure) - 1):
-            layers.append(nn.Linear(self.graph_mlp_layer_structure[i], self.graph_mlp_layer_structure[i + 1]))
-            if i < len(self.graph_mlp_layer_structure) - 2:  # Add ReLU between layers, but not after the last layer
-                layers.append(nn.ReLU())
-            if self.use_dropout:
-                layers.append(self.dropout_layer)        
-        return layers
     
     def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool=False, is_last_layer:bool=False):
         """
@@ -226,7 +181,7 @@ class MyGnn(torch.nn.Module):
         layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))
         return layers
     
-    # INITIALIZION
+    # WEIGHT INITIALIZION
     def initialize_weights(self):
         """
         Initialize model weights using Xavier and Kaiming initialization.
@@ -273,7 +228,6 @@ class MyGnn(torch.nn.Module):
             init.xavier_normal_(m.att_src)
         if hasattr(m, 'att_dst') and m.att_dst is not None:
             init.xavier_normal_(m.att_dst)
-
 
 def train(model: nn.Module, 
           config: object = None, 
@@ -585,15 +539,10 @@ class LinearWarmupCosineDecayScheduler:
         - float: Calculated learning rate.
         """
         if step < self.warmup_steps:
-            # print("step: ", step)
-            # print("self.warmup_steps: ", self.warmup_steps)
-            # print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * (step / self.warmup_steps)
         else:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
-            # print("cosine_decay: ", cosine_decay)
-            # print("self.initial_lr: ", self.initial_lr)
             return self.initial_lr * cosine_decay 
         
         
