@@ -371,29 +371,29 @@ def validate_model_during_training(config: object,
     val_loss = 0
     num_batches = 0
     actual_vals = []
-    predictions = []
+    node_predictions = []
     
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
             input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
             if config.predict_mode_stats:
-                predicted, mode_stats_pred = model(data)
-                val_loss_node_predictions = loss_func(predicted, targets_node_predictions).item()
+                node_predicted, mode_stats_pred = model(data)
+                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()
                 val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
             else:
-                predicted = model(data)
-                val_loss += loss_func(predicted, targets_node_predictions).item()
+                node_predicted = model(data)
+                val_loss += loss_func(node_predicted, targets_node_predictions).item()
                 
             actual_vals.append(targets_node_predictions)
-            predictions.append(predicted)
+            node_predictions.append(node_predicted)
             num_batches += 1
             
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
     actual_vals=torch.cat(actual_vals)
-    predictions = torch.cat(predictions)
-    r_squared = compute_r2_torch(preds=predictions, targets=actual_vals)
+    node_predictions = torch.cat(node_predictions)
+    r_squared = compute_r2_torch(preds=node_predictions, targets=actual_vals)
     if config.predict_mode_stats:
         return total_validation_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats
     else:
