@@ -101,12 +101,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, directory_path=path_to_save_dataloader + "train_")
-        print("Train set normalized")
+        print("Train set normalized")      
         
         print("Normalizing validation set...")
         valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, directory_path=path_to_save_dataloader + "valid_")
         print("Validation set normalized")
-        print(len(valid_set_normalized))
+        
+        print("Normalizing test set...")
+        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, directory_path=path_to_save_dataloader + "test_")
+        print("Test set normalized")
         
         print("Creating train loader...")
         train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
@@ -116,7 +119,28 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
         print("Validation loader created")
         
-        return train_loader, val_loader, scalers_train, scalers_validation
+        print("Creating test loader...")
+        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=gio.collate_fn, worker_init_fn=seed_worker)
+        print("Test loader created")
+        
+        joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
+        joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
+        joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
+
+        joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
+        joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
+        joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
+
+        joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
+        joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
+        joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
+        
+        gio.save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        print("Dataloaders and scalers saved")
+        
+        return train_loader, val_loader
+    
     except Exception as e:
         print(f"Error in prepare_data_with_graph_features: {str(e)}")
         import traceback
@@ -138,7 +162,12 @@ def normalize_dataset(dataset_input, directory_path):
     normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
     print("Modestats features normalized")
     
-    return normalized_data_list, (x_scaler, pos_scaler, modestats_scaler)
+    scalers_dict = {
+        "x_scaler": x_scaler,
+        "pos_scaler": pos_scaler,
+        "modestats_scaler": modestats_scaler
+    }
+    return normalized_data_list, scalers_dict
 
 def normalize_x_features_batched(data_list, batch_size=100):
     scaler = StandardScaler()

@@ -85,7 +85,7 @@ def main():
     try:
         datalist = []
         batch_num = 1
-        while True:
+        while True and batch_num<2:
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
@@ -137,7 +137,7 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
-        train_dl, valid_dl, scalers_train, scalers_validation = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader)
+        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader)
         
         config = hf.setup_wandb(params['project_name'], {param: params[param] for param in PARAMETERS})
 
