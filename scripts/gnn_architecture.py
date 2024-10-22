@@ -57,13 +57,11 @@ class MyGnn(torch.nn.Module):
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
         
-        local_nn_1, global_nn_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
-        local_nn_2, global_nn_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=False)
-        local_nn_3, global_nn_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
+        self.point_net_conv_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
+        self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=False)
+        self.point_net_conv_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
         
-        self.point_net_conv_1 = PointNetConv(local_nn=local_nn_1, global_nn=global_nn_1)
-        self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
-        self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
+        self.read_out_node_predictions = nn.Linear(64, 1)
         
         layers_global = self.define_gat_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
@@ -103,12 +101,11 @@ class MyGnn(torch.nn.Module):
         x = self.point_net_conv_3(x, pos3, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
+        node_predictions = self.read_out_node_predictions(x)
         
         if self.predict_mode_stats:
-            node_predictions = x
             batch = data.batch
-            
-            pooled_node_predictions = geo_nn.global_mean_pool(node_predictions, batch)
+            pooled_node_predictions = geo_nn.global_mean_pool(x, batch)
             shape_node_preds = pooled_node_predictions.shape[0]
             shape_mode_stats = int(mode_stats.shape[0]/shape_node_preds)
             
@@ -119,7 +116,25 @@ class MyGnn(torch.nn.Module):
             mode_stats_pred = mode_stats_pred.repeat_interleave(shape_mode_stats, dim=0)
             return node_predictions, mode_stats_pred
         
-        return x
+        return node_predictions
+    
+    def define_gat_layers(self):
+        """
+        Define layers for GATConv based on configuration.
+
+        Returns:
+        - List: Layers for GATConv.
+        """
+        layers = []
+        for idx in range(len(self.gat_conv) - 1):        
+            # Transformer layer
+            layers.append((TransformerConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            layers.append(nn.ReLU(inplace=True))
+            if self.use_dropout:
+                layers.append(self.dropout_layer)
+        layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], 64), 'x, edge_index -> x'))
+        return layers
     
     def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool=False, is_last_layer:bool=False):
         """
@@ -164,25 +179,7 @@ class MyGnn(torch.nn.Module):
         if self.use_dropout:
             global_MLP_layers.append(self.dropout_layer)
         global_MLP = nn.Sequential(*global_MLP_layers)
-        return local_MLP, global_MLP
-    
-    def define_gat_layers(self):
-        """
-        Define layers for GATConv based on configuration.
-
-        Returns:
-        - List: Layers for GATConv.
-        """
-        layers = []
-        for idx in range(len(self.gat_conv) - 1):        
-            # Transformer layer
-            layers.append((TransformerConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
-            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
-            layers.append(nn.ReLU(inplace=True))
-            if self.use_dropout:
-                layers.append(self.dropout_layer)
-        layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))
-        return layers
+        return PointNetConv(local_nn=local_MLP, global_nn=global_MLP)
     
     # WEIGHT INITIALIZION
     def initialize_weights(self):
