@@ -65,7 +65,7 @@ class MyGnn(torch.nn.Module):
         self.point_net_conv_2 = PointNetConv(local_nn=local_nn_2, global_nn=global_nn_2)
         self.point_net_conv_3 = PointNetConv(local_nn=local_nn_3, global_nn=global_nn_3)
         
-        layers_global = self.define_layers()
+        layers_global = self.define_gat_layers()
         self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
                 
         self.mode_stat_predictor = nn.Sequential(
@@ -166,7 +166,7 @@ class MyGnn(torch.nn.Module):
         global_MLP = nn.Sequential(*global_MLP_layers)
         return local_MLP, global_MLP
     
-    def define_layers(self):
+    def define_gat_layers(self):
         """
         Define layers for GATConv based on configuration.
 
@@ -174,21 +174,11 @@ class MyGnn(torch.nn.Module):
         - List: Layers for GATConv.
         """
         layers = []
-        # for idx in range(len(self.gat_conv) - 1):
-        #     layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
-        #     layers.append(nn.ReLU(inplace=True))
-        #     if self.use_dropout:
-        #         layers.append(self.dropout_layer)
-                
-        for idx in range(len(self.gat_conv) - 1):
-            # GAT layer
-            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
-            # layers.append(nn.ReLU(inplace=True))
-            
+        for idx in range(len(self.gat_conv) - 1):        
             # Transformer layer
             layers.append((TransformerConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
             layers.append(nn.ReLU(inplace=True))
-            
             if self.use_dropout:
                 layers.append(self.dropout_layer)
         layers.append((torch_geometric.nn.GATConv(self.gat_conv[-1], self.out_channels), 'x, edge_index -> x'))
@@ -383,7 +373,7 @@ def validate_model_during_training(config: object,
     model.eval()
     val_loss = 0
     num_batches = 0
-    actual_vals = []
+    actual_node_targets = []
     node_predictions = []
     
     with torch.inference_mode():
@@ -399,14 +389,14 @@ def validate_model_during_training(config: object,
                 node_predicted = model(data)
                 val_loss += loss_func(node_predicted, targets_node_predictions).item()
                 
-            actual_vals.append(targets_node_predictions)
+            actual_node_targets.append(targets_node_predictions)
             node_predictions.append(node_predicted)
             num_batches += 1
             
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
-    actual_vals=torch.cat(actual_vals)
+    actual_node_targets=torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
-    r_squared = compute_r2_torch(preds=node_predictions, targets=actual_vals)
+    r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     if config.predict_mode_stats:
         return total_validation_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats
     else:

@@ -45,7 +45,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 import gnn_io as gio
-import scripts.gnn_architecture as garch
+import gnn_architecture as garch
 
 # Assuming 'highway_mapping' and 'encode_modes' are defined as in your context
 highway_mapping = {
