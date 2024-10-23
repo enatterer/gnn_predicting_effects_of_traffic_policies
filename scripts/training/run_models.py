@@ -27,7 +27,7 @@ if scripts_path not in sys.path:
 import gnn_io as gio
 import gnn_architecture as garch
 
-dataset_path = '../../data/train_data/sim_output_1pm_capacity_reduction_10k_15_10_2024/'
+dataset_path = '../../data/train_data/sim_output_1pm_22_10_2024/'
 
 PARAMETERS = [
     "project_name",
@@ -104,7 +104,7 @@ def main():
         print(f"An error occurred: {str(e)}")
     
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--in_channels", type=int, default=15, help="The number of input channels.")
+    parser.add_argument("--in_channels", type=int, default=13, help="The number of input channels.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=True, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="64,128", help="Structure of PointNet Conv local MLP (comma-separated).")

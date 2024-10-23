@@ -146,14 +146,12 @@ class MyGnn(torch.nn.Module):
         Returns:
         - Tuple[nn.Sequential, nn.Sequential]: Local and global MLP layers.
         """
-        # Create local MLP layers
-        offset_due_to_first_layer = 1
-        offset_due_to_next_layers = 2
+        offset_due_to_pos = 2
         local_MLP_layers = []
         if is_first_layer:
-            local_MLP_layers.append(nn.Linear(self.in_channels + offset_due_to_first_layer, self.pnc_local[0]))
+            local_MLP_layers.append(nn.Linear(self.in_channels + offset_due_to_pos, self.pnc_local[0]))
         else:
-            local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_due_to_next_layers, self.pnc_local[0]))
+            local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_due_to_pos, self.pnc_local[0]))
         local_MLP_layers.append(nn.ReLU())
         if self.use_dropout:
             local_MLP_layers.append(self.dropout_layer)
