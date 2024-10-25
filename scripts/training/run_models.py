@@ -106,7 +106,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--in_channels", type=int, default=13, help="The number of input channels.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
-    parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=True, help="Whether to predict mode stats or not.")
+    parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="64,128", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="256,64", help="Structure of PointNet Conv global MLP (comma-separated).")
     parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
@@ -148,10 +148,11 @@ def main():
                         gat_conv_layer_structure=config.gat_conv_layer_structure,
                         use_dropout=config.use_dropout, 
                         dropout=config.dropout, 
-                        predict_mode_stats=config.predict_mode_stats)
+                        predict_mode_stats=config.predict_mode_stats, 
+                        dtype=torch.float32)
         
         model = gnn_instance.to(device)
-        loss_fct = torch.nn.MSELoss()
+        loss_fct = torch.nn.MSELoss().to(dtype=torch.float32).to(device)
         
         baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct)
         baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct)

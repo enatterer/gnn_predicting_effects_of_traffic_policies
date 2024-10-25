@@ -29,7 +29,8 @@ class MyGnn(torch.nn.Module):
                 gat_conv_layer_structure: list = [], 
                 dropout: float = 0.0, 
                 use_dropout: bool = False,
-                predict_mode_stats: bool = False):
+                predict_mode_stats: bool = False,
+                dtype: torch.dtype = torch.float32):
         
         """
         Initialize the GNN model with specified configurations.
@@ -45,6 +46,7 @@ class MyGnn(torch.nn.Module):
         - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
         """
         super(MyGnn, self).__init__()
+        self.dtype = dtype
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.pnc_local = point_net_conv_layer_structure_local_mlp
@@ -72,10 +74,20 @@ class MyGnn(torch.nn.Module):
             TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
             nn.Linear(64, 2)
         )
+        
+        self.additional_predictor = nn.Sequential(
+            nn.Linear(64, 64),
+            nn.ReLU(),
+            TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
+            nn.Linear(64, 1)
+        )
 
         self.initialize_weights()
         print("Model initialized")
         print(self)
+        print("Dtype of model:")
+        for param in self.parameters():
+            print(param.dtype)
     
     def forward(self, data):
         """
@@ -88,9 +100,8 @@ class MyGnn(torch.nn.Module):
         - torch.Tensor: Output features after passing through the model.
         """
         
-        x = data.x
+        x = data.x.to(self.dtype)
         edge_index = data.edge_index
-        mode_stats = data.mode_stats
         
         pos1 = data.pos[:, 0, :]  # First set of positions
         pos2 = data.pos[:, 1, :]  # Second set of positions
@@ -101,9 +112,13 @@ class MyGnn(torch.nn.Module):
         x = self.point_net_conv_3(x, pos3, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
+        
+        # node_predictions= self.additional_predictor(x)
+        
         node_predictions = self.read_out_node_predictions(x)
         
         if self.predict_mode_stats:
+            mode_stats = data.mode_stats
             batch = data.batch
             pooled_node_predictions = geo_nn.global_mean_pool(x, batch)
             shape_node_preds = pooled_node_predictions.shape[0]
@@ -256,7 +271,7 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/2)
+    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/4)
     best_val_loss = float('inf')
     
     # Create a directory for checkpoints if it doesn't exist
