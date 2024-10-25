@@ -95,54 +95,29 @@ def compute_r2_torch(preds, targets):
     r2 = 1 - ss_res / ss_tot
     return r2
 
-def data_to_geodataframe(data, original_gdf, predicted_values):
-    # Extract the edge index and node features
-    node_features = data.x.cpu().numpy()
-    target_values = data.y.cpu().numpy()
-    predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
-
-    # Create edge data
-    edge_data = {
-        'from_node': original_gdf["from_node"].values,
-        'to_node': original_gdf["to_node"].values,
-        'vol_base_case': node_features[:, 0],  # Assuming capacity is the first feature, and so on
-        'capacity_base_case': node_features[:, 1],  
-        'capacity_reduction': node_features[:, 2],  
-        'highway': node_features[:, 3],  
-        'vol_car_change_actual': target_values.squeeze(),  # Assuming target values are car volumes
-        'vol_car_change_predicted': predicted_values.squeeze()
-    }
-    # Convert to DataFrame
-    edge_df = pd.DataFrame(edge_data)
-    # Create LineString geometry
-    edge_df['geometry'] = original_gdf["geometry"].values
-    # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
-    return gdf
-
-def map_to_original_values(input_gdf: gpd.GeoDataFrame, scaler_x, scaler_y=None):
-    gdf = input_gdf.copy()
-    if scaler_y is None:
-         # y was not normalized, so we don't need to convert i back
-        gdf['og_vol_car_change_actual'] = gdf['vol_car_change_actual']
-        gdf['og_vol_car_change_predicted'] = gdf['vol_car_change_predicted']
-    else:
-       # y was normalized, now we need to compute it back
-        original_values_vol_car_change_actual = scaler_y.inverse_transform(gdf['vol_car_change_actual'].values.reshape(-1, 1))
-        original_values_vol_car_change_predicted = scaler_y.inverse_transform(gdf['vol_car_change_predicted'].values.reshape(-1, 1))
-        gdf['og_vol_car_change_actual'] = original_values_vol_car_change_actual
-        gdf['og_vol_car_change_predicted'] = original_values_vol_car_change_predicted
+# def map_to_original_values(input_gdf: gpd.GeoDataFrame, scaler_x, scaler_y=None):
+#     gdf = input_gdf.copy()
+#     if scaler_y is None:
+#          # y was not normalized, so we don't need to convert i back
+#         gdf['og_vol_car_change_actual'] = gdf['vol_car_change_actual']
+#         gdf['og_vol_car_change_predicted'] = gdf['vol_car_change_predicted']
+#     else:
+#        # y was normalized, now we need to compute it back
+#         original_values_vol_car_change_actual = scaler_y.inverse_transform(gdf['vol_car_change_actual'].values.reshape(-1, 1))
+#         original_values_vol_car_change_predicted = scaler_y.inverse_transform(gdf['vol_car_change_predicted'].values.reshape(-1, 1))
+#         gdf['og_vol_car_change_actual'] = original_values_vol_car_change_actual
+#         gdf['og_vol_car_change_predicted'] = original_values_vol_car_change_predicted
     
-    original_values_vol_base_case = scaler_x[0].inverse_transform(gdf['vol_base_case'].values.reshape(-1, 1))
-    original_values_capacity_base_case = scaler_x[1].inverse_transform(gdf['capacity_base_case'].values.reshape(-1, 1))
-    original_values_capacity_new = scaler_x[2].inverse_transform(gdf['capacity_reduction'].values.reshape(-1, 1))
-    original_values_highway = scaler_x[3].inverse_transform(gdf['highway'].values.reshape(-1, 1))
+#     original_values_vol_base_case = scaler_x[0].inverse_transform(gdf['vol_base_case'].values.reshape(-1, 1))
+#     original_values_capacity_base_case = scaler_x[1].inverse_transform(gdf['capacity_base_case'].values.reshape(-1, 1))
+#     original_values_capacity_new = scaler_x[2].inverse_transform(gdf['capacity_reduction'].values.reshape(-1, 1))
+#     original_values_highway = scaler_x[3].inverse_transform(gdf['highway'].values.reshape(-1, 1))
         
-    gdf['og_vol_base_case'] = original_values_vol_base_case
-    gdf['og_capacity_base_case'] = original_values_capacity_base_case
-    gdf['og_capacity_reduction'] = original_values_capacity_new
-    gdf['og_highway'] = original_values_highway
-    return gdf
+#     gdf['og_vol_base_case'] = original_values_vol_base_case
+#     gdf['og_capacity_base_case'] = original_values_capacity_base_case
+#     gdf['og_capacity_reduction'] = original_values_capacity_new
+#     gdf['og_highway'] = original_values_highway
+#     return gdf
 
 def list_to_string(integers, delimiter=', '):
     """
@@ -170,20 +145,20 @@ def plot_districts_of_capacity_reduction(gdf_input:gpd.GeoDataFrame, font:str ='
     
     # Set up the plot
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))
-    gdf = gdf[gdf["og_highway"].isin([1, 2, 3])]
+    gdf = gdf[gdf["highway"].isin([1, 2, 3])]
     
     # Round og_capacity_reduction and filter
-    gdf['og_capacity_reduction_rounded'] = gdf['og_capacity_reduction'].round(decimals=3)
+    gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
     tolerance = 1e-3
-    edges_with_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) > tolerance]
+    edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
     # edges_without_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) <= tolerance]
 
-    norm = TwoSlopeNorm(vmin=gdf["og_capacity_reduction"].min(), vcenter=gdf["og_capacity_reduction"].median(), vmax=gdf["og_capacity_reduction"].max())
+    norm = TwoSlopeNorm(vmin=gdf["capacity_reduction"].min(), vcenter=gdf["capacity_reduction"].median(), vmax=gdf["capacity_reduction"].max())
     
     # edges_without_capacity_reduction.plot(
     #     ax=ax, column=column_to_plot, cmap='coolwarm', linewidth=3, legend=False, norm=norm, zorder=1, label = "Capacity reduction")
     edges_with_capacity_reduction.plot(
-        ax=ax, column='og_capacity_reduction', cmap='coolwarm', linewidth=5, legend=False, norm=norm, zorder=2, label = "Edges with capacity reduction")
+        ax=ax, column='capacity_reduction', cmap='coolwarm', linewidth=5, legend=False, norm=norm, zorder=2, label = "Edges with capacity reduction")
         
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
@@ -229,19 +204,27 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          is_predicted: bool = False, alpha:int=100, 
                          use_fixed_norm:bool=True, 
                          fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
-    # call with known_districts if call with 0 or 1
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
-    # gdf = gdf[gdf["og_highway"].isin([1])]
 
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
     norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
-    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm, "og_highway")
+    norm = plt.Normalize()
+    
+    linewidths = gdf["highway"].apply(get_linewidth)
+    gdf['linewidth'] = linewidths
+    large_lines = gdf[gdf['linewidth'] > 1]
+    small_lines = gdf[gdf['linewidth'] == 1]
+    small_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=small_lines['linewidth'], ax=ax, legend=False,
+                    norm=norm, label="Street network", zorder=1)
+    large_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+                    norm=norm, label="Street network", zorder=2)
+    
+    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
 
     cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
-    
     cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
     if save_it:
         p = "predicted" if is_predicted else "actual"
@@ -300,26 +283,10 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm):
     cbar.ax.yaxis.label.set_size(15)
     return cbar
 
-def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf, ax, column_to_plot, norm, highway_column):
+def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf):
     if known_districts:
-        # Apply the linewidth mapping
-        linewidths = gdf[highway_column].apply(get_linewidth)
-        gdf['linewidth'] = linewidths
-        # Separate the GeoDataFrame into two groups based on linewidth
-        large_lines = gdf[gdf['linewidth'] > 1]
-        small_lines = gdf[gdf['linewidth'] == 1]
-        
         target_districts = districts[districts['c_ar'].isin(districts_of_interest)]
         gdf['intersects_target_districts'] = gdf.apply(lambda row: target_districts.intersects(row.geometry).any(), axis=1)
-        
-        # Plot small lines first
-        small_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=small_lines['linewidth'], ax=ax, legend=False,
-                        norm=norm, label="Street network", zorder=1)
-        
-        # Plot large lines after
-        large_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=large_lines['linewidth'], ax=ax, legend=False,
-                        norm=norm, label="Street network", zorder=2)
-        
         buffered_target_districts = target_districts.copy()
         buffered_target_districts['geometry'] = buffered_target_districts.buffer(buffer)
         if buffered_target_districts.crs != gdf.crs:
@@ -328,9 +295,9 @@ def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_inter
         relevant_area_to_plot = gpd.GeoSeries(outer_boundary, crs=gdf.crs)
         
     else:
-        gdf['og_capacity_reduction_rounded'] = gdf['og_capacity_reduction'].round(decimals=3)
+        gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
         tolerance = 1e-3
-        edges_with_capacity_reduction = gdf[np.abs(gdf['og_capacity_reduction_rounded']) > tolerance]
+        edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
         coords = [(x, y) for geom in edges_with_capacity_reduction.geometry for x, y in zip(geom.xy[0], geom.xy[1])]
         alpha_shape = alphashape.alphashape(coords, alpha)
         relevant_area_to_plot = gpd.GeoSeries([alpha_shape], crs=gdf.crs)
@@ -393,30 +360,30 @@ def compute_r2_torch(preds, targets):
     r2 = 1 - (ss_res / ss_tot)
     return r2
 
-def data_to_geodataframe(data, original_gdf, predicted_values):
-    # Extract the edge index and node features
-    node_features = data.x.cpu().numpy()
-    target_values = data.y.cpu().numpy()
-    predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
+# def data_to_geodataframe(data, original_gdf, predicted_values):
+#     # Extract the edge index and node features
+#     node_features = data.x.cpu().numpy()
+#     target_values = data.y.cpu().numpy()
+#     predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
 
-    # Create edge data
-    edge_data = {
-        'from_node': original_gdf["from_node"].values,
-        'to_node': original_gdf["to_node"].values,
-        'vol_base_case': node_features[:, 0],  # Assuming capacity is the first feature, and so on
-        'capacity_base_case': node_features[:, 1],  
-        'capacity_reduction': node_features[:, 2],  
-        'highway': node_features[:, 3],  
-        'vol_car_change_actual': target_values.squeeze(),  # Assuming target values are car volumes
-        'vol_car_change_predicted': predicted_values.squeeze()
-    }
-    # Convert to DataFrame
-    edge_df = pd.DataFrame(edge_data)
-    # Create LineString geometry
-    edge_df['geometry'] = original_gdf["geometry"].values
-    # Create GeoDataFrame
-    gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
-    return gdf
+#     # Create edge data
+#     edge_data = {
+#         'from_node': original_gdf["from_node"].values,
+#         'to_node': original_gdf["to_node"].values,
+#         'vol_base_case': node_features[:, 0],  # Assuming capacity is the first feature, and so on
+#         'capacity_base_case': node_features[:, 1],  
+#         'capacity_reduction': node_features[:, 2],  
+#         'highway': node_features[:, 3],  
+#         'vol_car_change_actual': target_values.squeeze(),  # Assuming target values are car volumes
+#         'vol_car_change_predicted': predicted_values.squeeze()
+#     }
+#     # Convert to DataFrame
+#     edge_df = pd.DataFrame(edge_data)
+#     # Create LineString geometry
+#     edge_df['geometry'] = original_gdf["geometry"].values
+#     # Create GeoDataFrame
+#     gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
+#     return gdf
 
 
 # def plot_difference_output(gdf_input: gpd.GeoDataFrame, column1: str, column2: str, diff_column: str = 'difference', font: str = 'Times New Roman', save_it: bool = False, number_to_plot: int = 0,
