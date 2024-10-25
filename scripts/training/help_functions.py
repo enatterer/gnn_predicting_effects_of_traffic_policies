@@ -99,6 +99,11 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
         
+        print("Saving test set...")
+        test_set_path = os.path.join(path_to_save_dataloader, 'test_set.pt')
+        torch.save(test_set, test_set_path)
+        print(f"Test set saved to {test_set_path}")
+        
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, directory_path=path_to_save_dataloader + "train_")
         print("Train set normalized")      
@@ -125,15 +130,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
         joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
-        joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
+        # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
 
         joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
         joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
-        joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
+        # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
 
         joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
         joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
-        joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
+        # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
         
         gio.save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
         gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
@@ -158,14 +163,14 @@ def normalize_dataset(dataset_input, directory_path):
     normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
     print("Pos features normalized")
     
-    print("Fitting and normalizing modestats features...")
-    normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
-    print("Modestats features normalized")
+    # print("Fitting and normalizing modestats features...")
+    # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
+    # print("Modestats features normalized")
     
     scalers_dict = {
         "x_scaler": x_scaler,
         "pos_scaler": pos_scaler,
-        "modestats_scaler": modestats_scaler
+        # "modestats_scaler": modestats_scaler
     }
     return normalized_data_list, scalers_dict
 
@@ -184,7 +189,7 @@ def normalize_x_features_batched(data_list, batch_size=100):
         batch_x = np.vstack([data.x.numpy() for data in batch])
         batch_x_normalized = scaler.transform(batch_x)
         for j, data in enumerate(batch):
-            data.x = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=torch.float32)
+            data.x = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=data.x.dtype)
     
     return data_list, scaler
 
@@ -203,28 +208,28 @@ def normalize_pos_features_batched(data_list, batch_size=1000):
         for data in batch:
             pos_reshaped = data.pos.numpy().reshape(-1, 6)
             pos_normalized = scaler.transform(pos_reshaped)
-            data.pos = torch.tensor(pos_normalized.reshape(31140, 3, 2), dtype=torch.float32)
+            data.pos = torch.tensor(pos_normalized.reshape(31140, 3, 2), dtype=data.pos.dtype)
     
     return data_list, scaler
 
-def normalize_modestats_features_batched(data_list, batch_size=1000):
-    scaler = StandardScaler()
+# def normalize_modestats_features_batched(data_list, batch_size=1000):
+#     scaler = StandardScaler()
     
-    # First pass: Fit the scaler
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
-        batch = data_list[i:i+batch_size]
-        batch_modestats = np.vstack([data.mode_stats.numpy().reshape(1, -1) for data in batch])
-        scaler.partial_fit(batch_modestats)
+#     # First pass: Fit the scaler
+#     for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+#         batch = data_list[i:i+batch_size]
+#         batch_modestats = np.vstack([data.mode_stats.numpy().reshape(1, -1) for data in batch])
+#         scaler.partial_fit(batch_modestats)
     
-    # Second pass: Transform the data
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing modestats features"):
-        batch = data_list[i:i+batch_size]
-        for data in batch:
-            modestats_reshaped = data.mode_stats.numpy().reshape(1, -1)
-            modestats_normalized = scaler.transform(modestats_reshaped)
-            data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
+#     # Second pass: Transform the data
+#     for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing modestats features"):
+#         batch = data_list[i:i+batch_size]
+#         for data in batch:
+#             modestats_reshaped = data.mode_stats.numpy().reshape(1, -1)
+#             modestats_normalized = scaler.transform(modestats_reshaped)
+#             data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
     
-    return data_list, scaler
+#     return data_list, scaler
 
 
 def seed_worker(worker_id):

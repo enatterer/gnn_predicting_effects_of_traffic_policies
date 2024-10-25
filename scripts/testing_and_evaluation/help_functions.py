@@ -47,15 +47,6 @@ if scripts_path not in sys.path:
 import gnn_io as gio
 import gnn_architecture as garch
 
-# Assuming 'highway_mapping' and 'encode_modes' are defined as in your context
-# highway_mapping = {
-#     'residential': 0, 'tertiary': 1, 'living_street': 2, 'secondary': 3, 
-#     'primary': 4, 'trunk_link': 5, 'primary_link': 6, 'motorway': 7, 
-#     'service': 8, 'unclassified': 9, 'secondary_link': 10, 
-#     'pedestrian': 11, 'trunk': 12, 'motorway_link': 13, 
-#     'construction': 14, 'tertiary_link': 15, 'pt': -1
-# }
-
 from enum import IntEnum
 
 class EdgeFeatures(IntEnum):
@@ -85,6 +76,28 @@ highway_mapping = {
     'pt': -1, 
 }
 
+mode_mapping = {
+    'bus': 0,
+    'car': 1,
+    'car_passenger': 2,
+    'pt': 3,
+    'bus,car,car_passenger': 4,
+    'bus,car,car_passenger,pt': 5,
+    'car,car_passenger': 6,
+    'pt,rail,train': 7,
+    'bus,pt': 8,
+    'rail': 9,
+    'pt,subway': 10,
+    'artificial,bus': 11,
+    'artificial,rail': 12,
+    'artificial,stopFacilityLink,subway': 13,
+    'artificial,subway': 14,
+    'artificial,stopFacilityLink,tram': 15,
+    'artificial,tram': 16,
+    'artificial,bus,stopFacilityLink': 17,
+    'artificial,funicular,stopFacilityLink': 18,
+    'artificial,funicular': 19
+}
 
 def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x):
     target_values = data.y.cpu().numpy()
@@ -153,6 +166,129 @@ def validate_model_on_test_set(model, dataset, loss_func, device):
     avg_loss = total_loss / len(dataset)
     
     return avg_loss, r_squared, all_targets, all_preds, baseline_loss
+
+def get_link_geometries(links_gdf_input):
+    edge_midpoints = np.array([((geom.coords[0][0] + geom.coords[-1][0]) / 2, 
+                                    (geom.coords[0][1] + geom.coords[-1][1]) / 2) 
+                                for geom in links_gdf_input.geometry])
+
+    nodes = pd.concat([links_gdf_input['from_node'], links_gdf_input['to_node']]).unique()
+    node_to_idx = {node: idx for idx, node in enumerate(nodes)}
+    links_gdf_input['from_idx'] = links_gdf_input['from_node'].map(node_to_idx)
+    links_gdf_input['to_idx'] = links_gdf_input['to_node'].map(node_to_idx)
+    edges_base = links_gdf_input[['from_idx', 'to_idx']].values
+    edge_midpoint_tensor = torch.tensor(edge_midpoints, dtype=torch.float)
+
+    start_points = np.array([geom.coords[0] for geom in links_gdf_input.geometry])
+    end_points = np.array([geom.coords[-1] for geom in links_gdf_input.geometry])
+
+    edge_start_point_tensor = torch.tensor(start_points, dtype=torch.float)
+    edge_end_point_tensor = torch.tensor(end_points, dtype=torch.float)
+
+    stacked_edge_geometries_tensor = torch.stack([edge_start_point_tensor, edge_end_point_tensor, edge_midpoint_tensor], dim=1)
+
+    return edge_start_point_tensor,stacked_edge_geometries_tensor, edges_base, nodes
+
+def encode_modes(gdf):
+    """Encode the 'modes' attribute based on specific strings."""
+    modes_conditions = {
+        'car': gdf['modes'].str.contains('car', case=False, na=False).astype(int),
+        'bus': gdf['modes'].str.contains('bus', case=False, na=False).astype(int),
+        'pt': gdf['modes'].str.contains('pt', case=False, na=False).astype(int),
+        'train': gdf['modes'].str.contains('train', case=False, na=False).astype(int),
+        'rail': gdf['modes'].str.contains('rail', case=False, na=False).astype(int),
+        'subway': gdf['modes'].str.contains('subway', case=False, na=False).astype(int)
+    }
+    modes_encoded = pd.DataFrame(modes_conditions)
+    tensor_list = [torch.tensor(modes_encoded[col].values, dtype=torch.float) for col in modes_encoded.columns]
+    return tensor_list
+
+def create_test_object(links_base_case, test_data, stacked_edge_geometries_tensor):
+    linegraph_transformation = LineGraph()
+    vol_base_case = links_base_case['vol_car'].values
+    capacity_base_case = np.where(links_base_case['modes'].str.contains('car'), links_base_case['capacity'], 0)
+
+    length = links_base_case['length'].values
+    freespeed = links_base_case['freespeed'].values
+    allowed_modes = encode_modes(links_base_case)
+    edges_base = links_base_case[['from_idx', 'to_idx']].values
+    nodes = pd.concat([links_base_case['from_node'], links_base_case['to_node']]).unique()
+
+    edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
+    x = torch.zeros((len(nodes), 1), dtype=torch.float)
+    data = Data(edge_index=edge_index, x=x)
+    
+    capacities_new = np.where(test_data['modes'].str.contains('car'), test_data['capacity'], 0)
+    capacity_reduction = capacities_new - capacity_base_case
+    highway = test_data['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
+
+    capacities_new = test_data['capacity'].values
+    capacity_reduction= capacities_new - capacity_base_case
+    
+    edge_feature_dict = {
+        EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
+        EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(capacity_base_case),
+        EdgeFeatures.CAPACITIES_NEW: torch.tensor(capacities_new),
+        EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(capacity_reduction),
+        EdgeFeatures.FREESPEED: torch.tensor(freespeed),
+        EdgeFeatures.HIGHWAY: torch.tensor(highway),
+        EdgeFeatures.LENGTH: torch.tensor(length),
+        EdgeFeatures.ALLOWED_MODE_CAR: allowed_modes[0],
+        EdgeFeatures.ALLOWED_MODE_BUS: allowed_modes[1],
+        EdgeFeatures.ALLOWED_MODE_PT:  allowed_modes[2],
+        EdgeFeatures.ALLOWED_MODE_TRAIN: allowed_modes[3],
+        EdgeFeatures.ALLOWED_MODE_RAIL: allowed_modes[4],
+        EdgeFeatures.ALLOWED_MODE_SUBWAY: allowed_modes[5],
+    }
+    
+    edge_tensor = [edge_feature_dict[feature] for feature in EdgeFeatures]
+    edge_tensor = torch.stack(edge_tensor, dim=1)  # Shape: (31140, 14)
+    
+    linegraph_data = linegraph_transformation(data)
+    linegraph_data.x = edge_tensor
+    linegraph_data.pos = stacked_edge_geometries_tensor
+    edge_car_volume_difference = test_data['vol_car'].values - vol_base_case
+    linegraph_data.y = torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
+    
+    if linegraph_data.validate(raise_on_error=True):
+        return linegraph_data
+    else:
+        print("Invalid line graph data")
+        
+def normalize_tensor(tensor, scaler):
+    """
+    Normalizes a given tensor using the provided scaler.
+
+    Parameters:
+    tensor (torch.Tensor): The tensor to normalize.
+    scaler (sklearn.preprocessing.StandardScaler or similar): The scaler to use for normalization.
+
+    Returns:
+    torch.Tensor: The normalized tensor.
+    """
+    # Convert the tensor to a numpy array, apply the scaler, and convert back to a tensor
+    tensor_np = tensor.numpy()
+    normalized_np = scaler.transform(tensor_np)
+    normalized_tensor = torch.tensor(normalized_np, dtype=tensor.dtype)
+    return normalized_tensor
+
+def normalize_pos_features(tensor, scaler):
+    """
+    Normalizes the position features of a given tensor using the provided scaler.
+
+    Parameters:
+    tensor (torch.Tensor): The tensor to normalize, expected shape (31140, 3, 2).
+    scaler (sklearn.preprocessing.StandardScaler or similar): The scaler to use for normalization.
+
+    Returns:
+    torch.Tensor: The normalized tensor.
+    """
+    # Reshape the tensor to (31140, 6) for normalization
+    tensor_reshaped = tensor.view(-1, 6).numpy()
+    normalized_np = scaler.transform(tensor_reshaped)
+    # Reshape back to (31140, 3, 2) after normalization
+    normalized_tensor = torch.tensor(normalized_np, dtype=tensor.dtype).view(31140, 3, 2)
+    return normalized_tensor
 
 
 def validate_trained_model(model, valid_dl, loss_func, device):
