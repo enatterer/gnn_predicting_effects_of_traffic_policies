@@ -209,8 +209,11 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
 
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
-    norm = get_norm(column_to_plot=column_to_plot, use_fixed_norm=use_fixed_norm, fixed_norm_max=fixed_norm_max, gdf=gdf)
-    norm = plt.Normalize()
+    if use_fixed_norm:
+        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+    else:
+        norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
+    # norm = plt.Normalize()
     
     linewidths = gdf["highway"].apply(get_linewidth)
     gdf['linewidth'] = linewidths
@@ -222,8 +225,15 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     norm=norm, label="Street network", zorder=2)
     
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
-    relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
-
+    
+    if isinstance(relevant_area_to_plot, set):
+        for area in relevant_area_to_plot:
+            if isinstance(area, Polygon):
+                gdf_area = gpd.GeoDataFrame(index=[0], crs=gdf.crs, geometry=[area])
+                gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+    else:
+        relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+        
     cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
     cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
     if save_it:
@@ -293,15 +303,20 @@ def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_inter
             buffered_target_districts.to_crs(gdf.crs, inplace=True)
         outer_boundary = unary_union(buffered_target_districts.geometry).boundary
         relevant_area_to_plot = gpd.GeoSeries(outer_boundary, crs=gdf.crs)
-        
+        return relevant_area_to_plot
     else:
         gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
         tolerance = 1e-3
-        edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
-        coords = [(x, y) for geom in edges_with_capacity_reduction.geometry for x, y in zip(geom.xy[0], geom.xy[1])]
-        alpha_shape = alphashape.alphashape(coords, alpha)
-        relevant_area_to_plot = gpd.GeoSeries([alpha_shape], crs=gdf.crs)
-    return relevant_area_to_plot
+        edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]        
+        relevant_districts = set()
+        for _, edge in edges_with_capacity_reduction.iterrows():
+            for _, district in districts.iterrows():
+                if district.geometry.contains(edge.geometry):
+                    relevant_districts.add(district.geometry)
+        return relevant_districts
+        # coords = [(x, y) for geom in edges_with_capacity_reduction.geometry for x, y in zip(geom.xy[0], geom.xy[1])]
+        # alpha_shape = alphashape.alphashape(coords, alpha)
+        # relevant_area_to_plot = gpd.GeoSeries([alpha_shape], crs=gdf.crs)
 
 def get_linewidth(value):
         if value in [0, 1]:
