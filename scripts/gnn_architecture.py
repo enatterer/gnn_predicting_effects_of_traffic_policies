@@ -85,9 +85,6 @@ class MyGnn(torch.nn.Module):
         self.initialize_weights()
         print("Model initialized")
         print(self)
-        print("Dtype of model:")
-        for param in self.parameters():
-            print(param.dtype)
     
     def forward(self, data):
         """

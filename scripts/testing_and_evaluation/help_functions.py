@@ -48,13 +48,112 @@ import gnn_io as gio
 import gnn_architecture as garch
 
 # Assuming 'highway_mapping' and 'encode_modes' are defined as in your context
+# highway_mapping = {
+#     'residential': 0, 'tertiary': 1, 'living_street': 2, 'secondary': 3, 
+#     'primary': 4, 'trunk_link': 5, 'primary_link': 6, 'motorway': 7, 
+#     'service': 8, 'unclassified': 9, 'secondary_link': 10, 
+#     'pedestrian': 11, 'trunk': 12, 'motorway_link': 13, 
+#     'construction': 14, 'tertiary_link': 15, 'pt': -1
+# }
+
+from enum import IntEnum
+
+class EdgeFeatures(IntEnum):
+    VOL_BASE_CASE = 0
+    CAPACITY_BASE_CASE = 1
+    CAPACITIES_NEW = 2
+    CAPACITY_REDUCTION = 3
+    FREESPEED = 4
+    HIGHWAY = 5
+    LENGTH = 6
+    ALLOWED_MODE_CAR = 7
+    ALLOWED_MODE_BUS = 8
+    ALLOWED_MODE_PT = 9
+    ALLOWED_MODE_TRAIN = 10
+    ALLOWED_MODE_RAIL = 11
+    ALLOWED_MODE_SUBWAY = 12
+    
+# Custom mapping for highway types
 highway_mapping = {
-    'residential': 0, 'tertiary': 1, 'living_street': 2, 'secondary': 3, 
-    'primary': 4, 'trunk_link': 5, 'primary_link': 6, 'motorway': 7, 
-    'service': 8, 'unclassified': 9, 'secondary_link': 10, 
-    'pedestrian': 11, 'trunk': 12, 'motorway_link': 13, 
-    'construction': 14, 'tertiary_link': 15, np.nan: -1
+    'trunk': 0, 'trunk_link': 0, 'motorway_link': 0,
+    'primary': 1, 'primary_link': 1,
+    'secondary': 2, 'secondary_link': 2,
+    'tertiary': 3, 'tertiary_link': 3,
+    'residential': 4, 'living_street': 5,
+    'pedestrian': 6, 'service': 7,
+    'construction': 8, 'unclassified': 9,
+    'pt': -1, 
 }
+
+
+def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x):
+    target_values = data.y.cpu().numpy()
+    predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
+    
+    edge_data = {
+        'from_node': original_gdf["from_node"].values,
+        'to_node': original_gdf["to_node"].values,
+        'vol_base_case': inversed_x[:, EdgeFeatures.VOL_BASE_CASE],  
+        'capacity_base_case': inversed_x[:, EdgeFeatures.CAPACITY_BASE_CASE],  
+        'capacities_new': inversed_x[:, EdgeFeatures.CAPACITIES_NEW],  
+        'capacity_reduction': inversed_x[:, EdgeFeatures.CAPACITY_REDUCTION],  
+        'freespeed': inversed_x[:, EdgeFeatures.FREESPEED],  
+        'highway': original_gdf['highway'].values,
+        'length': inversed_x[:, EdgeFeatures.LENGTH],        
+        'allowed_mode_car': inversed_x[:, EdgeFeatures.ALLOWED_MODE_CAR],
+        'allowed_mode_bus': inversed_x[:, EdgeFeatures.ALLOWED_MODE_BUS],
+        'allowed_mode_pt': inversed_x[:, EdgeFeatures.ALLOWED_MODE_PT],
+        'allowed_mode_train': inversed_x[:, EdgeFeatures.ALLOWED_MODE_TRAIN],
+        'allowed_mode_rail': inversed_x[:, EdgeFeatures.ALLOWED_MODE_RAIL],
+        'allowed_mode_subway': inversed_x[:, EdgeFeatures.ALLOWED_MODE_SUBWAY],
+        'vol_car_change_actual': target_values.squeeze(),  
+        'vol_car_change_predicted': predicted_values.squeeze(),
+    }
+    edge_df = pd.DataFrame(edge_data)
+    edge_df['geometry'] = original_gdf["geometry"].values
+    gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
+    return gdf
+
+def compute_r2_torch_with_mean_targets(mean_targets, preds, targets):
+    ss_tot = torch.sum((targets - mean_targets) ** 2)
+    ss_res = torch.sum((targets - preds) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
+def validate_model_on_test_set(model, dataset, loss_func, device):
+    model.eval()
+    total_loss = 0.0
+    all_preds = []
+    all_targets = []
+    
+    with torch.inference_mode():
+        if isinstance(dataset, list):
+            for data in dataset:
+                input_node_features, targets = data.x.to(device), data.y.to(device)
+                predicted = model(data.to(device))
+                loss = loss_func(predicted, targets).item()
+                total_loss += loss
+                all_preds.append(predicted)
+                all_targets.append(targets)
+        else:
+            input_node_features, targets = dataset.x.to(device), dataset.y.to(device)
+            predicted = model(dataset.to(device))
+            loss = loss_func(predicted, targets).item()
+            total_loss += loss
+            all_preds.append(predicted)
+            all_targets.append(targets)
+    
+    all_preds = torch.cat(all_preds)
+    all_targets = torch.cat(all_targets)
+    
+    mean_targets = torch.mean(all_targets)
+    r_squared = compute_r2_torch_with_mean_targets(mean_targets=mean_targets, preds=all_preds, targets=all_targets)
+    baseline_loss = loss_func(all_targets, torch.full_like(all_preds, mean_targets))
+    
+    avg_loss = total_loss / len(dataset)
+    
+    return avg_loss, r_squared, all_targets, all_preds, baseline_loss
+
 
 def validate_trained_model(model, valid_dl, loss_func, device):
     model.eval()
@@ -213,7 +312,6 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
     else:
         norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
-    # norm = plt.Normalize()
     
     linewidths = gdf["highway"].apply(get_linewidth)
     gdf['linewidth'] = linewidths
