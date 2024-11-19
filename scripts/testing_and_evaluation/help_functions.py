@@ -309,7 +309,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          zone_to_plot:str= "this_zone",
                          is_predicted: bool = False, alpha:int=100, 
                          use_fixed_norm:bool=True, 
-                         fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4]):
+                         fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4],
+                         plot_contour_lines:bool=True, is_absolute:bool=False):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
@@ -331,16 +332,20 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     
-    if isinstance(relevant_area_to_plot, set):
-        for area in relevant_area_to_plot:
-            if isinstance(area, Polygon):
-                gdf_area = gpd.GeoDataFrame(index=[0], crs=gdf.crs, geometry=[area])
-                gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
-    else:
-        relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+    if plot_contour_lines:
+        if isinstance(relevant_area_to_plot, set):
+            for area in relevant_area_to_plot:
+                if isinstance(area, Polygon):
+                    gdf_area = gpd.GeoDataFrame(index=[0], crs=gdf.crs, geometry=[area])
+                    gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+        else:
+            relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
         
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm)
-    cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines)
+    if is_absolute:
+        cbar.set_label('Car volume', fontname=font, fontsize=15)
+    else:
+        cbar.set_label('Car volume: Difference to base case (%)', fontname=font, fontsize=15)
     if save_it:
         p = "predicted" if is_predicted else "actual"
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
@@ -355,7 +360,7 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     return norm
     
 
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm):
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines):
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
     plt.xlabel("Longitude", fontname=font, fontsize=15)
@@ -368,8 +373,11 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm):
         label.set_fontsize(15)
     
     # Create custom legend
-    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network'),# Add more lines for other labels as needed
-                    Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
+    if plot_contour_lines:
+        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network'),# Add more lines for other labels as needed
+                        Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
+    else:
+        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')]
 
     ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
     ax.set_position([0.1, 0.1, 0.75, 0.75])

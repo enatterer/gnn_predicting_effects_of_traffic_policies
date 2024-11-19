@@ -107,9 +107,9 @@ def main():
     parser.add_argument("--in_channels", type=int, default=13, help="The number of input channels.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
-    parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="64,128", help="Structure of PointNet Conv local MLP (comma-separated).")
-    parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="256,64", help="Structure of PointNet Conv global MLP (comma-separated).")
-    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
+    parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
+    parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
+    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -164,6 +164,7 @@ def main():
                     config=config, 
                     loss_fct=loss_fct,
                     optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
+                    # optimizer = torch.optim.Shampoo(model.parameters(), lr=config.lr, weight_decay=1e-4),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 

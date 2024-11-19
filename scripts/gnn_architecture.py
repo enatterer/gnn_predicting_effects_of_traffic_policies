@@ -128,6 +128,7 @@ class MyGnn(torch.nn.Module):
             mode_stats_pred = mode_stats_pred.repeat_interleave(shape_mode_stats, dim=0)
             return node_predictions, mode_stats_pred
         
+        
         return node_predictions
     
     def define_gat_layers(self):
@@ -138,10 +139,9 @@ class MyGnn(torch.nn.Module):
         - List: Layers for GATConv.
         """
         layers = []
-        for idx in range(len(self.gat_conv) - 1):        
+        for idx in range(len(self.gat_conv) - 1):      
             # Transformer layer
-            layers.append((TransformerConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
-            # layers.append((torch_geometric.nn.GATConv(self.gat_conv[idx], self.gat_conv[idx + 1]), 'x, edge_index -> x'))
+            layers.append((TransformerConv(self.gat_conv[idx], int(self.gat_conv[idx + 1]/4), heads=4), 'x, edge_index -> x'))
             layers.append(nn.ReLU(inplace=True))
             if self.use_dropout:
                 layers.append(self.dropout_layer)
