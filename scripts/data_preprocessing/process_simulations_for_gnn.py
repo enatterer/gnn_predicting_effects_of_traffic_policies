@@ -167,10 +167,10 @@ def main():
     subdirs = list(set(glob.glob(subdirs_pattern)))
     subdirs.sort()
 
-    gdf_basecase_links = gpd.read_file('results/' + string_is_for_1pm + '_basecase_mean_links.geojson')
+    gdf_basecase_links = gpd.read_file('links_and_stats/' + string_is_for_1pm + '_basecase_mean_links.geojson')
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
 
-    gdf_basecase_mean_mode_stats = pd.read_csv('results/' + string_is_for_1pm + '_basecase_mean_mode_stats.csv', delimiter=',')
+    gdf_basecase_mean_mode_stats = pd.read_csv('links_and_stats/' + string_is_for_1pm + '_basecase_mean_mode_stats.csv', delimiter=',')
     districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
 
     result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, subdirs=subdirs)
