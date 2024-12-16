@@ -20,7 +20,9 @@ from sklearn.preprocessing import StandardScaler
 scripts_path = os.path.abspath(os.path.join('..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
+
 import gnn_io as gio
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -91,10 +93,15 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader):
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, node_features):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
+        print("Filtering node features...")
+        node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+        for data in datalist:
+            data.x = data.x[:, node_feature_filter]
+
         print("Splitting into subsets...")
         train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
@@ -237,9 +244,9 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 
-def setup_wandb(project_name, config):
+def setup_wandb(config):
     wandb.login()
-    wandb.init(project=project_name, config=config)
+    wandb.init(project=config['project_name'], name=config['unique_model_description'], config=config)
     return wandb.config
 
 def str_to_bool(value):

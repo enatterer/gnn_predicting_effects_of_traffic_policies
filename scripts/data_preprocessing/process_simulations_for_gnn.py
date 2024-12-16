@@ -11,7 +11,7 @@ import geopandas as gpd
 import torch
 from collections import defaultdict
 
-import processing_io as pio
+import data_preprocessing.processing_io as pio
 from torch_geometric.transforms import LineGraph
 
 from torch_geometric.data import Data, Batch
@@ -171,7 +171,7 @@ def main():
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
 
     gdf_basecase_mean_mode_stats = pd.read_csv('links_and_stats/' + string_is_for_1pm + '_basecase_mean_mode_stats.csv', delimiter=',')
-    districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
+    districts = gpd.read_file("/home/enatterer/Development/gnn_predicting_effects_of_traffic_policies/data/visualisation/districts_paris.geojson")
 
     result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, subdirs=subdirs)
     base_gdf = result_dic_output_links["base_network_no_policies"]

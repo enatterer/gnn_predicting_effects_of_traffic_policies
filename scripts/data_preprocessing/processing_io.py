@@ -31,7 +31,7 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.transforms import LineGraph
 
 
-districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
+districts = gpd.read_file("/home/enatterer/Development/gnn_predicting_effects_of_traffic_policies/data/visualisation/districts_paris.geojson")
 
 # paris_inside_bvd_peripherique = "../../data/paris_inside_bvd_per/referentiel-comptages-edit.shp"
 # gdf_paris_inside_bvd_per = gpd.read_file(paris_inside_bvd_peripherique)

@@ -18,6 +18,7 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
 
 import help_functions as hf
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 # Add the 'scripts' directory to the Python path
 scripts_path = os.path.abspath(os.path.join('..'))
@@ -47,13 +48,14 @@ PARAMETERS = [
     "use_gradient_clipping",
     "lr_scheduler_warmup_steps",
     "device_nr",
-    "unique_model_description"
+    "unique_model_description",
+    "node_features"
 ]
 
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_21_10_2024",
+        "project_name": "ablation_study",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "out_channels": args.out_channels,
@@ -71,14 +73,28 @@ def get_parameters(args):
         "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
         "device_nr": args.device_nr
     }
-    params["unique_model_description"] = (
-        f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-        f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-        f"use_dropout_{params['use_dropout']}_"
-        f"dropout_{params['dropout']}_"
-        f"predict_mode_stats_{params['predict_mode_stats']}"
-    )
+    
+    # params["unique_model_description"] = (
+    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
+    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
+    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
+    #     f"use_dropout_{params['use_dropout']}_"
+    #     f"dropout_{params['dropout']}_"
+    #     f"predict_mode_stats_{params['predict_mode_stats']}"
+    # )
+    
+    # for ablation study
+    
+    # params["unique_model_description"] = "all_features"
+    # params["node_features"] = [feat.name for feat in EdgeFeatures]
+
+    params["unique_model_description"] = "only_vol_and_capacity"
+    params["node_features"] = ["VOL_BASE_CASE",
+                               "CAPACITY_BASE_CASE",
+                               "CAPACITY_REDUCTION"]
+    
+    params['in_channels'] = len(params['node_features'])
+    
     return params
 
 def main():
@@ -137,9 +153,9 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
-        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader)
+        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, node_features= params['node_features'])
         
-        config = hf.setup_wandb(params['project_name'], {param: params[param] for param in PARAMETERS})
+        config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 
         gnn_instance = garch.MyGnn(in_channels=config.in_channels, 
                         out_channels=config.out_channels, 
