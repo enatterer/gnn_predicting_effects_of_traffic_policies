@@ -97,10 +97,6 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
-        print("Filtering node features...")
-        node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-        for data in datalist:
-            data.x = data.x[:, node_feature_filter]
 
         print("Splitting into subsets...")
         train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
@@ -112,15 +108,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         print(f"Test set saved to {test_set_path}")
         
         print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, directory_path=path_to_save_dataloader + "train_")
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, directory_path=path_to_save_dataloader + "train_")
         print("Train set normalized")      
         
         print("Normalizing validation set...")
-        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, directory_path=path_to_save_dataloader + "valid_")
+        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, directory_path=path_to_save_dataloader + "valid_")
         print("Validation set normalized")
         
         print("Normalizing test set...")
-        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, directory_path=path_to_save_dataloader + "test_")
+        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, directory_path=path_to_save_dataloader + "test_")
         print("Test set normalized")
         
         print("Creating train loader...")
@@ -159,11 +155,11 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         traceback.print_exc()
         raise
         
-def normalize_dataset(dataset_input, directory_path):
+def normalize_dataset(dataset_input, node_features, directory_path):
     data_list = [dataset_input.dataset[idx] for idx in dataset_input.indices]
 
     print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(data_list)
+    normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features)
     print("x features normalized")
     
     print("Fitting and normalizing pos features...")
@@ -181,22 +177,32 @@ def normalize_dataset(dataset_input, directory_path):
     }
     return normalized_data_list, scalers_dict
 
-def normalize_x_features_batched(data_list, batch_size=100):
+def normalize_x_features_batched(data_list, node_features, batch_size=100):
     scaler = StandardScaler()
+    continuous_feat = [0, 1, 2, 3, 4, 6]
     
     # First pass: Fit the scaler
     for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
         batch = data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x.numpy() for data in batch])
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         scaler.partial_fit(batch_x)
     
     # Second pass: Transform the data
     for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
         batch = data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x.numpy() for data in batch])
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = scaler.transform(batch_x)
         for j, data in enumerate(batch):
-            data.x = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=data.x.dtype)
+            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=data.x.dtype)
+
+    # Filter features
+    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+    for data in data_list:
+        data.x = data.x[:, node_feature_filter]
+
+    # One-hot encode highway
+    if "HIGHWAY" in node_features:
+        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
     
     return data_list, scaler
 
@@ -296,3 +302,28 @@ def str_to_bool(value):
 #     gio.save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
 #     gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
 #     return train_loader, val_loader
+
+def one_hot_highway(datalist, idx):
+    
+    n_types = 6
+    mapping = {
+        -1: 4, # pt
+        0: 5, # other
+        1: 0, # primary
+        2: 1, # secondary
+        3: 2, # tertiary
+        4: 3, # residential
+        5: 5,
+        6: 5,
+        7: 5,
+        8: 5,
+        9: 5
+    }
+
+    for data in datalist:
+        
+        highway = data.x[:, idx].numpy()
+        mapped_highway = np.vectorize(mapping.get)(highway)
+        one_hot = np.eye(n_types)[mapped_highway]
+
+        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
