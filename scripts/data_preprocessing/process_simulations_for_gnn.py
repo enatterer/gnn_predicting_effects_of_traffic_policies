@@ -159,9 +159,10 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
 
 def main():
 
-    string_is_for_1pm = "pop_1pm"
+    # Path to raw simulation data
+    sim_input_path = "../../../matsim-ile-de-france/ile_de_france/data/"
 
-    sim_input_path = "/home/enatterer/Development/matsim-ile-de-france/ile_de_france/data/"
+    string_is_for_1pm = "pop_1pm"
     base_dir_sample_sim_input = sim_input_path + string_is_for_1pm + '_simulations/' + string_is_for_1pm + '_cap_reduction/'
     subdirs_pattern = os.path.join(base_dir_sample_sim_input, 'output_networks_*')
     subdirs = list(set(glob.glob(subdirs_pattern)))
@@ -171,7 +172,7 @@ def main():
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
 
     gdf_basecase_mean_mode_stats = pd.read_csv('links_and_stats/' + string_is_for_1pm + '_basecase_mean_mode_stats.csv', delimiter=',')
-    districts = gpd.read_file("/home/enatterer/Development/gnn_predicting_effects_of_traffic_policies/data/visualisation/districts_paris.geojson")
+    districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
 
     result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, subdirs=subdirs)
     base_gdf = result_dic_output_links["base_network_no_policies"]

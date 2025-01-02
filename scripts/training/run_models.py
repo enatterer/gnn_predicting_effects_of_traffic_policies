@@ -82,35 +82,19 @@ def get_parameters(args):
     #     f"dropout_{params['dropout']}_"
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
-    
-    ### Für ablation study ###
-    
-    # params["unique_model_description"] = "one_hot"
-    # params["node_features"] = [feat.name for feat in EdgeFeatures]
-    # params['in_channels'] = 18
 
-    # params["unique_model_description"] = "one_hot_wo_highway"
-    # params["node_features"] = [feat.name for feat in EdgeFeatures]
-    # params['node_features'].remove(EdgeFeatures.HIGHWAY.name) # out of memory issue
-    # params['in_channels'] = len(params['node_features'])
-
-    # params["unique_model_description"] = "only_vol_and_capacity"
-    # params["node_features"] = ["VOL_BASE_CASE",
-    #                            "CAPACITY_BASE_CASE",
-    #                            "CAPACITY_REDUCTION"]
-    # params['in_channels'] = len(params['node_features'])
-
-    # params["unique_model_description"] = "without_allowed_modes_and_highway"
-    params["unique_model_description"] = "start_pos"
-    params["node_features"] = ["VOL_BASE_CASE",
-                               "CAPACITY_BASE_CASE",
-                               "CAPACITY_REDUCTION",
-                               "FREESPEED",
-                               "LENGTH"]
+    # Normal run with all features
+    params["unique_model_description"] = "all_features"
+    params["node_features"] = [feat.name for feat in EdgeFeatures]
     params['in_channels'] = len(params['node_features'])
 
-    # params["unique_model_description"] = "all_features"
-    # params["node_features"] = [feat.name for feat in EdgeFeatures]
+    # # Für ablation study
+    # params["unique_model_description"] = "without_allowed_modes_and_highway"
+    # params["node_features"] = ["VOL_BASE_CASE",
+    #                            "CAPACITY_BASE_CASE",
+    #                            "CAPACITY_REDUCTION",
+    #                            "FREESPEED",
+    #                            "LENGTH"]
     # params['in_channels'] = len(params['node_features'])
     
     return params

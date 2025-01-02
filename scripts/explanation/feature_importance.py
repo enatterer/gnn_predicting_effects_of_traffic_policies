@@ -14,7 +14,7 @@ import training.help_functions as hf
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 # Load test data
-run_path = '/home/enatterer/Development/gnn_predicting_effects_of_traffic_policies/data/runs_21_10_2024/pnc_local_[256]_pnc_global_[512]_gat_conv_[128_256_512_256]_use_dropout_False_dropout_0.3_predict_mode_stats_False'
+run_path = '../../data/runs_21_10_2024/pnc_local_[256]_pnc_global_[512]_gat_conv_[128_256_512_256]_use_dropout_False_dropout_0.3_predict_mode_stats_False'
 
 with open(os.path.join(run_path, 'data_created_during_training/test_loader_params.json')) as f:
     test_loader_params = json.load(f)
