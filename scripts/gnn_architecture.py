@@ -63,7 +63,7 @@ class MyGnn(torch.nn.Module):
         # self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=False)
         # self.point_net_conv_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
 
-        # Use only start points
+        # Use only end points
         self.point_net_conv = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=True)
         
         self.read_out_node_predictions = nn.Linear(64, 1)
@@ -111,8 +111,8 @@ class MyGnn(torch.nn.Module):
         # x = self.point_net_conv_2(x, pos2, edge_index)
         # x = self.point_net_conv_3(x, pos3, edge_index)
 
-        # Use only start points
-        pos = data.pos[:, 0, :]
+        # Use only end points
+        pos = data.pos[:, 1, :]
         x = self.point_net_conv(x, pos, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
