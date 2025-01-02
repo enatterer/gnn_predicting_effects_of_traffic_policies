@@ -8,4 +8,4 @@ scripts/__pycache__/
 scripts/visualization/__pycache__/
 scripts/visualization/results/
 scripts/testing_and_evaluation/results/
-scripts/data_processing/links_and_stats/**
+scripts/data_processing/links_and_stats/
