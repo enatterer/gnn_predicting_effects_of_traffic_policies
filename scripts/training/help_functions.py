@@ -178,7 +178,16 @@ def normalize_dataset(dataset_input, node_features, directory_path):
     return normalized_data_list, scalers_dict
 
 def normalize_x_features_batched(data_list, node_features, batch_size=100):
+    """
+    Normalize the continuous node features (0 mean and unit variance).
+    Categorical features (Allowed Modes) are left as booleans (0 or 1).
+    'HIGHWAY' feature is one-hot encoded.
+
+    Finally, features are filtered to only include the ones specified in node_features. 
+    """
     scaler = StandardScaler()
+
+    # VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITIES_NEW, CAPACITY_REDUCTION, FREESPEED, LENGTH
     continuous_feat = [0, 1, 2, 3, 4, 6]
     
     # First pass: Fit the scaler
@@ -304,6 +313,11 @@ def str_to_bool(value):
 #     return train_loader, val_loader
 
 def one_hot_highway(datalist, idx):
+
+    """
+    One-hot encodes the 'HIGHWAY' feature and removes the original one.
+    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
+    """
     
     n_types = 6
     mapping = {

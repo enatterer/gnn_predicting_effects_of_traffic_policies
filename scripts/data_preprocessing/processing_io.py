@@ -140,8 +140,6 @@ def analyze_geodataframes(result_dic: dict, consider_only_highway_edges: bool = 
         base_gdf = base_gdf[base_gdf["highway"].isin(highway_types)]
     base_vol_car = round(base_gdf['vol_car'].sum())
     base_capacity_car = round(base_gdf['capacity'].sum())
-    # print(f"Base, volume: {base_vol_car}")
-    # print(f"Base, capacity: {base_capacity_car}")
 
     for policy, gdf in result_dic.items():
         if (policy == "base_network_no_policies"):
@@ -153,8 +151,6 @@ def analyze_geodataframes(result_dic: dict, consider_only_highway_edges: bool = 
         total_capacity_car = round(gdf['capacity'].sum())
         vol_car_increase = ((total_vol_car - base_vol_car) / base_vol_car) * 100
         capacity_car_increase = ((total_capacity_car - base_capacity_car) / base_capacity_car) * 100
-        # print(f"With policy, volume: {total_vol_car}")
-        # print(f"With policy, capacity: {total_capacity_car}")
         print(f"Total change in 'vol_car': {vol_car_increase:.2f}%")
         print(f"Total change in capacity (car edges): {capacity_car_increase:.2f}%")
         
@@ -981,98 +977,3 @@ def get_link_geometries(links_gdf_input, districts_input):
         raise ValueError("The resulting tensor does not have the expected size of (20, 2)")
     district_centroids_tensor_padded = district_centroids_tensor.unsqueeze(1).expand(-1, 3, -1)
     return edge_start_point_tensor,stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes
-
-
-# def process_result_dic(result_dic):
-#     datalist = []
-#     linegraph_transformation = LineGraph()
-#     base_network_no_policies = result_dic.get("base_network_no_policies")
-#     vol_base_case = base_network_no_policies['vol_car'].values
-#     capacity_base_case = base_network_no_policies['capacity'].values
-
-#     for key, df in result_dic.items():
-#         if isinstance(df, pd.DataFrame):
-#             gdf = gpd.GeoDataFrame(df, geometry='geometry')
-#             gdf.crs = "EPSG:2154"  # Assuming the original CRS is EPSG:2154
-#             gdf.to_crs("EPSG:4326", inplace=True)
-            
-#             # Create dictionaries for nodes and edges
-#             nodes = pd.concat([gdf['from_node'], gdf['to_node']]).unique()
-#             node_to_idx = {node: idx for idx, node in enumerate(nodes)}
-            
-#             gdf['from_idx'] = gdf['from_node'].map(node_to_idx)
-#             gdf['to_idx'] = gdf['to_node'].map(node_to_idx)
-            
-#             edges = gdf[['from_idx', 'to_idx']].values
-#             # edge_car_volumes = gdf['vol_car'].values
-#             edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
-#             # if vol_base_case == 0:
-#             #     if edge_car_volume_difference == 0:
-#             #         edge_car_volume_difference_in_percent = 0
-#             #     else:
-#             #         edge_car_volume_difference_in_percent = 1
-#             #         print("now it is not zero where before it was zero")
-                    
-#             # edge_car_volume_difference_in_percent = edge_car_volume_difference / vol_base_case 
-            
-#             # Initialize the percentage difference array
-#             # edge_car_volume_difference_in_percent = np.zeros_like(edge_car_volume_difference, dtype=float)
-
-#             # # Handle cases where vol_base_case is zero
-#             # for i in range(len(vol_base_case)):
-#             #     if vol_base_case[i] == 0:
-#             #         if edge_car_volume_difference[i] == 0:
-#             #             edge_car_volume_difference_in_percent[i] = 0
-#             #         else:
-#             #             edge_car_volume_difference_in_percent[i] = 100  # or any large number to indicate infinity
-#             #             print(f"Edge {i}: now it is not zero where before it was zero")
-#             #     else:
-#             #         edge_car_volume_difference_in_percent[i] = edge_car_volume_difference[i] / vol_base_case[i] * 100
-
-#             # # Add these calculations as new columns to the GeoDataFrame
-#             # gdf['edge_car_volume_difference'] = edge_car_volume_difference
-#             # gdf['edge_car_volume_difference_in_percent'] = edge_car_volume_difference_in_percent
-
-
-#             capacities = gdf['capacity'].values
-#             capacity_reduction = gdf['capacity'].values - capacity_base_case
-#             # freespeeds = gdf['freespeed'].values  
-#             # lengths = gdf['length'].values  
-#             # modes = gdf['modes'].values
-#             # modes_encoded = np.vectorize(encode_modes)(modes)
-#             highway = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
-            
-#             edge_positions = np.array([((geom.coords[0][0] + geom.coords[-1][0]) / 2, 
-#                                         (geom.coords[0][1] + geom.coords[-1][1]) / 2) 
-#                                        for geom in gdf.geometry])
-
-#             # Convert lists to tensors
-#             edge_index = torch.tensor(edges, dtype=torch.long).t().contiguous()
-#             edge_positions_tensor = torch.tensor(edge_positions, dtype=torch.float)
-#             x = torch.zeros((len(nodes), 1), dtype=torch.float)
-            
-#             # Create Data object
-#             target_values = torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
-#             data = Data(edge_index=edge_index, x=x, pos=edge_positions_tensor)
-            
-#             # Transform to line graph
-#             linegraph_data = linegraph_transformation(data)
-            
-#             # Prepare the x for line graph: index and capacity
-#             # linegraph_x = torch.tensor(np.column_stack((capacities, vol_base_case, highway)), dtype=torch.float)
-#             linegraph_x = torch.tensor(np.column_stack((capacities, capacity_reduction, vol_base_case, highway)), dtype=torch.float)
-
-#             linegraph_data.x = linegraph_x
-            
-#             # Target tensor for car volumes
-#             linegraph_data.y = target_values
-            
-#             if linegraph_data.validate(raise_on_error=True):
-#                 datalist.append(linegraph_data)
-#             else:
-#                 print("Invalid line graph data")
-                
-#     # Convert dataset to a list of dictionaries
-#     data_dict_list = [{'x': lg_data.x, 'edge_index': lg_data.edge_index, 'pos': lg_data.pos, 'y': lg_data.y} for lg_data in datalist]
-    
-#     return data_dict_list

@@ -83,19 +83,19 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    # Normal run with all features
-    params["unique_model_description"] = "all_features"
-    params["node_features"] = [feat.name for feat in EdgeFeatures]
-    params['in_channels'] = len(params['node_features'])
-
-    # # Für ablation study
-    # params["unique_model_description"] = "without_allowed_modes_and_highway"
-    # params["node_features"] = ["VOL_BASE_CASE",
-    #                            "CAPACITY_BASE_CASE",
-    #                            "CAPACITY_REDUCTION",
-    #                            "FREESPEED",
-    #                            "LENGTH"]
+    # # Run with all features
+    # params["unique_model_description"] = "all_features"
+    # params["node_features"] = [feat.name for feat in EdgeFeatures]
     # params['in_channels'] = len(params['node_features'])
+
+    # Für ablation study
+    params["unique_model_description"] = "start_and_end_pos"
+    params["node_features"] = ["VOL_BASE_CASE",
+                               "CAPACITY_BASE_CASE",
+                               "CAPACITY_REDUCTION",
+                               "FREESPEED",
+                               "LENGTH"]
+    params['in_channels'] = len(params['node_features'])
     
     return params
 

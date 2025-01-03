@@ -1,3 +1,11 @@
+"""
+This script calculates feature importance for the GNN model using the
+GNNExplainer algorithm. It loads test data and the best model from a training run,
+wraps the model to make it compatible with the explainer, and computes feature
+importance scores for the input node features. The results are averaged over all test
+batches and plotted as a bar chart.
+"""
+
 import os
 import json
 import torch
@@ -50,16 +58,16 @@ class ModelWrapper(torch.nn.Module):
 
 wrapped_model = ModelWrapper(model)
 
-# Explainer for feature importance (phenomenon: wrt real target)
+# Explainer for feature importance
 explainer = Explainer(model=wrapped_model,
                       algorithm=GNNExplainer(),
-                      explanation_type='phenomenon',
-                      node_mask_type='attributes',
+                      explanation_type='phenomenon', # wrt real target
+                      node_mask_type='attributes', # mask each feature across all nodes
                       model_config=dict(mode='regression',
                                         task_level='node',
                                         return_type='raw'))
 
-# Get results on a all batches, average over all nodes
+# Get results on all batches, average over all nodes
 explanations = []
 for i, batch in enumerate(tqdm(test_loader, desc="Explaining batches")):
     explanation = explainer(x=batch.x,
