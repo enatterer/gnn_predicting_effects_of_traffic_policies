@@ -93,7 +93,7 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, node_features):
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
@@ -106,6 +106,12 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         test_set_path = os.path.join(path_to_save_dataloader, 'test_set.pt')
         torch.save(test_set, test_set_path)
         print(f"Test set saved to {test_set_path}")
+
+        node_features = [feat.name for feat in EdgeFeatures] if use_all_features else ["VOL_BASE_CASE",
+                                                                                       "CAPACITY_BASE_CASE",
+                                                                                       "CAPACITY_REDUCTION",
+                                                                                       "FREESPEED",
+                                                                                       "LENGTH"]        
         
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, directory_path=path_to_save_dataloader + "train_")
