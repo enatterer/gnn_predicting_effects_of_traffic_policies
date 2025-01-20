@@ -54,7 +54,7 @@ PARAMETERS = [
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "ablation_study",
+        "project_name": "runs_01_2025",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "use_all_features": args.use_all_features,
@@ -136,7 +136,7 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         params = get_parameters(args)
         
-        # Create base directory for the run
+        # Create base directory for the runcon
         base_dir = '../../data/' + params['project_name'] + '/'
         unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)

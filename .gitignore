@@ -9,4 +9,5 @@ scripts/visualization/__pycache__/
 scripts/visualization/results/
 scripts/testing_and_evaluation/results/
 scripts/data_preprocessing/__pycache__/
+scripts/data_preprocessing/links_and_stats/
 scripts/explanation/__pycache__/
