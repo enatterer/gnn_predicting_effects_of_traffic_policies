@@ -58,10 +58,10 @@ class MyGnn(torch.nn.Module):
 
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
-        
+
+        # Use start + end pos
         self.point_net_conv_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
-        self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=False)
-        self.point_net_conv_3 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
+        self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
         
         self.read_out_node_predictions = nn.Linear(64, 1)
         
@@ -99,14 +99,12 @@ class MyGnn(torch.nn.Module):
         
         x = data.x.to(self.dtype)
         edge_index = data.edge_index
-        
-        pos1 = data.pos[:, 0, :]  # First set of positions
-        pos2 = data.pos[:, 1, :]  # Second set of positions
-        pos3 = data.pos[:, 2, :]  # Third set of positions
-        
+
+        # Use start + end pos
+        pos1 = data.pos[:, 0, :]  # Start position
+        pos2 = data.pos[:, 1, :]  # End position
         x = self.point_net_conv_1(x, pos1, edge_index)
         x = self.point_net_conv_2(x, pos2, edge_index)
-        x = self.point_net_conv_3(x, pos3, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
         

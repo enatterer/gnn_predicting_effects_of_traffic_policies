@@ -1,3 +1,11 @@
+"""
+This script calculates feature importance for the GNN model using the
+GNNExplainer algorithm. It loads test data and the best model from a training run,
+wraps the model to make it compatible with the explainer, and computes feature
+importance scores for the input node features. The results are averaged over all test
+batches and plotted as a bar chart.
+"""
+
 import os
 import json
 import torch
@@ -14,7 +22,7 @@ import training.help_functions as hf
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 # Load test data
-run_path = '/home/enatterer/Development/gnn_predicting_effects_of_traffic_policies/data/runs_21_10_2024/pnc_local_[256]_pnc_global_[512]_gat_conv_[128_256_512_256]_use_dropout_False_dropout_0.3_predict_mode_stats_False'
+run_path = '../../data/runs_21_10_2024/pnc_local_[256]_pnc_global_[512]_gat_conv_[128_256_512_256]_use_dropout_False_dropout_0.3_predict_mode_stats_False'
 
 with open(os.path.join(run_path, 'data_created_during_training/test_loader_params.json')) as f:
     test_loader_params = json.load(f)
@@ -50,16 +58,16 @@ class ModelWrapper(torch.nn.Module):
 
 wrapped_model = ModelWrapper(model)
 
-# Explainer for feature importance (phenomenon: wrt real target)
+# Explainer for feature importance
 explainer = Explainer(model=wrapped_model,
                       algorithm=GNNExplainer(),
-                      explanation_type='phenomenon',
-                      node_mask_type='attributes',
+                      explanation_type='phenomenon', # wrt real target
+                      node_mask_type='attributes', # mask each feature across all nodes
                       model_config=dict(mode='regression',
                                         task_level='node',
                                         return_type='raw'))
 
-# Get results on a all batches, average over all nodes
+# Get results on all batches, average over all nodes
 explanations = []
 for i, batch in enumerate(tqdm(test_loader, desc="Explaining batches")):
     explanation = explainer(x=batch.x,

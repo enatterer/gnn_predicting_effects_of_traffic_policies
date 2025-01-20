@@ -18,7 +18,6 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
 
 import help_functions as hf
-from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 # Add the 'scripts' directory to the Python path
 scripts_path = os.path.abspath(os.path.join('..'))
@@ -34,6 +33,7 @@ PARAMETERS = [
     "project_name",
     "predict_mode_stats",
     "in_channels",
+    "use_all_features",
     "out_channels",
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
@@ -48,8 +48,7 @@ PARAMETERS = [
     "use_gradient_clipping",
     "lr_scheduler_warmup_steps",
     "device_nr",
-    "unique_model_description",
-    "node_features"
+    "unique_model_description"
 ]
 
 def get_parameters(args):
@@ -58,6 +57,7 @@ def get_parameters(args):
         "project_name": "runs_01_2025",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
+        "use_all_features": args.use_all_features,
         "out_channels": args.out_channels,
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
@@ -74,26 +74,14 @@ def get_parameters(args):
         "device_nr": args.device_nr
     }
     
-    # params["unique_model_description"] = (
-    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-    #     f"use_dropout_{params['use_dropout']}_"
-    #     f"dropout_{params['dropout']}_"
-    #     f"predict_mode_stats_{params['predict_mode_stats']}"
-    # )
-    
-    # for ablation study
-    
-    # params["unique_model_description"] = "all_features"
-    # params["node_features"] = [feat.name for feat in EdgeFeatures]
-
-    params["unique_model_description"] = "only_vol_and_capacity"
-    params["node_features"] = ["VOL_BASE_CASE",
-                               "CAPACITY_BASE_CASE",
-                               "CAPACITY_REDUCTION"]
-    
-    params['in_channels'] = len(params['node_features'])
+    params["unique_model_description"] = (
+        f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
+        f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
+        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
+        f"use_dropout_{params['use_dropout']}_"
+        f"dropout_{params['dropout']}_"
+        f"predict_mode_stats_{params['predict_mode_stats']}"
+    )
     
     return params
 
@@ -120,7 +108,8 @@ def main():
         print(f"An error occurred: {str(e)}")
     
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--in_channels", type=int, default=13, help="The number of input channels.")
+    parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
+    parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
@@ -153,7 +142,7 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
-        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, node_features= params['node_features'])
+        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, use_all_features= params['use_all_features'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 
