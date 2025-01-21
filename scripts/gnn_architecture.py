@@ -30,8 +30,10 @@ class MyGnn(torch.nn.Module):
                 gat_conv_layer_structure: list = [], 
                 dropout: float = 0.0, 
                 use_dropout: bool = False,
+                use_monte_carlo_dropout: bool = False,
                 predict_mode_stats: bool = False,
-                dtype: torch.dtype = torch.float32):
+                dtype: torch.dtype = torch.float32, 
+                ):
         
         """
         Initialize the GNN model with specified configurations.
@@ -44,6 +46,7 @@ class MyGnn(torch.nn.Module):
         - gat_conv_layer_structure (list): Layer structure for GATConv layers.
         - dropout (float, optional): Dropout rate. Default is 0.0.
         - use_dropout (bool, optional): Whether to use dropout. Default is False.
+        - use_monte_carlo_dropout (bool, optional): Whether or not to use Monte Carlo Dropout. It does make the inference slower. Note that it only makes sense to have use_monte_carlo_dropout = True if use_dropout = True.
         - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
         """
         super(MyGnn, self).__init__()
@@ -53,13 +56,16 @@ class MyGnn(torch.nn.Module):
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv = gat_conv_layer_structure
+        self.predict_mode_stats = predict_mode_stats
         self.use_dropout = use_dropout
         self.dropout = dropout
-        self.predict_mode_stats = predict_mode_stats
-
+        self.use_monte_carlo_dropout = use_monte_carlo_dropout
+        # Ensure logical consistency
+        if self.use_monte_carlo_dropout and not self.use_dropout:
+            raise ValueError("use_monte_carlo_dropout requires use_dropout to be True")
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
-
+       
         # Use start + end pos
         self.point_net_conv_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
         self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
@@ -97,7 +103,6 @@ class MyGnn(torch.nn.Module):
         Returns:
         - torch.Tensor: Output features after passing through the model.
         """
-        
         x = data.x.to(self.dtype)
         edge_index = data.edge_index
 
@@ -237,6 +242,7 @@ class MyGnn(torch.nn.Module):
         if hasattr(m, 'att_dst') and m.att_dst is not None:
             init.xavier_normal_(m.att_dst)
 
+
 def train(model: nn.Module, 
           config: object = None, 
           loss_fct: nn.Module = None, 
@@ -258,7 +264,6 @@ def train(model: nn.Module,
     - valid_dl (DataLoader, optional): DataLoader for validation data.
     - device (torch.device, optional): Device to use for training.
     - early_stopping (object, optional): Early stopping mechanism.
-    - accumulation_steps (int, optional): Number of steps for gradient accumulation. Default is 3.
     - model_save_path (str, optional): Path to save the best model.
 
     Returns:
@@ -321,28 +326,52 @@ def train(model: nn.Module,
             scaler.update()
             optimizer.zero_grad()
             
+        # Validation step
         if config.predict_mode_stats:
-            val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                config=config,
+                model=model,
+                dataset=valid_dl,
+                loss_func=loss_fct,
+                device=device
+            )
             wandb.log({
-                "val_loss": val_loss, 
-                "epoch": epoch, 
-                "lr": lr, 
-                "r^2": r_squared, 
-                "spearman": spearman_corr, 
+                "val_loss": val_loss,
+                "epoch": epoch,
+                "lr": lr,
+                "r^2": r_squared,
+                "spearman": spearman_corr,
                 "pearson": pearson_corr,
-                "val_loss_node_predictions": val_loss_node_predictions, 
+                "val_loss_node_predictions": val_loss_node_predictions,
                 "val_loss_mode_stats": val_loss_mode_stats
             })
         else:
-            val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
+                config=config,
+                model=model,
+                dataset=valid_dl,
+                loss_func=loss_fct,
+                device=device
+            )
             wandb.log({
-                "val_loss": val_loss, 
-                "epoch": epoch, 
-                "lr": lr, 
-                "r^2": r_squared, 
-                "spearman": spearman_corr, 
+                "val_loss": val_loss,
+                "epoch": epoch,
+                "lr": lr,
+                "r^2": r_squared,
+                "spearman": spearman_corr,
                 "pearson": pearson_corr
             })
+
+        # Monte Carlo Dropout Logging
+        if config.use_monte_carlo_dropout:
+            data_example = next(iter(valid_dl))  # Use one batch from the validation loader
+            mean_prediction, uncertainty = mc_dropout_predict(model, data_example, num_samples=50, device=device)
+            if epoch % 10 == 0:
+                wandb.log({
+                    "mc_dropout_uncertainty_mean": np.mean(uncertainty),
+                    "mc_dropout_uncertainty_std": np.std(uncertainty)
+                })
+
         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
         
         if val_loss < best_val_loss:
@@ -360,7 +389,6 @@ def train(model: nn.Module,
                 'optimizer_state_dict': optimizer.state_dict(),
                 'best_val_loss': best_val_loss,
                 'val_loss': val_loss,
-                # 'r_squared': r_squared
             }, checkpoint_path)
             print(f'Checkpoint saved to {checkpoint_path}')
         
@@ -380,47 +408,81 @@ def validate_model_during_training(config: object,
                                    loss_func: nn.Module, 
                                    device: torch.device) -> tuple:
     """
-    Validate the model during training and compute validation loss and R^2 score.
+    Validate the model during training, with support for Monte Carlo Dropout and mode stats predictions.
 
     Parameters:
-    - model (nn.Module): The model to validate.
-    - dataset (DataLoader): DataLoader for validation data.
-    - loss_func (nn.Module): Loss function to compute validation loss.
-    - device (torch.device): Device to use for validation.
+    - config (object): Configuration object with flags and parameters.
+    - model (nn.Module): The GNN model.
+    - dataset (DataLoader): Validation dataset loader.
+    - loss_func (nn.Module): Loss function for validation.
+    - device (torch.device): Device to perform validation on.
 
     Returns:
-    - tuple: Total validation loss and R^2 score.
+    - tuple: Validation metrics including loss, R^2, Spearman, and Pearson correlations.
     """
     model.eval()
     val_loss = 0
     num_batches = 0
     actual_node_targets = []
     node_predictions = []
-    
-    with torch.inference_mode():
+    mode_stats_targets = []
+    mode_stats_predictions = []
+
+    # Choose the appropriate inference mode
+    with torch.inference_mode() if not config.use_monte_carlo_dropout else torch.no_grad():
         for idx, data in enumerate(dataset):
             data = data.to(device)
-            input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
+            targets_node_predictions = data.y
+            targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
+
+            # Monte Carlo Dropout Inference
+            if config.use_monte_carlo_dropout:
+                mean_prediction, uncertainty = mc_dropout_predict(
+                    model, data, num_samples=50, device=device
+                )
+                node_predicted = torch.tensor(mean_prediction).to(device)
+                mode_stats_pred = None  # MC Dropout currently only affects node predictions
+            else:
+                # Standard Forward Pass
+                if config.predict_mode_stats:
+                    node_predicted, mode_stats_pred = model(data)
+                else:
+                    node_predicted = model(data)
+
+            # Compute validation losses
             if config.predict_mode_stats:
-                node_predicted, mode_stats_pred = model(data)
                 val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()
                 val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
+                mode_stats_targets.append(targets_mode_stats)
+                mode_stats_predictions.append(mode_stats_pred)
             else:
-                node_predicted = model(data)
                 val_loss += loss_func(node_predicted, targets_node_predictions).item()
-                
+
+            # Collect predictions and targets
             actual_node_targets.append(targets_node_predictions)
             node_predictions.append(node_predicted)
             num_batches += 1
-            
+
+    # Compute overall metrics
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
-    actual_node_targets=torch.cat(actual_node_targets)
+    actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
+
+    # Handle mode stats results if enabled
     if config.predict_mode_stats:
-        return total_validation_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats
+        mode_stats_targets = torch.cat(mode_stats_targets)
+        mode_stats_predictions = torch.cat(mode_stats_predictions)
+        return (
+            total_validation_loss,
+            r_squared,
+            spearman_corr,
+            pearson_corr,
+            val_loss_node_predictions,
+            val_loss_mode_stats,
+        )
     else:
         return total_validation_loss, r_squared, spearman_corr, pearson_corr
     
@@ -438,8 +500,6 @@ def compute_spearman_pearson(preds: torch.Tensor, targets: torch.Tensor) -> tupl
     """
     preds = preds.cpu().detach().numpy().flatten()  
     targets = targets.cpu().detach().numpy().flatten()
-    print(f"Shape of preds: {preds.shape}")
-    print(f"Shape of targets: {targets.shape}")
     spearman_corr, _ = spearmanr(preds, targets)
     pearson_corr, _ = pearsonr(preds, targets)
     return spearman_corr, pearson_corr
@@ -460,6 +520,40 @@ def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor
     ss_res = torch.sum((targets - preds) ** 2)
     r2 = 1 - ss_res / ss_tot
     return r2
+
+
+def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device = None):
+    """
+    Perform Monte Carlo Dropout inference to estimate uncertainty.
+
+    Parameters:
+    - model (nn.Module): The GNN model with dropout layers.
+    - data (torch_geometric.data.Data): Input graph data.
+    - num_samples (int): Number of stochastic forward passes.
+    - device (torch.device): Device to run the model.
+
+    Returns:
+    - tuple: Mean predictions and uncertainty (variance) for each node or edge.
+    """
+    model = model.to(device)
+    predictions = []
+
+    model.train()  # Activate dropout layers during inference
+    with torch.no_grad():
+        for _ in range(num_samples):
+            pred = model(data.to(device))
+            if isinstance(pred, tuple):  # If multiple outputs (e.g., mode_stats)
+                pred = pred[0]
+            predictions.append(pred.cpu().numpy())  # Collect predictions
+
+    # Stack predictions and calculate statistics
+    predictions = np.stack(predictions, axis=0)  # Shape: (num_samples, num_predictions)
+    mean_prediction = predictions.mean(axis=0)  # Mean prediction
+    uncertainty = predictions.std(axis=0)       # Uncertainty (standard deviation)
+
+    return mean_prediction, uncertainty
+
+
 
 def get_latest_checkpoint(checkpoint_dir: str) -> str:
     """
@@ -663,3 +757,195 @@ class LinearWarmupCosineDecayScheduler:
 #         if epoch <= self.warmup:
 #             lr_factor *= epoch * 1.0 / self.warmup
 #         return lr_factor
+
+
+# BACKUP FUNCTIONS BEFORE INTRODUCING MONTE CARLO DROPOUT
+
+
+
+# def train(model: nn.Module, 
+#           config: object = None, 
+#           loss_fct: nn.Module = None, 
+#           optimizer: optim.Optimizer = None, 
+#           train_dl: DataLoader = None, 
+#           valid_dl: DataLoader = None, 
+#           device: torch.device = None, 
+#           early_stopping: object = None, 
+#           model_save_path: str = None) -> tuple:
+#     """
+#     Train the GNN model.
+
+#     Parameters:
+#     - model (nn.Module): The model to train.
+#     - config (object, optional): Configuration object containing training parameters.
+#     - loss_fct (nn.Module, optional): Loss function for training.
+#     - optimizer (optim.Optimizer, optional): Optimizer for model training.
+#     - train_dl (DataLoader, optional): DataLoader for training data.
+#     - valid_dl (DataLoader, optional): DataLoader for validation data.
+#     - device (torch.device, optional): Device to use for training.
+#     - early_stopping (object, optional): Early stopping mechanism.
+#     - accumulation_steps (int, optional): Number of steps for gradient accumulation. Default is 3.
+#     - model_save_path (str, optional): Path to save the best model.
+
+#     Returns:
+#     - tuple: Validation loss and the best epoch.
+#     """
+#     scaler = GradScaler()
+#     total_steps = config.num_epochs * len(train_dl)
+#     scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/4)
+#     best_val_loss = float('inf')
+    
+#     # Create a directory for checkpoints if it doesn't exist
+#     checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
+#     os.makedirs(checkpoint_dir, exist_ok=True)
+    
+#     for epoch in range(config.num_epochs):
+#         model.train()
+#         optimizer.zero_grad()
+#         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
+#             step = epoch * len(train_dl) + idx
+#             lr = scheduler.get_lr(step)
+#             for param_group in optimizer.param_groups:
+#                 param_group['lr'] = lr
+                
+#             data = data.to(device)
+#             targets_node_predictions = data.y
+#             targets_mode_stats = data.mode_stats
+           
+#             with autocast():
+#                 # Forward pass
+#                 if config.predict_mode_stats:
+#                     predicted, mode_stats_pred = model(data)
+#                     train_loss_node_predictions = loss_fct(predicted, targets_node_predictions)
+#                     train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats)
+#                     train_loss = train_loss_node_predictions + train_loss_mode_stats
+#                 else:
+#                     predicted = model(data)
+#                     train_loss = loss_fct(predicted, targets_node_predictions)
+      
+#             # Backward pass
+#             scaler.scale(train_loss).backward() 
+            
+#             # Gradient clipping
+#             if config.use_gradient_clipping:
+#                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+#             if (idx + 1) % config.gradient_accumulation_steps == 0:
+#                 scaler.step(optimizer)
+#                 scaler.update()
+#                 optimizer.zero_grad()
+                
+#             # Do not log train loss at every iteration, as it uses CPU
+#             if (idx + 1) % 10 == 0:
+#                 if config.predict_mode_stats:
+#                     wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
+#                 else:   
+#                     wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
+        
+#         if len(train_dl) % config.gradient_accumulation_steps != 0:
+#             scaler.step(optimizer)
+#             scaler.update()
+#             optimizer.zero_grad()
+            
+#         if config.predict_mode_stats:
+#             val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+#             wandb.log({
+#                 "val_loss": val_loss, 
+#                 "epoch": epoch, 
+#                 "lr": lr, 
+#                 "r^2": r_squared, 
+#                 "spearman": spearman_corr, 
+#                 "pearson": pearson_corr,
+#                 "val_loss_node_predictions": val_loss_node_predictions, 
+#                 "val_loss_mode_stats": val_loss_mode_stats
+#             })
+#         else:
+#             val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+#             wandb.log({
+#                 "val_loss": val_loss, 
+#                 "epoch": epoch, 
+#                 "lr": lr, 
+#                 "r^2": r_squared, 
+#                 "spearman": spearman_corr, 
+#                 "pearson": pearson_corr
+#             })
+#         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+        
+#         if val_loss < best_val_loss:
+#             best_val_loss = val_loss   
+#             if model_save_path:         
+#                 torch.save(model.state_dict(), model_save_path)
+#                 print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
+        
+#         # Save checkpoint
+#         if epoch % 20 == 0:
+#             checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+#             torch.save({
+#                 'epoch': epoch,
+#                 'model_state_dict': model.state_dict(),
+#                 'optimizer_state_dict': optimizer.state_dict(),
+#                 'best_val_loss': best_val_loss,
+#                 'val_loss': val_loss,
+#                 # 'r_squared': r_squared
+#             }, checkpoint_path)
+#             print(f'Checkpoint saved to {checkpoint_path}')
+        
+#         early_stopping(val_loss)
+#         if early_stopping.early_stop:
+#             print("Early stopping triggered. Stopping training.")
+#             break
+    
+#     print("Best validation loss: ", best_val_loss)
+#     wandb.summary["best_val_loss"] = best_val_loss
+#     wandb.finish()
+#     return val_loss, epoch
+
+# def validate_model_during_training(config: object, 
+#                                    model: nn.Module, 
+#                                    dataset: DataLoader, 
+#                                    loss_func: nn.Module, 
+#                                    device: torch.device) -> tuple:
+#     """
+#     Validate the model during training and compute validation loss and R^2 score.
+
+#     Parameters:
+#     - model (nn.Module): The model to validate.
+#     - dataset (DataLoader): DataLoader for validation data.
+#     - loss_func (nn.Module): Loss function to compute validation loss.
+#     - device (torch.device): Device to use for validation.
+
+#     Returns:
+#     - tuple: Total validation loss and R^2 score.
+#     """
+#     model.eval()
+#     val_loss = 0
+#     num_batches = 0
+#     actual_node_targets = []
+#     node_predictions = []
+    
+#     with torch.inference_mode():
+#         for idx, data in enumerate(dataset):
+#             data = data.to(device)
+#             input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
+#             if config.predict_mode_stats:
+#                 node_predicted, mode_stats_pred = model(data)
+#                 val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()
+#                 val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
+#                 val_loss += val_loss_node_predictions + val_loss_mode_stats
+#             else:
+#                 node_predicted = model(data)
+#                 val_loss += loss_func(node_predicted, targets_node_predictions).item()
+                
+#             actual_node_targets.append(targets_node_predictions)
+#             node_predictions.append(node_predicted)
+#             num_batches += 1
+            
+#     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
+#     actual_node_targets=torch.cat(actual_node_targets)
+#     node_predictions = torch.cat(node_predictions)
+#     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
+#     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
+#     if config.predict_mode_stats:
+#         return total_validation_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats
+#     else:
+#         return total_validation_loss, r_squared, spearman_corr, pearson_corr
