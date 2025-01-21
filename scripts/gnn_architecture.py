@@ -2,6 +2,7 @@ import numpy as np
 from tqdm import tqdm
 import wandb
 from sklearn.metrics import r2_score
+from scipy.stats import spearmanr, pearsonr
 
 import torch
 import torch.nn as nn
@@ -108,8 +109,8 @@ class MyGnn(torch.nn.Module):
         
         x = self.gat_graph_layers(x, edge_index)
         
-        # TODO @elena check hypthosis: this should be uncommented if one predicts mode stats additionally. THen comment!
-        # node_predictions= self.additional_predictor(x)
+        if self.predict_mode_stats:
+            node_predictions= self.additional_predictor(x)
         
         node_predictions = self.read_out_node_predictions(x)
         
@@ -321,11 +322,27 @@ def train(model: nn.Module,
             optimizer.zero_grad()
             
         if config.predict_mode_stats:
-            val_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
-            wandb.log({ "val_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared,"val_loss_node_predictions": val_loss_node_predictions, "val_loss_mode_stats": val_loss_mode_stats})
+            val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            wandb.log({
+                "val_loss": val_loss, 
+                "epoch": epoch, 
+                "lr": lr, 
+                "r^2": r_squared, 
+                "spearman": spearman_corr, 
+                "pearson": pearson_corr,
+                "val_loss_node_predictions": val_loss_node_predictions, 
+                "val_loss_mode_stats": val_loss_mode_stats
+            })
         else:
-            val_loss, r_squared = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
-            wandb.log({"val_loss": val_loss, "epoch": epoch, "lr": lr, "r^2": r_squared})
+            val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
+            wandb.log({
+                "val_loss": val_loss, 
+                "epoch": epoch, 
+                "lr": lr, 
+                "r^2": r_squared, 
+                "spearman": spearman_corr, 
+                "pearson": pearson_corr
+            })
         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
         
         if val_loss < best_val_loss:
@@ -401,10 +418,31 @@ def validate_model_during_training(config: object,
     actual_node_targets=torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
+    spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
     if config.predict_mode_stats:
-        return total_validation_loss, r_squared, val_loss_node_predictions, val_loss_mode_stats
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats
     else:
-        return total_validation_loss, r_squared
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr
+    
+    
+def compute_spearman_pearson(preds: torch.Tensor, targets: torch.Tensor) -> tuple:
+    """
+    Compute Spearman and Pearson correlation coefficients.
+
+    Parameters:
+    - preds (torch.Tensor): Predicted values.
+    - targets (torch.Tensor): Actual target values.
+
+    Returns:
+    - tuple: Spearman and Pearson correlation coefficients.
+    """
+    preds = preds.cpu().detach().numpy().flatten()  
+    targets = targets.cpu().detach().numpy().flatten()
+    print(f"Shape of preds: {preds.shape}")
+    print(f"Shape of targets: {targets.shape}")
+    spearman_corr, _ = spearmanr(preds, targets)
+    pearson_corr, _ = pearsonr(preds, targets)
+    return spearman_corr, pearson_corr
 
 def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
