@@ -23,6 +23,7 @@ if scripts_path not in sys.path:
 
 import gnn_io as gio
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
+from data_preprocessing.process_simulations_for_gnn import use_allowed_modes
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -107,11 +108,17 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         torch.save(test_set, test_set_path)
         print(f"Test set saved to {test_set_path}")
 
-        node_features = [feat.name for feat in EdgeFeatures] if use_all_features else ["VOL_BASE_CASE",
-                                                                                       "CAPACITY_BASE_CASE",
-                                                                                       "CAPACITY_REDUCTION",
-                                                                                       "FREESPEED",
-                                                                                       "LENGTH"]        
+        if use_all_features:
+            node_features = [feat.name for feat in EdgeFeatures]
+            if not use_allowed_modes:
+                node_features = [feat for feat in node_features if "ALLOWED_MODE" not in feat]
+        else:
+            # Most important features (from ablation study)
+            node_features = ["VOL_BASE_CASE",
+                             "CAPACITY_BASE_CASE",
+                             "CAPACITY_REDUCTION",
+                             "FREESPEED",
+                             "LENGTH"]
         
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, directory_path=path_to_save_dataloader + "train_")
@@ -193,8 +200,12 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
     """
     scaler = StandardScaler()
 
-    # VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITIES_NEW, CAPACITY_REDUCTION, FREESPEED, LENGTH
-    continuous_feat = [0, 1, 2, 3, 4, 6]
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       EdgeFeatures.CAPACITY_REDUCTION,
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
     
     # First pass: Fit the scaler
     for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):

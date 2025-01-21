@@ -108,6 +108,7 @@ class MyGnn(torch.nn.Module):
         
         x = self.gat_graph_layers(x, edge_index)
         
+        # TODO @elena check hypthosis: this should be uncommented if one predicts mode stats additionally. THen comment!
         # node_predictions= self.additional_predictor(x)
         
         node_predictions = self.read_out_node_predictions(x)
@@ -125,8 +126,6 @@ class MyGnn(torch.nn.Module):
             mode_stats_pred = self.mode_stat_predictor(mode_stats_pooled)
             mode_stats_pred = mode_stats_pred.repeat_interleave(shape_mode_stats, dim=0)
             return node_predictions, mode_stats_pred
-        
-        
         return node_predictions
     
     def define_gat_layers(self):

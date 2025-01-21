@@ -1,3 +1,13 @@
+'''
+Run GNN model training with configurable architecture and hyperparameters.
+
+'dataset_path' and 'base_dir' need to be adjusted to the correct paths.
+All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
+
+Example usage without all features (because we found the most significant features using ablation tests.) and dropout (default architecture):
+`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
+'''
+
 import math
 import numpy as np
 import wandb
@@ -27,7 +37,11 @@ if scripts_path not in sys.path:
 import gnn_io as gio
 import gnn_architecture as garch
 
+# Output from data_preprocessing.process_simulations_for_gnn.py
 dataset_path = '../../data/train_data/sim_output_1pm_22_10_2024/'
+
+# Base directory for the run
+base_dir = '../../data'
 
 PARAMETERS = [
     "project_name",
@@ -136,9 +150,8 @@ def main():
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         params = get_parameters(args)
         
-        # Create base directory for the runcon
-        base_dir = '../../data/' + params['project_name'] + '/'
-        unique_run_dir = os.path.join(base_dir, params['unique_model_description'])
+        # Create directory for the run
+        unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
@@ -169,7 +182,6 @@ def main():
                     config=config, 
                     loss_fct=loss_fct,
                     optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
-                    # optimizer = torch.optim.Shampoo(model.parameters(), lr=config.lr, weight_decay=1e-4),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 

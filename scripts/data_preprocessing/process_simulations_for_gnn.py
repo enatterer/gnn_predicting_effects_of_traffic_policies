@@ -1,3 +1,10 @@
+"""
+Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various district combinations),
+convert them to dual line graphs, and compute specified edge features. Save as PyTorch tensor batches for efficient loading and training.
+
+Here we specify all parameters, then run_models can be called with a reduced set of parameters. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
+"""
+
 import os
 import glob
 import math
@@ -29,20 +36,36 @@ from shapely.geometry import Point
 import random
 
 
+# Path to raw simulation data
+sim_input_path = "../../../matsim-ile-de-france/ile_de_france/data/pop_1pm_simulations/pop_1pm_cap_reduction/"
+
+# Path to save the processed simulation data
+result_path = '../../data/datasets_simulation_outputs/sim_output_1pm_24_10_2024'
+
+# Path to the basecase links and stats
+basecase_links_path = 'links_and_stats/pop_1pm_basecase_mean_links.geojson'
+basecase_stats_path = 'links_and_stats/pop_1pm_basecase_mean_mode_stats.csv'
+
+# Path to the districts gdf
+discricts_gdf_path = "../../data/visualisation/districts_paris.geojson"
+
+# Flag to use allowed modes or not
+use_allowed_modes = False
+
+
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0
     CAPACITY_BASE_CASE = 1
-    CAPACITIES_NEW = 2
-    CAPACITY_REDUCTION = 3
-    FREESPEED = 4
-    HIGHWAY = 5
-    LENGTH = 6
-    ALLOWED_MODE_CAR = 7
-    ALLOWED_MODE_BUS = 8
-    ALLOWED_MODE_PT = 9
-    ALLOWED_MODE_TRAIN = 10
-    ALLOWED_MODE_RAIL = 11
-    ALLOWED_MODE_SUBWAY = 12
+    CAPACITY_REDUCTION = 2
+    FREESPEED = 3
+    HIGHWAY = 4
+    LENGTH = 5
+    ALLOWED_MODE_CAR = 6
+    ALLOWED_MODE_BUS = 7
+    ALLOWED_MODE_PT = 8
+    ALLOWED_MODE_TRAIN = 9
+    ALLOWED_MODE_RAIL = 10
+    ALLOWED_MODE_SUBWAY = 11
 
 
 # Read all network data into a dictionary of GeoDataFrames
@@ -51,13 +74,9 @@ def compute_result_dic(basecase_links, subdirs):
     result_dic_output_links = {}
     result_dic_eqasim_trips = {}
     result_dic_output_links["base_network_no_policies"] = basecase_links
-    # counter = 0
+    
     for subdir in tqdm(subdirs, desc="Processing subdirs", unit="subdir"):
-        # counter += 1
-        # if counter > 1:
-        #     break
-        # print(f'Accessing folder: {subdir}')
-        # print(len(os.listdir(subdir)))
+        
         networks = [network for network in os.listdir(subdir) if not network.endswith(".DS_Store")]
         for network in networks:
             file_path = os.path.join(subdir, network)
@@ -103,21 +122,23 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
             edge_feature_dict = {
                 EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
                 EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(capacity_base_case),
-                EdgeFeatures.CAPACITIES_NEW: torch.tensor(capacities_new),
                 EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(capacity_reduction),
                 EdgeFeatures.FREESPEED: torch.tensor(freespeed),
                 EdgeFeatures.HIGHWAY: torch.tensor(highway),
                 EdgeFeatures.LENGTH: torch.tensor(length),
-                EdgeFeatures.ALLOWED_MODE_CAR: allowed_modes[0],
-                EdgeFeatures.ALLOWED_MODE_BUS: allowed_modes[1],
-                EdgeFeatures.ALLOWED_MODE_PT: allowed_modes[2],
-                EdgeFeatures.ALLOWED_MODE_TRAIN: allowed_modes[3],
-                EdgeFeatures.ALLOWED_MODE_RAIL: allowed_modes[4],
-                EdgeFeatures.ALLOWED_MODE_SUBWAY: allowed_modes[5],
             }
 
+            if use_allowed_modes:
+                edge_feature_dict.update({
+                    EdgeFeatures.ALLOWED_MODE_CAR: allowed_modes[0],
+                    EdgeFeatures.ALLOWED_MODE_BUS: allowed_modes[1],
+                    EdgeFeatures.ALLOWED_MODE_PT: allowed_modes[2],
+                    EdgeFeatures.ALLOWED_MODE_TRAIN: allowed_modes[3],
+                    EdgeFeatures.ALLOWED_MODE_RAIL: allowed_modes[4],
+                    EdgeFeatures.ALLOWED_MODE_SUBWAY: allowed_modes[5]})
+
             # Create the edge_tensor by iterating through the EdgeFeatures enum
-            edge_tensor = [edge_feature_dict[feature] for feature in EdgeFeatures]
+            edge_tensor = [edge_feature_dict[feature] for feature in EdgeFeatures if feature in edge_feature_dict]
 
             # Stack the tensors
             edge_tensor = torch.stack(edge_tensor, dim=1)  # Shape: (31140, 14)
@@ -137,7 +158,6 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
                 linegraph_data.mode_stats_diff = mode_stats_tensor
                 mode_stats_diff_perc = mode_stats_tensor / gdf_basecase_mean_mode_stats[numeric_cols_base_case].values *100
                 linegraph_data.mode_stats_diff_perc = mode_stats_diff_perc
-                # print("mode_stats_diff_perc: ", mode_stats_diff_perc)
 
             if linegraph_data.validate(raise_on_error=True):
                 datalist.append(linegraph_data)
@@ -159,20 +179,15 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
 
 def main():
 
-    # Path to raw simulation data
-    sim_input_path = "../../../matsim-ile-de-france/ile_de_france/data/"
-
-    string_is_for_1pm = "pop_1pm"
-    base_dir_sample_sim_input = sim_input_path + string_is_for_1pm + '_simulations/' + string_is_for_1pm + '_cap_reduction/'
-    subdirs_pattern = os.path.join(base_dir_sample_sim_input, 'output_networks_*')
+    subdirs_pattern = os.path.join(sim_input_path, 'output_networks_*')
     subdirs = list(set(glob.glob(subdirs_pattern)))
     subdirs.sort()
 
-    gdf_basecase_links = gpd.read_file('links_and_stats/' + string_is_for_1pm + '_basecase_mean_links.geojson')
+    gdf_basecase_links = gpd.read_file(basecase_links_path)
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
-
-    gdf_basecase_mean_mode_stats = pd.read_csv('links_and_stats/' + string_is_for_1pm + '_basecase_mean_mode_stats.csv', delimiter=',')
-    districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
+    gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
+    
+    districts = gpd.read_file(discricts_gdf_path)
 
     result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, subdirs=subdirs)
     base_gdf = result_dic_output_links["base_network_no_policies"]
@@ -201,8 +216,4 @@ def main():
     # pio.analyze_geodataframes(result_dic=result_dic_output_links, consider_only_highway_edges=True)
 
     gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
-    # print(gdf_basecase_mean_mode_stats)
-
-    result_df_name = 'sim_output_1pm_24_10_2024'
-    result_path = '../../data/datasets_simulation_outputs/' + result_df_name
     process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, districts=districts, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
