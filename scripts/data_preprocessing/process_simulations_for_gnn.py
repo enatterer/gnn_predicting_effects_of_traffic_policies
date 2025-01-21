@@ -28,6 +28,9 @@ import torch
 from shapely.geometry import Point
 import random
 
+"""Add description of the script here. Remove features such as allowed modes and one of capacity new/capacity reduction. Parameters that one needs to set should be set at beginning, such as sim_output_1pm_24_10_2024.
+Add a flag for whether to use all features or not: in particular, read allowed modes or not. """
+
 
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0

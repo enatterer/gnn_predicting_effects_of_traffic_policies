@@ -27,6 +27,8 @@ if scripts_path not in sys.path:
 import gnn_io as gio
 import gnn_architecture as garch
 
+''' ADD DESCRIPTION OF THE SCRIPT HERE. Some example on how to call this script. '''
+
 dataset_path = '../../data/train_data/sim_output_1pm_22_10_2024/'
 
 PARAMETERS = [
