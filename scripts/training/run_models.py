@@ -4,8 +4,8 @@ Run GNN model training with configurable architecture and hyperparameters.
 'dataset_path' and 'base_dir' need to be adjusted to the correct paths.
 All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
 
-Example usage with all features and dropout (default architecture):
-`python run_models.py --in_channels 17 --use_all_features True --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
+Example usage without all features (because we found the most significant features using ablation tests.) and dropout (default architecture):
+`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 '''
 
 import math

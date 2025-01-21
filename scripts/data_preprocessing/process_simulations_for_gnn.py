@@ -1,6 +1,8 @@
 """
 Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various district combinations),
 convert them to dual line graphs, and compute specified edge features. Save as PyTorch tensor batches for efficient loading and training.
+
+Here we specify all parameters, then run_models can be called with a reduced set of parameters. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
 """
 
 import os
