@@ -5,7 +5,7 @@ Run GNN model training with configurable architecture and hyperparameters.
 All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
 
 Example usage with default architecture, dropout, and most significant features found using ablation tests:
-`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
+`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3  --use_monte_carlo_dropout True`
 '''
 
 import math
@@ -58,6 +58,7 @@ PARAMETERS = [
     "early_stopping_patience",
     "use_dropout",
     "dropout",
+    "use_monte_carlo_dropout",
     "gradient_accumulation_steps",
     "use_gradient_clipping",
     "lr_scheduler_warmup_steps",
@@ -82,23 +83,23 @@ def get_parameters(args):
         "early_stopping_patience": args.early_stopping_patience,
         "use_dropout": args.use_dropout,
         "dropout": args.dropout,
+        "use_monte_carlo_dropout": args.use_monte_carlo_dropout,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "use_gradient_clipping": args.use_gradient_clipping,
         "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
         "device_nr": args.device_nr
     }
     
-    # params["unique_model_description"] = (
-    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-    #     f"use_dropout_{params['use_dropout']}_"
-    #     f"dropout_{params['dropout']}_"
-    #     f"predict_mode_stats_{params['predict_mode_stats']}"
-    # )
+    params["unique_model_description"] = (
+        f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
+        f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
+        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
+        f"use_dropout_{params['use_dropout']}_"
+        f"dropout_{params['dropout']}_"
+        f"use_mc_do_{params['use_monte_carlo_dropout']}_"
+        f"predict_mode_stats_{params['predict_mode_stats']}"
+    )
     
-    params["unique_model_description"] = "single_districts_1pct"
-
     return params
 
 def main():
@@ -137,6 +138,7 @@ def main():
     parser.add_argument("--early_stopping_patience", type=int, default=100, help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=hf.str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
+    parser.add_argument("--use_monte_carlo_dropout", type=hf.str_to_bool, default=False, help="Whether to use monte carlo dropout.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--lr_scheduler_warmup_steps", type=int, default=10000, help="The number of steps for the warmup phase of the learning rate scheduler.")
