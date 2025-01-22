@@ -368,7 +368,6 @@ def train(model: nn.Module,
             mean_prediction, uncertainty = mc_dropout_predict(model, data_example, num_samples=50, device=device)
             if epoch % 10 == 0:
                 wandb.log({
-                    "mc_dropout_uncertainty_mean": np.mean(uncertainty),
                     "mc_dropout_uncertainty_std": np.std(uncertainty)
                 })
 
