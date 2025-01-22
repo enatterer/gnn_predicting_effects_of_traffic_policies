@@ -38,11 +38,13 @@ if scripts_path not in sys.path:
 import data_preprocessing.processing_io as pio
 
 
-# Path to raw simulation data
-sim_input_path = "../../data/raw_data/single_districts/"
+# Paths to raw simulation data
+sim_input_paths = ["../../data/raw_data/exp_dist_not_connected_5k/",
+                   "../../data/raw_data/norm_dist_not_connected_5k/",
+                   "../../data/raw_data/single_districts/"]
 
 # Path to save the processed simulation data
-result_path = '../../data/train_data/single_districts_1pct_21_01_2025'
+result_path = '../../data/train_data/not_connected_10k_and_single_dist_1pct'
 
 # Path to the basecase links and stats
 basecase_links_path = '../../data/links_and_stats/pop_1pct_basecase_average_output_links.geojson'
@@ -181,8 +183,13 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
 
 def main():
 
-    subdirs_pattern = os.path.join(sim_input_path, 'output_networks_*')
-    subdirs = list(set(glob.glob(subdirs_pattern)))
+    subdirs = list()
+
+    for path in sim_input_paths:
+
+        subdirs_pattern = os.path.join(path, 'output_networks_*')
+        subdirs += list(set(glob.glob(subdirs_pattern)))
+    
     subdirs.sort()
 
     gdf_basecase_links = gpd.read_file(basecase_links_path)

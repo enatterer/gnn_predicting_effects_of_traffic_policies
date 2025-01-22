@@ -38,7 +38,7 @@ import gnn_io as gio
 import gnn_architecture as garch
 
 # Output from data_preprocessing.process_simulations_for_gnn.py
-dataset_path = '../../data/train_data/single_districts_1pct_21_01_2025/'
+dataset_path = '../../data/train_data/dist_not_connected_10k_1pct/'
 
 # Base directory for the run
 base_dir = '../../data'
@@ -90,15 +90,17 @@ def get_parameters(args):
         "device_nr": args.device_nr
     }
     
-    params["unique_model_description"] = (
-        f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-        f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-        f"use_dropout_{params['use_dropout']}_"
-        f"dropout_{params['dropout']}_"
-        f"use_mc_do_{params['use_monte_carlo_dropout']}_"
-        f"predict_mode_stats_{params['predict_mode_stats']}"
-    )
+    # params["unique_model_description"] = (
+    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
+    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
+    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
+    #     f"use_dropout_{params['use_dropout']}_"
+    #     f"dropout_{params['dropout']}_"
+    #     f"use_mc_do_{params['use_monte_carlo_dropout']}_"
+    #     f"predict_mode_stats_{params['predict_mode_stats']}"
+    # )
+
+    params["unique_model_description"] = "1pct_10k"
     
     return params
 
