@@ -283,7 +283,9 @@ def train(model: nn.Module,
                 
             data = data.to(device)
             targets_node_predictions = data.y
-            targets_mode_stats = data.mode_stats
+
+            if config.predict_mode_stats:
+                targets_mode_stats = data.mode_stats
            
             with autocast():
                 # Forward pass
@@ -383,7 +385,11 @@ def validate_model_during_training(config: object,
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
-            input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
+            input_node_features, targets_node_predictions = data.x, data.y
+
+            if config.predict_mode_stats:
+                targets_mode_stats = data.mode_stats
+
             if config.predict_mode_stats:
                 node_predicted, mode_stats_pred = model(data)
                 val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()

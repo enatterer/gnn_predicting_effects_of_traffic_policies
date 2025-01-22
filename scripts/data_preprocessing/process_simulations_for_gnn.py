@@ -2,49 +2,51 @@
 Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various district combinations),
 convert them to dual line graphs, and compute specified edge features. Save as PyTorch tensor batches for efficient loading and training.
 
-Here we specify all parameters, then run_models can be called with a reduced set of parameters. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
+Here we specify all features, then run_models can be called with a reduced set. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
 """
 
 import os
+import sys
 import glob
 import math
+import random
 import pickle
 import argparse
 from enum import IntEnum
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import torch
-from collections import defaultdict
-
-import data_preprocessing.processing_io as pio
-from torch_geometric.transforms import LineGraph
-
-from torch_geometric.data import Data, Batch
-import shapely.wkt as wkt
-from tqdm import tqdm
-import fiona
-import os
-
-import alphashape
-from shapely.geometry import Polygon
 import matplotlib.pyplot as plt
 from tqdm import tqdm
+
 import torch
-from shapely.geometry import Point
-import random
+from torch_geometric.transforms import LineGraph
+from torch_geometric.data import Data, Batch
+
+import fiona
+import alphashape
+import shapely.wkt as wkt
+from shapely.geometry import Polygon, Point
+
+# Add the 'scripts' directory to the Python path
+scripts_path = os.path.abspath(os.path.join('..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+import data_preprocessing.processing_io as pio
 
 
 # Path to raw simulation data
-sim_input_path = "../../../matsim-ile-de-france/ile_de_france/data/pop_1pm_simulations/pop_1pm_cap_reduction/"
+sim_input_path = "../../data/raw_data/single_districts/"
 
 # Path to save the processed simulation data
-result_path = '../../data/datasets_simulation_outputs/sim_output_1pm_24_10_2024'
+result_path = '../../data/train_data/single_districts_1pct_21_01_2025'
 
 # Path to the basecase links and stats
-basecase_links_path = 'links_and_stats/pop_1pm_basecase_mean_links.geojson'
-basecase_stats_path = 'links_and_stats/pop_1pm_basecase_mean_mode_stats.csv'
+basecase_links_path = '../../data/links_and_stats/pop_1pct_basecase_average_output_links.geojson'
+basecase_stats_path = '../../data/links_and_stats/pop_1pct_basecase_average_mode_stats.csv'
 
 # Path to the districts gdf
 discricts_gdf_path = "../../data/visualisation/districts_paris.geojson"
@@ -217,3 +219,7 @@ def main():
 
     gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
     process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, districts=districts, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
+
+
+if __name__ == '__main__':
+    main()

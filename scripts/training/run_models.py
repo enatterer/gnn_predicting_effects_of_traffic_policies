@@ -4,7 +4,7 @@ Run GNN model training with configurable architecture and hyperparameters.
 'dataset_path' and 'base_dir' need to be adjusted to the correct paths.
 All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
 
-Example usage without all features (because we found the most significant features using ablation tests.) and dropout (default architecture):
+Example usage with default architecture, dropout, and most significant features found using ablation tests:
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 '''
 
@@ -38,7 +38,7 @@ import gnn_io as gio
 import gnn_architecture as garch
 
 # Output from data_preprocessing.process_simulations_for_gnn.py
-dataset_path = '../../data/train_data/sim_output_1pm_22_10_2024/'
+dataset_path = '../../data/train_data/single_districts_1pct_21_01_2025/'
 
 # Base directory for the run
 base_dir = '../../data'
@@ -88,15 +88,17 @@ def get_parameters(args):
         "device_nr": args.device_nr
     }
     
-    params["unique_model_description"] = (
-        f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-        f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-        f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-        f"use_dropout_{params['use_dropout']}_"
-        f"dropout_{params['dropout']}_"
-        f"predict_mode_stats_{params['predict_mode_stats']}"
-    )
+    # params["unique_model_description"] = (
+    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
+    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
+    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
+    #     f"use_dropout_{params['use_dropout']}_"
+    #     f"dropout_{params['dropout']}_"
+    #     f"predict_mode_stats_{params['predict_mode_stats']}"
+    # )
     
+    params["unique_model_description"] = "single_districts_1pct"
+
     return params
 
 def main():
@@ -154,7 +156,7 @@ def main():
         unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=base_dir, unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
+        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
         train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, use_all_features= params['use_all_features'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})

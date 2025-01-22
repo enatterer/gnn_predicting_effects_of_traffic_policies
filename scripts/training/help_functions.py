@@ -207,6 +207,9 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
                        EdgeFeatures.FREESPEED,
                        EdgeFeatures.LENGTH]
     
+    # Get number of nodes in the graph
+    num_nodes = data_list[0].x.shape[0]
+    
     # First pass: Fit the scaler
     for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
         batch = data_list[i:i+batch_size]
@@ -219,7 +222,7 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = scaler.transform(batch_x)
         for j, data in enumerate(batch):
-            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*31140:(j+1)*31140], dtype=data.x.dtype)
+            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*num_nodes:(j+1)*num_nodes], dtype=data.x.dtype)
 
     # Filter features
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
@@ -235,6 +238,9 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
 def normalize_pos_features_batched(data_list, batch_size=1000):
     scaler = StandardScaler()
     
+    # Get number of nodes in the graph
+    num_nodes = data_list[0].x.shape[0]
+
     # First pass: Fit the scaler
     for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
         batch = data_list[i:i+batch_size]
@@ -247,7 +253,7 @@ def normalize_pos_features_batched(data_list, batch_size=1000):
         for data in batch:
             pos_reshaped = data.pos.numpy().reshape(-1, 6)
             pos_normalized = scaler.transform(pos_reshaped)
-            data.pos = torch.tensor(pos_normalized.reshape(31140, 3, 2), dtype=data.pos.dtype)
+            data.pos = torch.tensor(pos_normalized.reshape(num_nodes, 3, 2), dtype=data.pos.dtype)
     
     return data_list, scaler
 
