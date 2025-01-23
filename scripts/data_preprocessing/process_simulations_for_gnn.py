@@ -145,7 +145,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
             edge_tensor = [edge_feature_dict[feature] for feature in EdgeFeatures if feature in edge_feature_dict]
 
             # Stack the tensors
-            edge_tensor = torch.stack(edge_tensor, dim=1)  # Shape: (31140, 14)
+            edge_tensor = torch.stack(edge_tensor, dim=1)
             
             linegraph_data = linegraph_transformation(data)
             linegraph_data.x = edge_tensor

@@ -21,6 +21,7 @@ import sys
 import os
 import joblib
 import json
+from enum import IntEnum
 
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -46,23 +47,7 @@ if scripts_path not in sys.path:
 
 import gnn_io as gio
 import gnn_architecture as garch
-
-from enum import IntEnum
-
-class EdgeFeatures(IntEnum):
-    VOL_BASE_CASE = 0
-    CAPACITY_BASE_CASE = 1
-    CAPACITIES_NEW = 2
-    CAPACITY_REDUCTION = 3
-    FREESPEED = 4
-    HIGHWAY = 5
-    LENGTH = 6
-    ALLOWED_MODE_CAR = 7
-    ALLOWED_MODE_BUS = 8
-    ALLOWED_MODE_PT = 9
-    ALLOWED_MODE_TRAIN = 10
-    ALLOWED_MODE_RAIL = 11
-    ALLOWED_MODE_SUBWAY = 12
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
     
 # Custom mapping for highway types
 highway_mapping = {
@@ -112,12 +97,11 @@ def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, in
         'from_node': original_gdf["from_node"].values,
         'to_node': original_gdf["to_node"].values,
         'vol_base_case': inversed_x[:, EdgeFeatures.VOL_BASE_CASE],  
-        'capacity_base_case': inversed_x[:, EdgeFeatures.CAPACITY_BASE_CASE],  
-        'capacities_new': inversed_x[:, EdgeFeatures.CAPACITIES_NEW],  
+        'capacity_base_case': inversed_x[:, EdgeFeatures.CAPACITY_BASE_CASE],
         'capacity_reduction': inversed_x[:, EdgeFeatures.CAPACITY_REDUCTION],  
         'freespeed': inversed_x[:, EdgeFeatures.FREESPEED],  
         'highway': original_gdf['highway'].values,
-        'length': inversed_x[:, EdgeFeatures.LENGTH],        
+        'length': inversed_x[:, EdgeFeatures.LENGTH-1], # -1 since we didn't use Highway, fix later        
         'allowed_mode_car': inversed_x[:, EdgeFeatures.ALLOWED_MODE_CAR],
         'allowed_mode_bus': inversed_x[:, EdgeFeatures.ALLOWED_MODE_BUS],
         'allowed_mode_pt': inversed_x[:, EdgeFeatures.ALLOWED_MODE_PT],
@@ -136,7 +120,11 @@ def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, in
             'capacity_reduction': inversed_x[:, EdgeFeatures.CAPACITY_REDUCTION],  
             'freespeed': inversed_x[:, EdgeFeatures.FREESPEED],  
             'highway': original_gdf['highway'].values,
+            'length': inversed_x[:, EdgeFeatures.LENGTH-1], # -1 since we didn't use Highway, fix later
+            'vol_car_change_actual': target_values.squeeze(),
+            'vol_car_change_predicted': predicted_values.squeeze(),
         }
+    
     edge_df = pd.DataFrame(edge_data)
     edge_df['geometry'] = original_gdf["geometry"].values
     gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
@@ -193,17 +181,18 @@ def create_test_object(links_base_case, test_data, stacked_edge_geometries_tenso
     x = torch.zeros((len(nodes), 1), dtype=torch.float)
     data = Data(edge_index=edge_index, x=x)
     
-    capacities_new = np.where(test_data['modes'].str.contains('car'), test_data['capacity'], 0)
-    capacity_reduction = capacities_new - capacity_base_case
-    highway = test_data['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
-
+    # # Repeated? Why is this here?
+    # capacities_new = np.where(test_data['modes'].str.contains('car'), test_data['capacity'], 0)
+    # capacity_reduction = capacities_new - capacity_base_case
+    
     capacities_new = test_data['capacity'].values
     capacity_reduction= capacities_new - capacity_base_case
+
+    highway = test_data['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
     
     edge_feature_dict = {
         EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
         EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(capacity_base_case),
-        EdgeFeatures.CAPACITIES_NEW: torch.tensor(capacities_new),
         EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(capacity_reduction),
         EdgeFeatures.FREESPEED: torch.tensor(freespeed),
         EdgeFeatures.HIGHWAY: torch.tensor(highway),
@@ -322,8 +311,10 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          zone_to_plot:str= "this_zone",
                          is_predicted: bool = False, alpha:int=100, 
                          use_fixed_norm:bool=True, 
-                         fixed_norm_max: int= 10, normalized_y:bool=False, known_districts:bool=False, buffer: float = 0.0005, districts_of_interest: list =[1, 2, 3, 4],
-                         plot_contour_lines:bool=True, is_absolute:bool=False):
+                         fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
+                         districts_of_interest: list =[1, 2, 3, 4],
+                         plot_contour_lines:bool=True, is_absolute:bool=False,
+                         cmap:str='coolwarm'):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
@@ -338,9 +329,9 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     gdf['linewidth'] = linewidths
     large_lines = gdf[gdf['linewidth'] > 1]
     small_lines = gdf[gdf['linewidth'] == 1]
-    small_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=small_lines['linewidth'], ax=ax, legend=False,
+    small_lines.plot(column=column_to_plot, cmap=cmap, linewidth=small_lines['linewidth'], ax=ax, legend=False,
                     norm=norm, label="Street network", zorder=1)
-    large_lines.plot(column=column_to_plot, cmap='coolwarm', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+    large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
                     norm=norm, label="Street network", zorder=2)
     
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
@@ -354,7 +345,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         else:
             relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
         
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines)
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines,cmap)
     if is_absolute:
         cbar.set_label('Car volume', fontname=font, fontsize=15)
     else:
@@ -373,7 +364,7 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     return norm
     
 
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines):
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap):
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
     plt.xlabel("Longitude", fontname=font, fontsize=15)
@@ -397,7 +388,7 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines
     cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])  # Manually position the color bar
     
     # Create the color bar
-    sm = plt.cm.ScalarMappable(cmap='coolwarm', norm=norm)
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm._A = []
     cbar = plt.colorbar(sm, cax=cax)
 
