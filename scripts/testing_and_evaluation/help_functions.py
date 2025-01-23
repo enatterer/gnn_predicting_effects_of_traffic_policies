@@ -101,11 +101,14 @@ mode_mapping = {
 
 # DATAFRAME FUNCTIONS
 
-def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x):
+
+def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x, use_all_features=False):
+    ' use_all_features is a flag for whether to use all features or not, as shown in the ablation tests'
     target_values = data.y.cpu().numpy()
     predicted_values = predicted_values.cpu().numpy() if isinstance(predicted_values, torch.Tensor) else predicted_values
     
-    edge_data = {
+    if use_all_features:
+        edge_data = {
         'from_node': original_gdf["from_node"].values,
         'to_node': original_gdf["to_node"].values,
         'vol_base_case': inversed_x[:, EdgeFeatures.VOL_BASE_CASE],  
@@ -123,7 +126,17 @@ def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, in
         'allowed_mode_subway': inversed_x[:, EdgeFeatures.ALLOWED_MODE_SUBWAY],
         'vol_car_change_actual': target_values.squeeze(),  
         'vol_car_change_predicted': predicted_values.squeeze(),
-    }
+        }
+    else:
+        edge_data = {
+            'from_node': original_gdf["from_node"].values,
+            'to_node': original_gdf["to_node"].values,
+            'vol_base_case': inversed_x[:, EdgeFeatures.VOL_BASE_CASE],  
+            'capacity_base_case': inversed_x[:, EdgeFeatures.CAPACITY_BASE_CASE],  
+            'capacity_reduction': inversed_x[:, EdgeFeatures.CAPACITY_REDUCTION],  
+            'freespeed': inversed_x[:, EdgeFeatures.FREESPEED],  
+            'highway': original_gdf['highway'].values,
+        }
     edge_df = pd.DataFrame(edge_data)
     edge_df['geometry'] = original_gdf["geometry"].values
     gdf = gpd.GeoDataFrame(edge_df, geometry='geometry')
