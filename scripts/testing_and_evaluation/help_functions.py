@@ -314,7 +314,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
                          districts_of_interest: list =[1, 2, 3, 4],
                          plot_contour_lines:bool=True, is_absolute:bool=False,
-                         cmap:str='coolwarm'):
+                         cmap:str='coolwarm',
+                         result_path:str=None):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
@@ -335,7 +336,6 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     norm=norm, label="Street network", zorder=2)
     
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
-    
     if plot_contour_lines:
         if isinstance(relevant_area_to_plot, set):
             for area in relevant_area_to_plot:
@@ -353,7 +353,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     if save_it:
         p = "predicted" if is_predicted else "actual"
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier + "_" + p, bbox_inches='tight')
+        plt.savefig(result_path + identifier + "_" + p, bbox_inches='tight')
     plt.show()
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
