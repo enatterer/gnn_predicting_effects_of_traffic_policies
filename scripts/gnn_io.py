@@ -125,6 +125,31 @@ def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio):
     
     return train_subset, val_subset, test_subset
 
+def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_seed=0):
+    
+    dataset_length = len(dataset)
+    print(f"Total dataset length: {dataset_length}")
+
+    # Split the dataset into training and testing sets
+    train_indices, test_indices = train_test_split(range(dataset_length), test_size=test_ratio, random_state=42)
+    
+    # Perform bootstrapping on the training set, OOB validation set
+    rng = np.random.default_rng(seed=bootstrap_seed)
+    train_indices_bootstrap = rng.choice(train_indices, size=len(train_indices), replace=True)
+    oob_indices = list(set(train_indices) - set(train_indices_bootstrap))
+    
+    # Create subsets
+    train_subset_bootstrap = Subset(dataset, train_indices_bootstrap)
+    val_subset_oob = Subset(dataset, oob_indices)
+    test_subset = Subset(dataset, test_indices)
+    
+    print(f"Bootstrapping unique samples: {len(set(train_indices_bootstrap))}")
+    print(f"Training subset length: {len(train_subset_bootstrap)}")
+    print(f"OOB Validation subset length: {len(val_subset_oob)}")
+    print(f"Test subset length: {len(test_subset)}")
+    
+    return train_subset_bootstrap, val_subset_oob, test_subset
+
 def save_dataloader(dataloader, file_path):
     # Extract the dataset from the DataLoader
     dataset = dataloader.dataset

@@ -100,7 +100,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "1pct_10k"
+    params["unique_model_description"] = "ensemble_1"
     
     return params
 
