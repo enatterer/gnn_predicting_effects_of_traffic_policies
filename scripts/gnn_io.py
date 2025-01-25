@@ -98,12 +98,15 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False)
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio):
+def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio, shuffle_seed=42):
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
+
+    # Randomly shuffle the dataset
+    random.Random(shuffle_seed).shuffle(dataset)
     
     # Calculate split indices
     train_split_idx = int(dataset_length * train_ratio)
@@ -125,13 +128,13 @@ def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio):
     
     return train_subset, val_subset, test_subset
 
-def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_seed=0):
+def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_seed=0, shuffle_seed=42):
     
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
 
     # Split the dataset into training and testing sets
-    train_indices, test_indices = train_test_split(range(dataset_length), test_size=test_ratio, random_state=42)
+    train_indices, test_indices = train_test_split(range(dataset_length), test_size=test_ratio, random_state=shuffle_seed)
     
     # Perform bootstrapping on the training set, OOB validation set
     rng = np.random.default_rng(seed=bootstrap_seed)

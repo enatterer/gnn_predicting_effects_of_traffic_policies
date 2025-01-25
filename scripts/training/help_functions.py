@@ -100,8 +100,8 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
     try:
 
         print("Splitting into subsets...")
-        # train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-        train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=0)
+        train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+        # train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=0)
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
         
         print("Saving test set...")
