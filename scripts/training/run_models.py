@@ -52,6 +52,7 @@ PARAMETERS = [
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
     "gat_conv_layer_structure",
+    "use_bootrappping",
     "num_epochs",
     "batch_size",
     "lr",
@@ -77,6 +78,7 @@ def get_parameters(args):
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
         "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
+        "use_bootrappping": args.use_bootrappping,
         "num_epochs": args.num_epochs,
         "batch_size": int(args.batch_size),
         "lr": float(args.lr),
@@ -134,6 +136,7 @@ def main():
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
     parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
+    parser.add_argument("--use_bootrappping", type=hf.str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -160,8 +163,8 @@ def main():
         unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
-        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, use_all_features= params['use_all_features'])
+        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
+        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size=params['batch_size'], path_to_save_dataloader=path_to_save_dataloader, use_all_features=params['use_all_features'], use_bootstrapping=params['use_bootrappping'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 

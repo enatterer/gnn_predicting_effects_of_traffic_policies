@@ -94,14 +94,18 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features):
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
 
         print("Splitting into subsets...")
-        train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-        # train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=0)
+
+        if use_bootstrapping:
+            train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=0)
+        else:
+            train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+        
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
         
         print("Saving test set...")
