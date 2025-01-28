@@ -37,6 +37,7 @@ import alphashape
 from matplotlib.lines import Line2D
 
 from shapely.geometry import Polygon
+from matplotlib.colors import TwoSlopeNorm, Normalize
 
 districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
 
@@ -355,6 +356,231 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
         plt.savefig(result_path + identifier + "_" + p, bbox_inches='tight')
     plt.show()
+    
+    
+def plot_prediction_difference(gdf_input: gpd.GeoDataFrame, 
+                             font: str = 'Times New Roman',
+                             save_it: bool = False, 
+                             number_to_plot: int = 0,
+                             zone_to_plot: str = "this_zone",
+                             alpha: int = 100,
+                             use_fixed_norm: bool = True,
+                             fixed_norm_max: int = 10,
+                             known_districts: bool = False,
+                             buffer: float = 0.0005,
+                             districts_of_interest: list = [1, 2, 3, 4],
+                             plot_contour_lines: bool = True,
+                             cmap: str = 'coolwarm',
+                             result_path: str = None):
+    """
+    Plot the difference between predicted and actual values on a map.
+    
+    Parameters are the same as plot_combined_output, but this function specifically shows
+    the prediction error (predicted - actual values).
+    """
+    gdf = gdf_input.copy()
+    
+    # Calculate the difference between predicted and actual values
+    gdf['prediction_error'] = gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']
+    
+    # Filter geographic section
+    gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+    
+    if use_fixed_norm:
+        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+    else:
+        norm = TwoSlopeNorm(vmin=gdf['prediction_error'].min(), 
+                           vcenter=0, 
+                           vmax=gdf['prediction_error'].max())
+    
+    # Plot with different line widths based on highway type
+    linewidths = gdf["highway"].apply(get_linewidth)
+    gdf['linewidth'] = linewidths
+    large_lines = gdf[gdf['linewidth'] > 1]
+    small_lines = gdf[gdf['linewidth'] == 1]
+    
+    small_lines.plot(column='prediction_error', cmap=cmap, linewidth=small_lines['linewidth'], 
+                    ax=ax, legend=False, norm=norm, label="Street network", zorder=1)
+    large_lines.plot(column='prediction_error', cmap=cmap, linewidth=large_lines['linewidth'], 
+                    ax=ax, legend=False, norm=norm, label="Street network", zorder=2)
+    
+    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, 
+                                                     districts_of_interest, gdf)
+    if plot_contour_lines:
+        if isinstance(relevant_area_to_plot, set):
+            for area in relevant_area_to_plot:
+                if isinstance(area, Polygon):
+                    gdf_area = gpd.GeoDataFrame(index=[0], crs=gdf.crs, geometry=[area])
+                    gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+        else:
+            relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+    
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap)
+    cbar.set_label('Prediction Error (Predicted - Actual)', fontname=font, fontsize=15)
+    
+    if save_it:
+        identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
+        plt.savefig(result_path + identifier + "_prediction_error", bbox_inches='tight')
+    
+    plt.show()
+    
+    
+
+def plot_average_prediction_differences(gdf_inputs: list, 
+                                     font: str = 'Times New Roman',
+                                     save_it: bool = False,                                      
+                                     use_fixed_norm: bool = True,
+                                     fixed_norm_max: int = 10,
+                                     use_absolute_value_of_difference: bool = True,
+                                     use_percentage: bool = False,
+                                     disagreement_threshold: float = None,
+                                     result_path: str = None):
+    """
+    Plot the average prediction error across multiple models.
+    
+    Parameters:
+    -----------
+    gdf_inputs : list
+        List of GeoDataFrames containing model predictions
+    use_absolute_value_of_difference : bool
+        If True, uses the absolute value of the differences |predicted - actual| for each model before averaging. Else, the signed differences, i.e. predicted - actual for every model.
+    use_percentage : bool
+        If True, computes differences as percentages relative to actual values
+    disagreement_threshold : float
+        If set, highlights areas where coefficient of variation (std/mean) exceeds this value
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+    
+    base_gdf = gdf_inputs[0].copy()
+    
+    # Calculate errors for each model
+    all_errors = []
+    for gdf in gdf_inputs:
+        if use_percentage:
+            # Avoid division by zero by adding small epsilon where actual is zero
+            epsilon = 1e-10
+            if use_absolute_value_of_difference:
+                error = abs((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
+                          (abs(gdf['vol_car_change_actual']) + epsilon)) * 100
+            else:
+                error = ((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
+                        (abs(gdf['vol_car_change_actual']) + epsilon)) * 100
+        else:
+            if use_absolute_value_of_difference:
+                error = abs(gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual'])
+            else:
+                error = gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']
+        all_errors.append(error)
+    
+    # Calculate statistics
+    errors_df = pd.concat(all_errors, axis=1)
+    base_gdf['mean_prediction_error'] = errors_df.mean(axis=1)
+    base_gdf['std_prediction_error'] = errors_df.std(axis=1)
+    
+    # Calculate coefficient of variation for disagreement highlighting
+    if disagreement_threshold is not None:
+        # Use absolute values for std and mean in coefficient calculation
+        abs_mean = abs(base_gdf['mean_prediction_error'])
+        # Avoid division by zero
+        mask = abs_mean > 1e-10
+        base_gdf['coefficient_of_variation'] = float('inf')  # Default value for zero means
+        base_gdf.loc[mask, 'coefficient_of_variation'] = base_gdf.loc[mask, 'std_prediction_error'] / abs_mean[mask]
+        high_disagreement = base_gdf['coefficient_of_variation'] > disagreement_threshold
+    
+    base_gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(base_gdf)
+    
+    if use_fixed_norm:
+        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max) if not use_absolute_value_of_difference else \
+               Normalize(vmin=0, vmax=fixed_norm_max)
+    else:
+        norm = TwoSlopeNorm(vmin=base_gdf['mean_prediction_error'].min(), 
+                           vcenter=0, 
+                           vmax=base_gdf['mean_prediction_error'].max()) if not use_absolute_value_of_difference else \
+               Normalize(vmin=0, vmax=base_gdf['mean_prediction_error'].max())
+    
+    # Plot with different line widths
+    linewidths = base_gdf["highway"].apply(get_linewidth)
+    base_gdf['linewidth'] = linewidths
+    large_lines = base_gdf[base_gdf['linewidth'] > 1]
+    small_lines = base_gdf[base_gdf['linewidth'] == 1]
+    
+    # Choose colormap based on whether we're using absolute differences
+    cmap = 'Reds' if use_absolute_value_of_difference else 'coolwarm'
+    
+    # Plot the mean prediction error
+    small_lines.plot(column='mean_prediction_error', cmap=cmap, 
+                    linewidth=small_lines['linewidth'],
+                    ax=ax, legend=False, norm=norm, zorder=1)
+    large_lines.plot(column='mean_prediction_error', cmap=cmap, 
+                    linewidth=large_lines['linewidth'],
+                    ax=ax, legend=False, norm=norm, zorder=2)
+    
+    # Highlight areas of high disagreement if threshold is set
+    if disagreement_threshold is not None:
+        disagreement_lines = base_gdf[high_disagreement]
+        if not disagreement_lines.empty:
+            # Create a simple line for the legend
+            legend_line = plt.Line2D([], [], color='black', linestyle='--', 
+                                   linewidth=2, 
+                                   label=f'High model disagreement (CV > {disagreement_threshold})')
+            
+            # Plot the disagreement lines
+            disagreement_lines.plot(color='none', edgecolor='black', 
+                                  linewidth=disagreement_lines['linewidth']*1.5,
+                                  ax=ax, zorder=3, linestyle='--')
+            
+            # Add legend with the custom line
+            ax.legend(handles=[legend_line], fontsize=12)
+    
+    # Styling
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.xlabel("Longitude", fontname=font, fontsize=15)
+    plt.ylabel("Latitude", fontname=font, fontsize=15)
+    
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname(font)
+        label.set_fontsize(15)
+
+    # Colorbar with number of models and units
+    ax.set_position([0.1, 0.1, 0.75, 0.75])
+    cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm._A = []
+    cbar = plt.colorbar(sm, cax=cax)
+    cbar.ax.tick_params(labelsize=15)
+    for t in cbar.ax.get_yticklabels():
+        t.set_fontname(font)
+    cbar.ax.yaxis.label.set_fontname(font)
+    cbar.ax.yaxis.label.set_size(15)
+    
+    error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
+    units = "%" if use_percentage else "vehicles"
+    
+    if use_absolute_value_of_difference:
+        cbar.set_label(f'{error_type} Prediction Error\n'
+                      f'|predicted - actual| in {units}\n'
+                      f'(Averaged across {len(gdf_inputs)} models)', 
+                      fontname=font, fontsize=15)
+    else:
+        cbar.set_label(f'{error_type} Prediction Error\n'
+                      f'(predicted - actual) in {units}\n'
+                      f'(Averaged across {len(gdf_inputs)} models)', 
+                      fontname=font, fontsize=15)
+
+    if save_it:
+        error_type_str = "average_absolute_value_of_difference" if use_absolute_value_of_difference else "average_signed_difference"
+        metric_str = "percent" if use_percentage else "abs_vehicles"
+        plt.savefig(f"{result_path}/{error_type_str}_prediction_error_{metric_str}", 
+                   bbox_inches='tight')
+    
+    plt.show()
+    
+    return base_gdf
+
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     if use_fixed_norm:
