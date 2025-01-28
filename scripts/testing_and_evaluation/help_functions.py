@@ -426,8 +426,6 @@ def plot_prediction_difference(gdf_input: gpd.GeoDataFrame,
     
     plt.show()
     
-    
-
 def plot_average_prediction_differences(gdf_inputs: list, 
                                      font: str = 'Times New Roman',
                                      save_it: bool = False,                                      
@@ -436,7 +434,10 @@ def plot_average_prediction_differences(gdf_inputs: list,
                                      use_absolute_value_of_difference: bool = True,
                                      use_percentage: bool = False,
                                      disagreement_threshold: float = None,
-                                     result_path: str = None):
+                                     result_path: str = None,
+                                     loss_fct: str = "l1",
+                                     scale_type: str = "continuous",
+                                     discrete_thresholds: list = None):
     """
     Plot the average prediction error across multiple models.
     
@@ -444,12 +445,28 @@ def plot_average_prediction_differences(gdf_inputs: list,
     -----------
     gdf_inputs : list
         List of GeoDataFrames containing model predictions
+    font : str, optional
+        Font to use for plotting
+    save_it : bool, optional
+        Whether to save the plot
+    use_fixed_norm : bool, optional
+        Whether to use fixed normalization values
+    fixed_norm_max : int, optional
+        Maximum value for normalization if use_fixed_norm is True
     use_absolute_value_of_difference : bool
-        If True, uses the absolute value of the differences |predicted - actual| for each model before averaging. Else, the signed differences, i.e. predicted - actual for every model.
+        If True, uses the absolute value of the differences
     use_percentage : bool
         If True, computes differences as percentages relative to actual values
     disagreement_threshold : float
-        If set, highlights areas where coefficient of variation (std/mean) exceeds this value
+        If set, highlights areas where coefficient of variation exceeds this value
+    result_path : str, optional
+        Path where to save the plot if save_it is True
+    loss_fct : str, optional
+        Loss function to use ("l1" or "mse")
+    scale_type : str, optional
+        Either "continuous" or "discrete"
+    discrete_thresholds : list, optional
+        List of threshold values defining the boundaries between categories
     """
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
     
@@ -462,11 +479,17 @@ def plot_average_prediction_differences(gdf_inputs: list,
             # Avoid division by zero by adding small epsilon where actual is zero
             epsilon = 1e-10
             if use_absolute_value_of_difference:
-                error = abs((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
-                          (abs(gdf['vol_car_change_actual']) + epsilon)) * 100
+                if loss_fct == "l1":
+                    error = abs((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
+                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']))) * 100
+                elif loss_fct == "mse":
+                    error = ((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / 
+                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']) + epsilon)) * 100
             else:
-                error = ((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
-                        (abs(gdf['vol_car_change_actual']) + epsilon)) * 100
+                if loss_fct == "l1":
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / (gdf['vol_car_change_actual'] + gdf['vol_base_case'])* 100
+                elif loss_fct == "mse":
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / (gdf['vol_car_change_actual'] + gdf['vol_base_case']) * 100
         else:
             if use_absolute_value_of_difference:
                 error = abs(gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual'])
@@ -491,14 +514,38 @@ def plot_average_prediction_differences(gdf_inputs: list,
     
     base_gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(base_gdf)
     
-    if use_fixed_norm:
-        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max) if not use_absolute_value_of_difference else \
-               Normalize(vmin=0, vmax=fixed_norm_max)
+    # Handle discrete vs continuous scale
+    if scale_type == "discrete":
+        if discrete_thresholds is None:
+            discrete_thresholds = [33, 66]  # default thresholds
+            
+        # Create discrete bins for the data
+        def categorize_value(x, thresholds):
+            for i, threshold in enumerate(thresholds):
+                if abs(x) <= threshold:
+                    return i
+            return len(thresholds)  # for values greater than the last threshold
+        
+        base_gdf['discrete_error'] = base_gdf['mean_prediction_error'].apply(
+            lambda x: categorize_value(x, discrete_thresholds))
+        
+        # Create a color gradient based on number of categories
+        n_categories = len(discrete_thresholds) + 1
+        colors = plt.cm.RdYlGn_r(np.linspace(0, 1, n_categories))  # Using _r to invert the colormap
+        cmap = plt.cm.colors.ListedColormap(colors)
+        norm = plt.Normalize(vmin=-0.5, vmax=n_categories - 0.5)
+        plot_column = 'discrete_error'
     else:
-        norm = TwoSlopeNorm(vmin=base_gdf['mean_prediction_error'].min(), 
-                           vcenter=0, 
-                           vmax=base_gdf['mean_prediction_error'].max()) if not use_absolute_value_of_difference else \
-               Normalize(vmin=0, vmax=base_gdf['mean_prediction_error'].max())
+        if use_fixed_norm:
+            norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max) if not use_absolute_value_of_difference else \
+                   Normalize(vmin=0, vmax=fixed_norm_max)
+        else:
+            norm = TwoSlopeNorm(vmin=base_gdf['mean_prediction_error'].min(), 
+                               vcenter=0, 
+                               vmax=base_gdf['mean_prediction_error'].max()) if not use_absolute_value_of_difference else \
+                   Normalize(vmin=0, vmax=base_gdf['mean_prediction_error'].max())
+        plot_column = 'mean_prediction_error'
+        cmap = 'Reds_r' if use_absolute_value_of_difference else 'coolwarm_r'  # Using _r to invert the colormaps
     
     # Plot with different line widths
     linewidths = base_gdf["highway"].apply(get_linewidth)
@@ -506,14 +553,11 @@ def plot_average_prediction_differences(gdf_inputs: list,
     large_lines = base_gdf[base_gdf['linewidth'] > 1]
     small_lines = base_gdf[base_gdf['linewidth'] == 1]
     
-    # Choose colormap based on whether we're using absolute differences
-    cmap = 'Reds' if use_absolute_value_of_difference else 'coolwarm'
-    
-    # Plot the mean prediction error
-    small_lines.plot(column='mean_prediction_error', cmap=cmap, 
+    # Plot the data
+    small_lines.plot(column=plot_column, cmap=cmap, 
                     linewidth=small_lines['linewidth'],
                     ax=ax, legend=False, norm=norm, zorder=1)
-    large_lines.plot(column='mean_prediction_error', cmap=cmap, 
+    large_lines.plot(column=plot_column, cmap=cmap, 
                     linewidth=large_lines['linewidth'],
                     ax=ax, legend=False, norm=norm, zorder=2)
     
@@ -545,12 +589,32 @@ def plot_average_prediction_differences(gdf_inputs: list,
         label.set_fontname(font)
         label.set_fontsize(15)
 
-    # Colorbar with number of models and units
+    # Colorbar setup
     ax.set_position([0.1, 0.1, 0.75, 0.75])
     cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
     sm._A = []
-    cbar = plt.colorbar(sm, cax=cax)
+    
+    # Create and customize colorbar based on scale type
+    if scale_type == "discrete":
+        ticks = range(len(discrete_thresholds) + 1)
+        cbar = plt.colorbar(sm, cax=cax, ticks=ticks)
+        
+        # Create labels based on thresholds
+        labels = []
+        for i in range(len(discrete_thresholds) + 1):
+            if i == 0:
+                labels.append(f'0-{discrete_thresholds[0]}')
+            elif i == len(discrete_thresholds):
+                labels.append(f'>{discrete_thresholds[-1]}')
+            else:
+                labels.append(f'{discrete_thresholds[i-1]}-{discrete_thresholds[i]}')
+        
+        cbar.ax.set_yticklabels(labels)
+    else:
+        cbar = plt.colorbar(sm, cax=cax)
+    
+    # Customize colorbar
     cbar.ax.tick_params(labelsize=15)
     for t in cbar.ax.get_yticklabels():
         t.set_fontname(font)
@@ -562,12 +626,12 @@ def plot_average_prediction_differences(gdf_inputs: list,
     
     if use_absolute_value_of_difference:
         cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'|predicted - actual| in {units}\n'
+                      f'{loss_fct} difference in {units}\n'
                       f'(Averaged across {len(gdf_inputs)} models)', 
                       fontname=font, fontsize=15)
     else:
         cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'(predicted - actual) in {units}\n'
+                      f'{loss_fct} difference in {units}\n'
                       f'(Averaged across {len(gdf_inputs)} models)', 
                       fontname=font, fontsize=15)
 
@@ -580,6 +644,7 @@ def plot_average_prediction_differences(gdf_inputs: list,
     plt.show()
     
     return base_gdf
+    
 
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
