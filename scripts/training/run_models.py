@@ -49,6 +49,7 @@ PARAMETERS = [
     "in_channels",
     "use_all_features",
     "out_channels",
+    "loss_fct",
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
     "gat_conv_layer_structure",
@@ -75,6 +76,7 @@ def get_parameters(args):
         "in_channels": args.in_channels,
         "use_all_features": args.use_all_features,
         "out_channels": args.out_channels,
+        "loss_fct": args.loss_fct,
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
         "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
@@ -102,7 +104,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "1pct_10k_shuffle"
+    params["unique_model_description"] = "ensemble_2"
     
     return params
 
@@ -132,6 +134,7 @@ def main():
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
+    parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
@@ -179,7 +182,13 @@ def main():
                         dtype=torch.float32)
         
         model = gnn_instance.to(device)
-        loss_fct = torch.nn.MSELoss().to(dtype=torch.float32).to(device)
+
+        if config.loss_fct == 'mse':
+            loss_fct = torch.nn.MSELoss().to(dtype=torch.float32).to(device)
+        elif config.loss_fct == 'l1':
+            loss_fct = torch.nn.L1Loss().to(dtype=torch.float32).to(device)
+        else:
+            raise ValueError(f"Loss function {config.loss_fct} not supported.")
         
         baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct)
         baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct)
