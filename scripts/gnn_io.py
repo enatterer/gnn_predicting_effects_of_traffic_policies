@@ -17,6 +17,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.sparse as sparse
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch import Tensor
 import torch_geometric
 from torch_geometric.data import Data, Batch
 from torch_geometric.transforms import LineGraph
@@ -25,12 +26,17 @@ import tqdm
 import wandb
 import copy
 
-import os 
-
+import os
+import sys
 import json
-
 import joblib  # For saving the scaler
 
+# Add the 'scripts' directory to the Python path
+scripts_path = os.path.abspath(os.path.join('..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 class MyGeometricDataset(Dataset):
     def __init__(self, data_list):
@@ -60,6 +66,42 @@ class EarlyStopping:
         else:
             self.best_loss = val_loss
             self.counter = 0
+
+class GNN_Loss:
+    """
+    Custom loss function for GNN that supports weighted loss computation.
+    The road with highesst vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
+    """
+    
+    def __init__(self, loss_fct, num_nodes, device, weighted=False):
+
+        if loss_fct == 'mse':
+            self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
+        elif self.config.loss_fct == 'l1':
+            self.loss_fct = torch.nn.L1Loss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
+        else:
+            raise ValueError(f"Loss function {loss_fct} not supported.")
+        
+        self.num_nodes = num_nodes
+        self.device = device
+        self.weighted = weighted
+
+    def __call__(self, y_pred:Tensor, y_true:Tensor, x: np.ndarray = None) -> Tensor: # x is before normalization (unscaled)
+        
+        if self.weighted:
+
+            loss = self.loss_fct(y_pred, y_true)
+            weights = x[:, EdgeFeatures.VOL_BASE_CASE]
+
+            # Normalize by the maximum value in each sample
+            for i in range(weights.shape[0] // self.num_nodes):
+                weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+
+            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+            return torch.mean(loss * weights.unsqueeze(1))
+
+        else:
+            return self.loss_fct(y_pred, y_true)
             
 def int_list_to_string(lst: list, delimiter: str = ', ') -> str:
     """
@@ -326,12 +368,13 @@ def encode_modes(modes):
     return mode_mapping.get(modes, -1)  # Use -1 for any unknown modes
 
 
-def compute_baseline_of_mean_target(dataset, loss_fct):
+def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
     Parameters:
     - dataset: A dataset containing normalized y values.
+    - scalers: The scalers used to normalize the x and pos values.
 
     Returns:
     - mse_value: The baseline MSE value.
@@ -341,27 +384,31 @@ def compute_baseline_of_mean_target(dataset, loss_fct):
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
+
+    # Original x values
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
     
     # median_y_normalized = np.median(y_values_normalized)   
 
     # Convert numpy arrays to torch tensors
-    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
-    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32)
+    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32).to(device)
+    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32).to(device)
     
     # Create the target tensor with the same shape as y_values_normalized_tensor
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
     # Compute the MSE
-    loss = loss_fct(y_values_normalized_tensor, target_tensor)
+    loss = loss_fct(y_values_normalized_tensor, target_tensor, x)
     return loss.item() 
 
 
-def compute_baseline_of_no_policies(dataset, loss_fct):
+def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
     Parameters:
     - dataset: A dataset containing y values: The actual difference of the volume of cars.
+    - scalers: The scalers used to normalize the x and pos values.
 
     Returns:
     - mse_value: The baseline MSE value.
@@ -370,12 +417,15 @@ def compute_baseline_of_no_policies(dataset, loss_fct):
     actual_difference_vol_car = np.concatenate([data.y for data in dataset])
 
     target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
+
+    # Original x values
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
     
-    target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
-    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
+    target_tensor = torch.tensor(target_tensor, dtype=torch.float32).to(device)
+    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32).to(device)
 
     # Compute the loss
-    loss = loss_fct(actual_difference_vol_car, target_tensor)
+    loss = loss_fct(actual_difference_vol_car, target_tensor, x)
     return loss.item()
 
 # def visualize_data(policy_features, flow_features, title):

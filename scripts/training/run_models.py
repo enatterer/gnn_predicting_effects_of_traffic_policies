@@ -50,6 +50,7 @@ PARAMETERS = [
     "use_all_features",
     "out_channels",
     "loss_fct",
+    "use_weighted_loss",
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
     "gat_conv_layer_structure",
@@ -77,6 +78,7 @@ def get_parameters(args):
         "use_all_features": args.use_all_features,
         "out_channels": args.out_channels,
         "loss_fct": args.loss_fct,
+        "use_weighted_loss": args.use_weighted_loss,
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
         "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
@@ -104,7 +106,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "ensemble_2"
+    params["unique_model_description"] = "ensemble_3"
     
     return params
 
@@ -135,6 +137,7 @@ def main():
     parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
+    parser.add_argument("--use_weighted_loss", type=hf.str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
@@ -167,7 +170,11 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
-        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size=params['batch_size'], path_to_save_dataloader=path_to_save_dataloader, use_all_features=params['use_all_features'], use_bootstrapping=params['use_bootrappping'])
+        train_dl, valid_dl, scalers_train, scalers_validation = hf.prepare_data_with_graph_features(datalist=datalist,
+                                                                                                  batch_size=params['batch_size'],
+                                                                                                  path_to_save_dataloader=path_to_save_dataloader,
+                                                                                                  use_all_features=params['use_all_features'],
+                                                                                                  use_bootstrapping=params['use_bootrappping'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 
@@ -182,16 +189,12 @@ def main():
                         dtype=torch.float32)
         
         model = gnn_instance.to(device)
-
-        if config.loss_fct == 'mse':
-            loss_fct = torch.nn.MSELoss().to(dtype=torch.float32).to(device)
-        elif config.loss_fct == 'l1':
-            loss_fct = torch.nn.L1Loss().to(dtype=torch.float32).to(device)
-        else:
-            raise ValueError(f"Loss function {config.loss_fct} not supported.")
+        loss_fct = gio.GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
         
-        baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct)
-        baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct)
+        baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct,
+                                                                        device=device, scalers=scalers_train)
+        baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct,
+                                                            device=device, scalers=scalers_train)
         print("baseline loss mean " + str(baseline_loss_mean_target))
         print("baseline loss no  " + str(baseline_loss) )
 
@@ -204,7 +207,9 @@ def main():
                     valid_dl=valid_dl,
                     device=device, 
                     early_stopping=early_stopping,
-                    model_save_path=model_save_path)
+                    model_save_path=model_save_path,
+                    scalers_train=scalers_train,
+                    scalers_validation=scalers_validation)
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:

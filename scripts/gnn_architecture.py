@@ -2,6 +2,7 @@ import numpy as np
 from tqdm import tqdm
 import wandb
 from sklearn.metrics import r2_score
+from sklearn.preprocessing import StandardScaler
 from scipy.stats import spearmanr, pearsonr
 
 import torch
@@ -251,7 +252,9 @@ def train(model: nn.Module,
           valid_dl: DataLoader = None, 
           device: torch.device = None, 
           early_stopping: object = None, 
-          model_save_path: str = None) -> tuple:
+          model_save_path: str = None,
+          scalers_train: dict = None,
+          scalers_validation: dict = None) -> tuple:
     """
     Train the GNN model.
 
@@ -265,6 +268,8 @@ def train(model: nn.Module,
     - device (torch.device, optional): Device to use for training.
     - early_stopping (object, optional): Early stopping mechanism.
     - model_save_path (str, optional): Path to save the best model.
+    - scalers_train (dict, optional): x and pos scalers for training data.
+    - scalers_validation (dict, optional): x and pos scalers for validation data.
 
     Returns:
     - tuple: Validation loss and the best epoch.
@@ -289,6 +294,7 @@ def train(model: nn.Module,
                 
             data = data.to(device)
             targets_node_predictions = data.y
+            x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
 
             if config.predict_mode_stats:
                 targets_mode_stats = data.mode_stats
@@ -297,12 +303,12 @@ def train(model: nn.Module,
                 # Forward pass
                 if config.predict_mode_stats:
                     predicted, mode_stats_pred = model(data)
-                    train_loss_node_predictions = loss_fct(predicted, targets_node_predictions)
-                    train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats)
+                    train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                    train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats) # add weight here also later!
                     train_loss = train_loss_node_predictions + train_loss_mode_stats
                 else:
                     predicted = model(data)
-                    train_loss = loss_fct(predicted, targets_node_predictions)
+                    train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
       
             # Backward pass
             scaler.scale(train_loss).backward() 
@@ -335,7 +341,8 @@ def train(model: nn.Module,
                 model=model,
                 dataset=valid_dl,
                 loss_func=loss_fct,
-                device=device
+                device=device,
+                scalers_validation=scalers_validation
             )
             wandb.log({
                 "val_loss": val_loss,
@@ -353,7 +360,8 @@ def train(model: nn.Module,
                 model=model,
                 dataset=valid_dl,
                 loss_func=loss_fct,
-                device=device
+                device=device,
+                scalers_validation=scalers_validation
             )
             wandb.log({
                 "val_loss": val_loss,
@@ -407,7 +415,8 @@ def validate_model_during_training(config: object,
                                    model: nn.Module, 
                                    dataset: DataLoader, 
                                    loss_func: nn.Module, 
-                                   device: torch.device) -> tuple:
+                                   device: torch.device,
+                                   scalers_validation: dict) -> tuple:
     """
     Validate the model during training, with support for Monte Carlo Dropout and mode stats predictions.
 
@@ -417,6 +426,7 @@ def validate_model_during_training(config: object,
     - dataset (DataLoader): Validation dataset loader.
     - loss_func (nn.Module): Loss function for validation.
     - device (torch.device): Device to perform validation on.
+    - scalers_validation (dict): x and pos scalers for validation data.
 
     Returns:
     - tuple: Validation metrics including loss, R^2, Spearman, and Pearson correlations.
@@ -434,6 +444,7 @@ def validate_model_during_training(config: object,
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
+            x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Monte Carlo Dropout Inference
@@ -452,13 +463,13 @@ def validate_model_during_training(config: object,
 
             # Compute validation losses
             if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()
-                val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
+                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
+                val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item() # add weight here also later!
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions).item()
+                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
 
             # Collect predictions and targets
             actual_node_targets.append(targets_node_predictions)
