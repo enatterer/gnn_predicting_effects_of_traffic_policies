@@ -37,6 +37,7 @@ import alphashape
 from matplotlib.lines import Line2D
 
 from shapely.geometry import Polygon
+from matplotlib.colors import TwoSlopeNorm, Normalize
 
 districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
 
@@ -314,7 +315,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
                          districts_of_interest: list =[1, 2, 3, 4],
                          plot_contour_lines:bool=True, is_absolute:bool=False,
-                         cmap:str='coolwarm'):
+                         cmap:str='coolwarm',
+                         result_path:str=None):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
@@ -335,7 +337,6 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     norm=norm, label="Street network", zorder=2)
     
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
-    
     if plot_contour_lines:
         if isinstance(relevant_area_to_plot, set):
             for area in relevant_area_to_plot:
@@ -353,8 +354,298 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     if save_it:
         p = "predicted" if is_predicted else "actual"
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
-        plt.savefig("results/" + identifier + "_" + p, bbox_inches='tight')
+        plt.savefig(result_path + identifier + "_" + p, bbox_inches='tight')
     plt.show()
+    
+    
+def plot_prediction_difference(gdf_input: gpd.GeoDataFrame, 
+                             font: str = 'Times New Roman',
+                             save_it: bool = False, 
+                             number_to_plot: int = 0,
+                             zone_to_plot: str = "this_zone",
+                             alpha: int = 100,
+                             use_fixed_norm: bool = True,
+                             fixed_norm_max: int = 10,
+                             known_districts: bool = False,
+                             buffer: float = 0.0005,
+                             districts_of_interest: list = [1, 2, 3, 4],
+                             plot_contour_lines: bool = True,
+                             cmap: str = 'coolwarm',
+                             result_path: str = None):
+    """
+    Plot the difference between predicted and actual values on a map.
+    
+    Parameters are the same as plot_combined_output, but this function specifically shows
+    the prediction error (predicted - actual values).
+    """
+    gdf = gdf_input.copy()
+    
+    # Calculate the difference between predicted and actual values
+    gdf['prediction_error'] = gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']
+    
+    # Filter geographic section
+    gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
+
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+    
+    if use_fixed_norm:
+        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+    else:
+        norm = TwoSlopeNorm(vmin=gdf['prediction_error'].min(), 
+                           vcenter=0, 
+                           vmax=gdf['prediction_error'].max())
+    
+    # Plot with different line widths based on highway type
+    linewidths = gdf["highway"].apply(get_linewidth)
+    gdf['linewidth'] = linewidths
+    large_lines = gdf[gdf['linewidth'] > 1]
+    small_lines = gdf[gdf['linewidth'] == 1]
+    
+    small_lines.plot(column='prediction_error', cmap=cmap, linewidth=small_lines['linewidth'], 
+                    ax=ax, legend=False, norm=norm, label="Street network", zorder=1)
+    large_lines.plot(column='prediction_error', cmap=cmap, linewidth=large_lines['linewidth'], 
+                    ax=ax, legend=False, norm=norm, label="Street network", zorder=2)
+    
+    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, 
+                                                     districts_of_interest, gdf)
+    if plot_contour_lines:
+        if isinstance(relevant_area_to_plot, set):
+            for area in relevant_area_to_plot:
+                if isinstance(area, Polygon):
+                    gdf_area = gpd.GeoDataFrame(index=[0], crs=gdf.crs, geometry=[area])
+                    gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+        else:
+            relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+    
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap)
+    cbar.set_label('Prediction Error (Predicted - Actual)', fontname=font, fontsize=15)
+    
+    if save_it:
+        identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
+        plt.savefig(result_path + identifier + "_prediction_error", bbox_inches='tight')
+    
+    plt.show()
+    
+def plot_average_prediction_differences(gdf_inputs: list, 
+                                     font: str = 'Times New Roman',
+                                     save_it: bool = False,                                      
+                                     use_fixed_norm: bool = True,
+                                     fixed_norm_max: int = 10,
+                                     use_absolute_value_of_difference: bool = True,
+                                     use_percentage: bool = False,
+                                     disagreement_threshold: float = None,
+                                     result_path: str = None,
+                                     loss_fct: str = "l1",
+                                     scale_type: str = "continuous",
+                                     discrete_thresholds: list = None):
+    """
+    Plot the average prediction error across multiple models.
+    
+    Parameters:
+    -----------
+    gdf_inputs : list
+        List of GeoDataFrames containing model predictions
+    font : str, optional
+        Font to use for plotting
+    save_it : bool, optional
+        Whether to save the plot
+    use_fixed_norm : bool, optional
+        Whether to use fixed normalization values
+    fixed_norm_max : int, optional
+        Maximum value for normalization if use_fixed_norm is True
+    use_absolute_value_of_difference : bool
+        If True, uses the absolute value of the differences
+    use_percentage : bool
+        If True, computes differences as percentages relative to actual values
+    disagreement_threshold : float
+        If set, highlights areas where coefficient of variation exceeds this value
+    result_path : str, optional
+        Path where to save the plot if save_it is True
+    loss_fct : str, optional
+        Loss function to use ("l1" or "mse")
+    scale_type : str, optional
+        Either "continuous" or "discrete"
+    discrete_thresholds : list, optional
+        List of threshold values defining the boundaries between categories
+    """
+    fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
+    
+    base_gdf = gdf_inputs[0].copy()
+    
+    # Calculate errors for each model
+    all_errors = []
+    for gdf in gdf_inputs:
+        if use_percentage:
+            # Avoid division by zero by adding small epsilon where actual is zero
+            epsilon = 1e-10
+            if use_absolute_value_of_difference:
+                if loss_fct == "l1":
+                    error = abs((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
+                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']))) * 100
+                elif loss_fct == "mse":
+                    error = ((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / 
+                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']) + epsilon)) * 100
+            else:
+                if loss_fct == "l1":
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / (gdf['vol_car_change_actual'] + gdf['vol_base_case'])* 100
+                elif loss_fct == "mse":
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / (gdf['vol_car_change_actual'] + gdf['vol_base_case']) * 100
+        else:
+            if use_absolute_value_of_difference:
+                error = abs(gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual'])
+            else:
+                error = gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']
+        all_errors.append(error)
+    
+    # Calculate statistics
+    errors_df = pd.concat(all_errors, axis=1)
+    base_gdf['mean_prediction_error'] = errors_df.mean(axis=1)
+    base_gdf['std_prediction_error'] = errors_df.std(axis=1)
+    
+    # Calculate coefficient of variation for disagreement highlighting
+    if disagreement_threshold is not None:
+        # Use absolute values for std and mean in coefficient calculation
+        abs_mean = abs(base_gdf['mean_prediction_error'])
+        # Avoid division by zero
+        mask = abs_mean > 1e-10
+        base_gdf['coefficient_of_variation'] = float('inf')  # Default value for zero means
+        base_gdf.loc[mask, 'coefficient_of_variation'] = base_gdf.loc[mask, 'std_prediction_error'] / abs_mean[mask]
+        high_disagreement = base_gdf['coefficient_of_variation'] > disagreement_threshold
+    
+    base_gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(base_gdf)
+    
+    # Handle discrete vs continuous scale
+    if scale_type == "discrete":
+        if discrete_thresholds is None:
+            discrete_thresholds = [33, 66]  # default thresholds
+            
+        # Create discrete bins for the data
+        def categorize_value(x, thresholds):
+            for i, threshold in enumerate(thresholds):
+                if abs(x) <= threshold:
+                    return i
+            return len(thresholds)  # for values greater than the last threshold
+        
+        base_gdf['discrete_error'] = base_gdf['mean_prediction_error'].apply(
+            lambda x: categorize_value(x, discrete_thresholds))
+        
+        # Create a color gradient based on number of categories
+        n_categories = len(discrete_thresholds) + 1
+        colors = plt.cm.RdYlGn_r(np.linspace(0, 1, n_categories))  # Using _r to invert the colormap
+        cmap = plt.cm.colors.ListedColormap(colors)
+        norm = plt.Normalize(vmin=-0.5, vmax=n_categories - 0.5)
+        plot_column = 'discrete_error'
+    else:
+        if use_fixed_norm:
+            norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max) if not use_absolute_value_of_difference else \
+                   Normalize(vmin=0, vmax=fixed_norm_max)
+        else:
+            norm = TwoSlopeNorm(vmin=base_gdf['mean_prediction_error'].min(), 
+                               vcenter=0, 
+                               vmax=base_gdf['mean_prediction_error'].max()) if not use_absolute_value_of_difference else \
+                   Normalize(vmin=0, vmax=base_gdf['mean_prediction_error'].max())
+        plot_column = 'mean_prediction_error'
+        cmap = 'Reds_r' if use_absolute_value_of_difference else 'coolwarm_r'  # Using _r to invert the colormaps
+    
+    # Plot with different line widths
+    linewidths = base_gdf["highway"].apply(get_linewidth)
+    base_gdf['linewidth'] = linewidths
+    large_lines = base_gdf[base_gdf['linewidth'] > 1]
+    small_lines = base_gdf[base_gdf['linewidth'] == 1]
+    
+    # Plot the data
+    small_lines.plot(column=plot_column, cmap=cmap, 
+                    linewidth=small_lines['linewidth'],
+                    ax=ax, legend=False, norm=norm, zorder=1)
+    large_lines.plot(column=plot_column, cmap=cmap, 
+                    linewidth=large_lines['linewidth'],
+                    ax=ax, legend=False, norm=norm, zorder=2)
+    
+    # Highlight areas of high disagreement if threshold is set
+    if disagreement_threshold is not None:
+        disagreement_lines = base_gdf[high_disagreement]
+        if not disagreement_lines.empty:
+            # Create a simple line for the legend
+            legend_line = plt.Line2D([], [], color='black', linestyle='--', 
+                                   linewidth=2, 
+                                   label=f'High model disagreement (CV > {disagreement_threshold})')
+            
+            # Plot the disagreement lines
+            disagreement_lines.plot(color='none', edgecolor='black', 
+                                  linewidth=disagreement_lines['linewidth']*1.5,
+                                  ax=ax, zorder=3, linestyle='--')
+            
+            # Add legend with the custom line
+            ax.legend(handles=[legend_line], fontsize=12)
+    
+    # Styling
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
+    plt.xlabel("Longitude", fontname=font, fontsize=15)
+    plt.ylabel("Latitude", fontname=font, fontsize=15)
+    
+    ax.tick_params(axis='both', which='major', labelsize=10)
+    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+        label.set_fontname(font)
+        label.set_fontsize(15)
+
+    # Colorbar setup
+    ax.set_position([0.1, 0.1, 0.75, 0.75])
+    cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm._A = []
+    
+    # Create and customize colorbar based on scale type
+    if scale_type == "discrete":
+        ticks = range(len(discrete_thresholds) + 1)
+        cbar = plt.colorbar(sm, cax=cax, ticks=ticks)
+        
+        # Create labels based on thresholds
+        labels = []
+        for i in range(len(discrete_thresholds) + 1):
+            if i == 0:
+                labels.append(f'0-{discrete_thresholds[0]}')
+            elif i == len(discrete_thresholds):
+                labels.append(f'>{discrete_thresholds[-1]}')
+            else:
+                labels.append(f'{discrete_thresholds[i-1]}-{discrete_thresholds[i]}')
+        
+        cbar.ax.set_yticklabels(labels)
+    else:
+        cbar = plt.colorbar(sm, cax=cax)
+    
+    # Customize colorbar
+    cbar.ax.tick_params(labelsize=15)
+    for t in cbar.ax.get_yticklabels():
+        t.set_fontname(font)
+    cbar.ax.yaxis.label.set_fontname(font)
+    cbar.ax.yaxis.label.set_size(15)
+    
+    error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
+    units = "%" if use_percentage else "vehicles"
+    
+    if use_absolute_value_of_difference:
+        cbar.set_label(f'{error_type} Prediction Error\n'
+                      f'{loss_fct} difference in {units}\n'
+                      f'(Averaged across {len(gdf_inputs)} models)', 
+                      fontname=font, fontsize=15)
+    else:
+        cbar.set_label(f'{error_type} Prediction Error\n'
+                      f'{loss_fct} difference in {units}\n'
+                      f'(Averaged across {len(gdf_inputs)} models)', 
+                      fontname=font, fontsize=15)
+
+    if save_it:
+        error_type_str = "average_absolute_value_of_difference" if use_absolute_value_of_difference else "average_signed_difference"
+        metric_str = "percent" if use_percentage else "abs_vehicles"
+        plt.savefig(f"{result_path}/{error_type_str}_prediction_error_{metric_str}", 
+                   bbox_inches='tight')
+    
+    plt.show()
+    
+    return base_gdf
+    
+
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     if use_fixed_norm:
