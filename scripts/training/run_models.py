@@ -54,7 +54,7 @@ PARAMETERS = [
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
     "gat_conv_layer_structure",
-    "use_bootrappping",
+    "use_bootrapping",
     "num_epochs",
     "batch_size",
     "lr",
@@ -82,7 +82,7 @@ def get_parameters(args):
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
         "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
-        "use_bootrappping": args.use_bootrappping,
+        "use_bootrapping": args.use_bootrapping,
         "num_epochs": args.num_epochs,
         "batch_size": int(args.batch_size),
         "lr": float(args.lr),
@@ -106,7 +106,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "ensemble_3"
+    params["unique_model_description"] = "ensemble_5"
     
     return params
 
@@ -142,7 +142,7 @@ def main():
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
     parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
-    parser.add_argument("--use_bootrappping", type=hf.str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
+    parser.add_argument("--use_bootrapping", type=hf.str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -174,7 +174,7 @@ def main():
                                                                                                   batch_size=params['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
                                                                                                   use_all_features=params['use_all_features'],
-                                                                                                  use_bootstrapping=params['use_bootrappping'])
+                                                                                                  use_bootstrapping=params['use_bootrapping'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 
@@ -202,7 +202,8 @@ def main():
         best_val_loss, best_epoch = garch.train(model=model, 
                     config=config, 
                     loss_fct=loss_fct,
-                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
+                    # optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
+                    optimizer=torch.optim.SGD(model.parameters(), lr=config.lr, momentum=0.9),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 

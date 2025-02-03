@@ -314,7 +314,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          use_fixed_norm:bool=True, 
                          fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
                          districts_of_interest: list =[1, 2, 3, 4],
-                         plot_contour_lines:bool=True, is_absolute:bool=False,
+                         plot_contour_lines:bool=False, plot_policy_roads:bool=False,
+                         is_absolute:bool=False,
                          cmap:str='coolwarm',
                          result_path:str=None):
 
@@ -335,7 +336,13 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     norm=norm, label="Street network", zorder=1)
     large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
                     norm=norm, label="Street network", zorder=2)
-    
+     
+    tolerance = 1e-3
+    gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
+    edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
+    edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+                                       norm=norm, label="Capacity was decreased on these roads", zorder=3)
+
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     if plot_contour_lines:
         if isinstance(relevant_area_to_plot, set):
@@ -346,7 +353,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         else:
             relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
         
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines,cmap)
+    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads)
     if is_absolute:
         cbar.set_label('Car volume', fontname=font, fontsize=15)
     else:
@@ -624,16 +631,10 @@ def plot_average_prediction_differences(gdf_inputs: list,
     error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
     units = "%" if use_percentage else "vehicles"
     
-    if use_absolute_value_of_difference:
-        cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'{loss_fct} difference in {units}\n'
-                      f'(Averaged across {len(gdf_inputs)} models)', 
-                      fontname=font, fontsize=15)
-    else:
-        cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'{loss_fct} difference in {units}\n'
-                      f'(Averaged across {len(gdf_inputs)} models)', 
-                      fontname=font, fontsize=15)
+    cbar.set_label(f'{error_type} Prediction Error\n'
+                   f'{loss_fct} difference in {units}\n'
+                   f'(Averaged across {len(gdf_inputs)} samples)',
+                   fontname=font, fontsize=15)
 
     if save_it:
         error_type_str = "average_absolute_value_of_difference" if use_absolute_value_of_difference else "average_signed_difference"
@@ -655,7 +656,7 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     return norm
     
 
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap):
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads=False):
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
     plt.xlabel("Longitude", fontname=font, fontsize=15)
@@ -666,13 +667,15 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines
     for label in (ax.get_xticklabels() + ax.get_yticklabels()):
         label.set_fontname(font)
         label.set_fontsize(15)
-    
+
     # Create custom legend
+    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')] # Add more lines for other labels as needed
+
     if plot_contour_lines:
-        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network'),# Add more lines for other labels as needed
-                        Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
-    else:
-        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')]
+        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section'))
+
+    if plot_policy_roads:
+        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased on these roads'))
 
     ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
     ax.set_position([0.1, 0.1, 0.75, 0.75])

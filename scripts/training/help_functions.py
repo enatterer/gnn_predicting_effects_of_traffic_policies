@@ -102,7 +102,7 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         print("Splitting into subsets...")
 
         if use_bootstrapping:
-            train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=2)
+            train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
         else:
             train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
         
