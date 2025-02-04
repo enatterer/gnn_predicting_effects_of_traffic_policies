@@ -124,6 +124,11 @@ def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, in
             'length': inversed_x[:, EdgeFeatures.LENGTH-1], # -1 since we didn't use Highway, fix later
             'vol_car_change_actual': target_values.squeeze(),
             'vol_car_change_predicted': predicted_values.squeeze(),
+            'mean_car_vol': original_gdf['vol_car'].values,
+            'variance': original_gdf['variance'].values,
+            'std_dev': original_gdf['std_dev'].values,
+            'std_dev_multiplied': original_gdf['std_dev_multiplied'].values,
+            'cv_percent': original_gdf['cv_percent'].values,
         }
     
     edge_df = pd.DataFrame(edge_data)
