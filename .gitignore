@@ -1,5 +1,6 @@
 .history/
 data/
+logs/
 scripts/training/wandb/
 scripts/testing_and_evaluation/wandb/
 scripts/training/__pycache__/
