@@ -336,12 +336,13 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     norm=norm, label="Street network", zorder=1)
     large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
                     norm=norm, label="Street network", zorder=2)
-     
-    tolerance = 1e-3
-    gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
-    edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
-    edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
-                                       norm=norm, label="Capacity was decreased on these roads", zorder=3)
+    
+    if plot_policy_roads:
+        tolerance = 1e-3
+        gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
+        edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
+        edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+                                        norm=norm, label="Capacity was decreased on these roads", zorder=3)
 
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     if plot_contour_lines:
