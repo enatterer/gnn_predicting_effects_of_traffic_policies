@@ -676,7 +676,7 @@ class LinearWarmupCosineDecayScheduler:
         
         self.min_lr = 0.01*initial_lr
         self.warmup_steps = int(0.05*total_steps)
-        self.decay_steps = total_steps - warmup_steps
+        self.decay_steps = total_steps - self.warmup_steps
         self.cosine_decay_rate = 0.5
 
     def get_lr(self, step: int) -> float:
