@@ -38,6 +38,8 @@ from matplotlib.lines import Line2D
 
 from shapely.geometry import Polygon
 from matplotlib.colors import TwoSlopeNorm, Normalize
+from scipy import stats
+
 
 districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
 
@@ -308,6 +310,63 @@ def compute_r2_torch_with_mean_targets(mean_targets, preds, targets):
     ss_res = torch.sum((targets - preds) ** 2)
     r2 = 1 - (ss_res / ss_tot)
     return r2
+
+def compute_correlations_scipy(predictions, targets):
+    """
+    Compute correlations using scipy (for verification)
+    """
+    spearman_corr, _ = stats.spearmanr(predictions, targets)
+    pearson_corr, _ = stats.pearsonr(predictions, targets)
+    return spearman_corr, pearson_corr
+
+def get_road_type_indices(gdf):
+    """
+    Get indices for different road types, including dynamic conditions like capacity reduction
+    """
+    tolerance = 1e-3
+    indices = {
+        # Static conditions (road types)
+        "All Roads": gdf.index,
+        "Trunk Roads": gdf[gdf['highway'].isin([0])].index,
+        "Primary Roads": gdf[gdf['highway'].isin([1])].index,
+        "Secondary Roads": gdf[gdf['highway'].isin([2])].index,
+        "Tertiary Roads": gdf[gdf['highway'].isin([3])].index,
+        "Residential Streets": gdf[gdf['highway'].isin([4])].index,
+        "Living Streets": gdf[gdf['highway'].isin([5])].index,
+        # "P/S/T Roads": gdf[gdf['highway'].isin([1, 2, 3])].index,
+        # Dynamic conditions (capacity reduction)
+        # "Roads with Capacity Reduction": gdf[gdf['capacity_reduction_rounded'] < -tolerance].index,
+        # "Roads with No Capacity Reduction": gdf[gdf['capacity_reduction_rounded'] >= -tolerance].index,
+        
+        "P/S/T Roads with Capacity Reduction": gdf[(gdf['highway'].isin([1, 2, 3])) & (gdf['capacity_reduction_rounded'] < -tolerance)].index,
+        "P/S/T Roads with No Capacity Reduction": gdf[(gdf['highway'].isin([1, 2, 3])) & (gdf['capacity_reduction_rounded'] >= -tolerance)].index,
+        # Combined conditions
+        # "Primary Roads with Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([1])) & 
+        #     (gdf['capacity_reduction_rounded'] < -tolerance)
+        # ].index,
+        # "Primary Roads with No Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([1])) & 
+        #     (gdf['capacity_reduction_rounded'] >= -tolerance)
+        # ].index,
+        # "Secondary Roads with Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([2])) & 
+        #     (gdf['capacity_reduction_rounded'] < -tolerance)
+        # ].index,
+        # "Secondary Roads with No Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([2])) & 
+        #     (gdf['capacity_reduction_rounded'] >= -tolerance)
+        # ].index,
+        # "Tertiary Roads with Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([3])) & 
+        #     (gdf['capacity_reduction_rounded'] < -tolerance)
+        # ].index,    
+        # "Tertiary Roads with No Capacity Reduction": gdf[
+        #     (gdf['highway'].isin([3])) & 
+        #     (gdf['capacity_reduction_rounded'] >= -tolerance)
+        # ].index
+    }
+    return indices
 
 
 # PLOTTING FUNCTIONS
@@ -730,7 +789,6 @@ def get_linewidth(value):
             return 2
         else:
             return 1
-        
 
 def filter_for_geographic_section(gdf):
     x_min = gdf.total_bounds[0] + 0.05
@@ -742,6 +800,578 @@ def filter_for_geographic_section(gdf):
     # Filter the network to include only the data within the bounding box
     gdf = gdf[gdf.intersects(bbox)]
     return gdf,x_min,y_min,x_max,y_max
+
+
+def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=None, result_path=None, save_it=False):
+
+    """
+    Create a radar plot for model performance metrics.
+    
+    Args:
+        metrics_by_type (dict): Dictionary containing metrics for each road type
+        selected_metrics (list, optional): List of metrics to display. Each metric should be a dict with:
+            - 'id': identifier in metrics_by_type
+            - 'label': display label
+            - 'transform': function to transform the value (or None to use directly)
+            - 'y_pos': y-position of the label
+    """
+    # Default metrics if none specified
+    if selected_metrics is None:
+        selected_metrics = [
+            {
+                'id': 'r_squared',
+                'label': 'R²',
+                'transform': lambda x: max(0, x * 100),
+                'y_pos': -0.05
+            },
+            {
+                'id': 'mse_ratio',
+                'label': 'MSE/Naive MSE',
+                'transform': lambda x, max_ratio: (1 - x/max_ratio) * 100,
+                'y_pos': -0.1
+            },
+            {
+                'id': 'pearson',
+                'label': 'Pearson\nCorrelation',
+                'transform': lambda x: max(0, x * 100),
+                'y_pos': -0.05
+            },
+            {
+                'id': 'spearman',
+                'label': 'Spearman\nCorrelation',
+                'transform': lambda x: max(0, x * 100),
+                'y_pos': -0.05
+            }
+        ]
+    
+    # Select specific road types
+    selected_types = [
+        'All Roads',
+        'Trunk Roads',
+        'Primary Roads',
+        'Secondary Roads',
+        'Tertiary Roads',
+        'Residential Streets',
+        'Living Streets',
+        'P/S/T Roads with Capacity Reduction',
+        'P/S/T Roads with No Capacity Reduction',
+    ]
+    
+    filtered_metrics = {rt: metrics_by_type[rt] for rt in selected_types}
+    road_types = sorted(filtered_metrics.keys(), 
+                       key=lambda x: filtered_metrics[x]['r_squared'],
+                       reverse=True)
+    
+    # Calculate maximum ratios for normalization if needed
+    max_ratios = {}
+    for metric in selected_metrics:
+        if 'ratio' in metric['id']:
+            if metric['id'] == 'mse_ratio':
+                max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
+                                      metrics_by_type[rt]['naive_mse'] 
+                                      for rt in road_types)
+            elif metric['id'] == 'l1_ratio':
+                max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
+                                     metrics_by_type[rt]['naive_l1'] 
+                                     for rt in road_types)
+    
+    # Setup plot
+    num_vars = len(selected_metrics)
+    angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
+    angles += angles[:1]
+    
+    fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+    ax.grid(True, color='gray', alpha=0.3)
+    
+    
+    # Option 1: Ocean Blues (Serene)
+    colors = {
+        'All Roads': '#01579b',                               # Darkest ocean blue
+        'Trunk Roads': '#0277bd',                             # Dark ocean blue
+        'Primary Roads': '#0288d1',                           # Medium-dark blue
+        'Secondary Roads': '#039be5',                         # Medium blue
+        'Tertiary Roads': '#03a9f4',                          # Medium-light blue
+        'Residential Streets': '#29b6f6',                     # Light blue
+        'Living Streets': '#4fc3f7',                          # Lighter blue
+        'P/S/T Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+        'P/S/T Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+        # 'Secondary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+        # 'Secondary Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+        # 'Tertiary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+        # 'Tertiary Roads with No Capacity Reduction': '#b3e5fc'   # Lightest blue
+    }
+    
+    # Plot data
+    for road_type in road_types:
+        values = []
+        for metric in selected_metrics:
+            if 'ratio' in metric['id']:
+                if metric['id'] == 'mse_ratio':
+                    ratio = filtered_metrics[road_type]['mse'] / filtered_metrics[road_type]['naive_mse']
+                    values.append(metric['transform'](ratio, max_ratios['mse']))
+                elif metric['id'] == 'l1_ratio':
+                    ratio = filtered_metrics[road_type]['l1'] / filtered_metrics[road_type]['naive_l1']
+                    values.append(metric['transform'](ratio, max_ratios['l1']))
+            else:
+                val = filtered_metrics[road_type][metric['id']]
+                values.append(metric['transform'](val))
+        values += values[:1]
+        ax.plot(angles, values, linewidth=3, linestyle='solid',
+            label=f"{road_type} (R²: {filtered_metrics[road_type]['r_squared']:.2f})",  
+            color=colors[road_type])
+        ax.fill(angles, values, alpha=0.1, color=colors[road_type])
+
+    # Set chart properties
+    ax.set_xticks(angles[:-1])
+    
+    # Set the labels with proper positioning
+    ax.set_xticklabels(
+        [m['label'] for m in selected_metrics],
+        fontsize=15,
+        y=-0.05  # Move labels outward
+    )
+    
+    ax.set_ylim(0, 1)
+    ax.set_rgrids([0, 0.2, 0.4, 0.6, 0.8, 1], angle=45, fontsize=15)
+        
+        # Grid lines and outer circle styling
+    for line in ax.yaxis.get_gridlines() + ax.xaxis.get_gridlines():
+        line.set_color('gray')
+        line.set_linewidth(1.0)
+        line.set_alpha(0.3)
+
+    # Center point and circle
+    ax.plot(0, 0, 'k.', markersize=10)
+    
+        # In your radar plot code, modify the legend part:
+    ax.legend(loc='center left', 
+            bbox_to_anchor=(1.1, 0.5),
+            fontsize=15,          # Increase font size (default is usually 10)
+            markerscale=2,        # Make the markers/lines in legend bigger
+            frameon=True,         # Add a frame
+            framealpha=0.9,       # Make frame slightly transparent
+            edgecolor='gray',     # Add edge color to frame
+            borderpad=1,          # Add padding inside legend border
+            labelspacing=1.2,     # Increase spacing between legend entries
+            handlelength=3)       # Make the lines in legend longer
+    if save_it:
+        plt.savefig(result_path, bbox_inches='tight', dpi=300)
+        
+    plt.show()
+    
+
+
+def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, save_it=False):
+    """
+    Create scatter plot for MSE vs Variance with blue best-fit line and larger labels
+    """
+    plt.rcParams["font.family"] = "Times New Roman"
+    
+    # Define selected road types
+    selected_types = [
+        'All Roads',
+        'Trunk Roads',
+        'Primary Roads',
+        'Secondary Roads',
+        'Tertiary Roads',
+        'Residential Streets',
+        'Living Streets',
+        'P/S/T Roads with Capacity Reduction',
+        'P/S/T Roads with No Capacity Reduction'
+        # 'Primary Roads with Capacity Reduction',
+        # 'Primary Roads with No Capacity Reduction',
+        # 'Secondary Roads with Capacity Reduction',
+        # 'Secondary Roads with No Capacity Reduction',
+        # 'Tertiary Roads with Capacity Reduction',
+        # 'Tertiary Roads with No Capacity Reduction'
+    ]
+    
+    # Get data
+    mse_values = [metrics_by_type[rt]['mse'] for rt in selected_types]
+    variance_values = [metrics_by_type[rt]['variance'] for rt in selected_types]
+    
+    # Create plot
+    plt.figure(figsize=(12, 8))
+    ax = plt.gca()
+    
+    # Remove top and right spines
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    
+    # Add best-fit line with harmonious blue color
+    z = np.polyfit(variance_values, mse_values, 1)
+    p = np.poly1d(z)
+    x_line = np.linspace(min(variance_values), max(variance_values), 100)
+    ax.plot(x_line, p(x_line), '--', color='#0277bd', alpha=0.8, linewidth=2)  # Using a medium-dark blue
+    
+    # Plot points
+    for i, rt in enumerate(selected_types):
+        ax.scatter(variance_values[i], mse_values[i], color=colors[rt], s=150, label=rt)
+        ax.annotate(rt, (variance_values[i], mse_values[i]), 
+                   xytext=(10, 10), textcoords='offset points', fontsize=16)
+    
+    # Labels with larger font size
+    ax.set_xlabel('Variance', fontsize=16)
+    ax.set_ylabel('MSE', fontsize=16)
+    
+    # Tick labels
+    ax.tick_params(axis='both', which='major', labelsize=14)
+    
+    # Add correlation coefficient
+    pearson_mse_var = stats.pearsonr(variance_values, mse_values)[0]
+    ax.text(0.02, 0.98, f'Pearson r = {pearson_mse_var:.2f}', 
+            transform=ax.transAxes, verticalalignment='top', fontsize=16)
+    
+    plt.tight_layout()
+    if save_it:
+        plt.savefig(result_path, bbox_inches='tight', dpi=300)
+    plt.show()
+    
+    
+def create_error_vs_variability_scatterplots_mse_and_mae(metrics_by_type, result_path=None, save_it=False):
+    """
+    Create two scatter plots:
+    1. MSE vs Variance
+    2. L1 vs Normalized Std Dev
+    With CV on secondary axis
+    """
+    plt.rcParams["font.family"] = "Times New Roman"
+    
+    # Define selected road types
+    selected_types = [
+        'All Roads',
+        'Trunk Roads',
+        'Primary Roads',
+        'Secondary Roads',
+        'Tertiary Roads',
+        'Residential Streets',
+        'Living Streets',
+        'P/S/T Roads with Capacity Reduction',
+        'P/S/T Roads with No Capacity Reduction'
+    ]
+    
+    # Create two subplots
+    fig, (ax1, ax3) = plt.subplots(2, 1, figsize=(12, 12))
+    
+    # Get data
+    mse_values = [metrics_by_type[rt]['mse'] for rt in selected_types]
+    variance_values = [metrics_by_type[rt]['variance'] for rt in selected_types]
+    l1_values = [metrics_by_type[rt]['l1'] for rt in selected_types]
+    std_dev_norm_values = [metrics_by_type[rt]['std_dev_normalized'] for rt in selected_types]
+    cv_values = [metrics_by_type[rt]['cv_percent'] for rt in selected_types]
+    
+    # Plot 1: MSE vs Variance
+    ax1.scatter(variance_values, mse_values, color='#2ecc71', s=100)
+    # Add road type labels to points
+    for i, txt in enumerate(selected_types):
+        ax1.annotate(txt, (variance_values[i], mse_values[i]), 
+                    xytext=(5, 5), textcoords='offset points', fontsize=8)
+    
+    ax1.set_xlabel('Variance', fontsize=12)
+    ax1.set_ylabel('MSE', fontsize=12)
+    
+    # Secondary y-axis for CV in first plot (inverted)
+    ax2 = ax1.twinx()
+    ax2.scatter(variance_values, cv_values, color='#3498db', alpha=0)  # Invisible points to set scale
+    ax2.set_ylabel('CV (%)', color='#3498db', fontsize=12)
+    ax2.tick_params(axis='y', labelcolor='#3498db')
+    ax2.invert_yaxis()  # Invert the CV axis
+    
+    # Plot 2: L1 vs Normalized Std Dev
+    ax3.scatter(std_dev_norm_values, l1_values, color='#e74c3c', s=100)
+    # Add road type labels to points
+    for i, txt in enumerate(selected_types):
+        ax3.annotate(txt, (std_dev_norm_values[i], l1_values[i]), 
+                    xytext=(5, 5), textcoords='offset points', fontsize=8)
+    
+    ax3.set_xlabel('Normalized Std Dev', fontsize=12)
+    ax3.set_ylabel('L1', fontsize=12)
+    
+    # Secondary y-axis for CV in second plot (inverted)
+    ax4 = ax3.twinx()
+    ax4.scatter(std_dev_norm_values, cv_values, color='#3498db', alpha=0)  # Invisible points to set scale
+    ax4.set_ylabel('CV (%)', color='#3498db', fontsize=12)
+    ax4.tick_params(axis='y', labelcolor='#3498db')
+    ax4.invert_yaxis()  # Invert the CV axis
+    
+    # Calculate correlations
+    pearson_mse_var = stats.pearsonr(variance_values, mse_values)[0]
+    pearson_l1_std = stats.pearsonr(std_dev_norm_values, l1_values)[0]
+    
+    # Add correlation coefficients
+    ax1.text(0.02, 0.98, f'Pearson r = {pearson_mse_var:.2f}', 
+             transform=ax1.transAxes, verticalalignment='top')
+    ax3.text(0.02, 0.98, f'Pearson r = {pearson_l1_std:.2f}', 
+             transform=ax3.transAxes, verticalalignment='top')
+    
+    plt.tight_layout()
+    if save_it:
+        plt.savefig(result_path, bbox_inches='tight', dpi=300)
+    plt.show()
+
+    
+# # Convert the GeoDataFrame to the appropriate coordinate reference system (CRS) for length calculation
+# gdf_in_meters = gdf_with_og_values.to_crs("EPSG:32633")
+# gdf_in_meters['length'] = gdf_in_meters.length
+# total_length = gdf_in_meters['length'].sum() / 1000
+# print(f"Total length of the street network: {total_length:.2f} km")
+# gdf_with_reductions = gdf_in_meters.loc[indices_roads_with_cap_reduction]
+# total_length_with_reductions = gdf_with_reductions['length'].sum() / 1000
+# print(f"Total length of the street network with capacity reductions: {total_length_with_reductions:.2f} km")
+
+# def create_correlation_radar_plot(metrics_by_type, selected_metrics=None):
+
+#     """
+#     Create a radar plot for model performance metrics.
+    
+#     Args:
+#         metrics_by_type (dict): Dictionary containing metrics for each road type
+#         selected_metrics (list, optional): List of metrics to display. Each metric should be a dict with:
+#             - 'id': identifier in metrics_by_type
+#             - 'label': display label
+#             - 'transform': function to transform the value (or None to use directly)
+#             - 'y_pos': y-position of the label
+#     """
+#     # Default metrics if none specified
+#     if selected_metrics is None:
+#         selected_metrics = [
+#             {
+#                 'id': 'r_squared',
+#                 'label': 'R²',
+#                 'transform': lambda x: max(0, x * 100),
+#                 'y_pos': -0.05
+#             },
+#             {
+#                 'id': 'mse_ratio',
+#                 'label': 'MSE/Naive MSE',
+#                 'transform': lambda x, max_ratio: (1 - x/max_ratio) * 100,
+#                 'y_pos': -0.1
+#             },
+#             {
+#                 'id': 'pearson',
+#                 'label': 'Pearson\nCorrelation',
+#                 'transform': lambda x: max(0, x * 100),
+#                 'y_pos': -0.05
+#             },
+#             {
+#                 'id': 'spearman',
+#                 'label': 'Spearman\nCorrelation',
+#                 'transform': lambda x: max(0, x * 100),
+#                 'y_pos': -0.05
+#             }
+#         ]
+    
+#     # Select specific road types
+#     selected_types = [
+#         'All Roads',
+#         'Trunk Roads',
+#         'Primary Roads',
+#         'Secondary Roads',
+#         'Tertiary Roads',
+#         'Residential Streets',
+#         'Living Streets',
+#         'Primary Roads with Capacity Reduction',
+#         'Primary Roads with No Capacity Reduction',
+#         'Secondary Roads with Capacity Reduction',
+#         'Secondary Roads with No Capacity Reduction',
+#         'Tertiary Roads with Capacity Reduction',
+#         'Tertiary Roads with No Capacity Reduction'
+#     ]
+    
+#     filtered_metrics = {rt: metrics_by_type[rt] for rt in selected_types}
+#     road_types = sorted(filtered_metrics.keys(), 
+#                        key=lambda x: filtered_metrics[x]['r_squared'],
+#                        reverse=True)
+    
+#     # Compute scores
+#     total_scores = {}
+#     all_scores = []  # to compute average later
+#     for road_type in road_types:
+#         metrics = filtered_metrics[road_type]
+#         # Normalize metrics to 0-1 range
+#         normalized_scores = {
+#             'r_squared': metrics['r_squared'],                    # Already 0-1
+#             'mse_ratio': 1 - metrics['mse']/metrics['naive_mse'], # Transform to 0-1
+#             'l1_ratio': 1 - metrics['l1']/metrics['naive_l1'],    # Transform to 0-1
+#             'pearson': (metrics['pearson'] + 1)/2,                # Transform -1,1 to 0-1
+#             'spearman': (metrics['spearman'] + 1)/2               # Transform -1,1 to 0-1
+#         }
+#         # Equal weighting (0.2 each)
+#         score = sum(normalized_scores.values()) * 0.2 * 100
+#         total_scores[road_type] = score
+#         all_scores.append(score)
+
+#     # Print all scores
+#     print("\nModel Performance Scores:")
+#     print("-" * 50)
+#     for road_type in road_types:
+#         print(f"{road_type}: {total_scores[road_type]:.1f}")
+#     print("-" * 50)
+#     print(f"Overall Average Score: {np.mean(all_scores):.1f}")
+#     print(f"Best Score: {np.max(all_scores):.1f} ({road_types[np.argmax(all_scores)]})")
+#     print(f"Worst Score: {np.min(all_scores):.1f} ({road_types[np.argmin(all_scores)]})")
+#     print("-" * 50)
+    
+    
+#     # Calculate maximum ratios for normalization if needed
+#     max_ratios = {}
+#     for metric in selected_metrics:
+#         if 'ratio' in metric['id']:
+#             if metric['id'] == 'mse_ratio':
+#                 max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
+#                                       metrics_by_type[rt]['naive_mse'] 
+#                                       for rt in road_types)
+#             elif metric['id'] == 'l1_ratio':
+#                 max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
+#                                      metrics_by_type[rt]['naive_l1'] 
+#                                      for rt in road_types)
+    
+#     # Setup plot
+#     num_vars = len(selected_metrics)
+#     angles = [n / float(num_vars) * 2 * np.pi for n in range(num_vars)]
+#     angles += angles[:1]
+    
+#     fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
+#     ax.grid(True, color='gray', alpha=0.3)
+    
+    
+#     # Option 1: Ocean Blues (Serene)
+#     colors = {
+#         'All Roads': '#01579b',                               # Darkest ocean blue
+#         'Trunk Roads': '#0277bd',                             # Dark ocean blue
+#         'Primary Roads': '#0288d1',                           # Medium-dark blue
+#         'Secondary Roads': '#039be5',                         # Medium blue
+#         'Tertiary Roads': '#03a9f4',                          # Medium-light blue
+#         'Residential Streets': '#29b6f6',                     # Light blue
+#         'Living Streets': '#4fc3f7',                          # Lighter blue
+#         'Primary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+#         'Primary Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+#         'Secondary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+#         'Secondary Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+#         'Tertiary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+#         'Tertiary Roads with No Capacity Reduction': '#b3e5fc'   # Lightest blue
+#     }
+    
+#     # Plot data
+#     for road_type in road_types:
+#         values = []
+#         for metric in selected_metrics:
+#             if 'ratio' in metric['id']:
+#                 if metric['id'] == 'mse_ratio':
+#                     ratio = filtered_metrics[road_type]['mse'] / filtered_metrics[road_type]['naive_mse']
+#                     values.append(metric['transform'](ratio, max_ratios['mse']))
+#                 elif metric['id'] == 'l1_ratio':
+#                     ratio = filtered_metrics[road_type]['l1'] / filtered_metrics[road_type]['naive_l1']
+#                     values.append(metric['transform'](ratio, max_ratios['l1']))
+#             else:
+#                 val = filtered_metrics[road_type][metric['id']]
+#                 values.append(metric['transform'](val))
+#         values += values[:1]
+#         ax.plot(angles, values, linewidth=3, linestyle='solid',
+#             label=f"{road_type} (Score: {total_scores[road_type]:.1f}%)",  # Added % symbol
+#             color=colors[road_type])
+#         ax.fill(angles, values, alpha=0.1, color=colors[road_type])
+
+#     # Set chart properties
+#     ax.set_xticks(angles[:-1])
+    
+#     # Set the labels with proper positioning
+#     ax.set_xticklabels(
+#         [m['label'] for m in selected_metrics],
+#         fontsize=15,
+#         y=-0.05  # Move labels outward
+#     )
+    
+#     ax.set_ylim(0, 1)
+#     ax.set_rgrids([0, 0.2, 0.4, 0.6, 0.8, 1], angle=45, fontsize=15)
+        
+#         # Grid lines and outer circle styling
+#     for line in ax.yaxis.get_gridlines() + ax.xaxis.get_gridlines():
+#         line.set_color('gray')
+#         line.set_linewidth(1.0)
+#         line.set_alpha(0.3)
+
+#     # Add grey outer circle with same style as grid
+#     # circle = plt.Circle((0, 0), 1, fill=False, 
+#     #                 color='gray',      # Same grey as grid
+#     #                 linewidth=1.0,     # Same width as grid
+#     #                 alpha=0.3)         # Same transparency as grid
+#     # ax.add_artist(circle)
+    
+#     # Center point and circle
+#     ax.plot(0, 0, 'k.', markersize=10)
+    
+#         # In your radar plot code, modify the legend part:
+#     ax.legend(loc='center left', 
+#             bbox_to_anchor=(1.1, 0.5),
+#             fontsize=15,          # Increase font size (default is usually 10)
+#             markerscale=2,        # Make the markers/lines in legend bigger
+#             frameon=True,         # Add a frame
+#             framealpha=0.9,       # Make frame slightly transparent
+#             edgecolor='gray',     # Add edge color to frame
+#             borderpad=1,          # Add padding inside legend border
+#             labelspacing=1.2,     # Increase spacing between legend entries
+#             handlelength=3)       # Make the lines in legend longer
+    
+#     plt.savefig("correlation_radar_plot.png", bbox_inches='tight', dpi=300)
+#     plt.show()
+    
+
+# # Use custom metrics
+# custom_metrics_3 = [
+#     {
+#         'id': 'r_squared',
+#         'label': 'R²',
+#         'transform': lambda x: max(0, x * 100),
+#         'y_pos': -0.05
+#     },
+#     {
+#         'id': 'pearson',
+#         'label': 'Pearson\nCorrelation',
+#         'transform': lambda x: max(0, x * 100),
+#         'y_pos': -0.05
+#     },
+#     {
+#         'id': 'spearman',
+#         'label': 'Spearman\nCorrelation',
+#         'transform': lambda x: max(0, x * 100),
+#         'y_pos': -0.05
+#     }
+# ]
+
+# selected_metrics_5 = [
+#             {
+#             'id': 'spearman',
+#             'label': 'Spearman\nCorrelation',
+#             'transform': lambda x: max(0, x),
+#             'y_pos': -0.05
+#             },
+#             {
+#                 'id': 'r_squared',
+#                 'label': 'R²',
+#                 'transform': lambda x: max(0, x),
+#                 'y_pos': -0.05
+#             },
+#             # {
+#             #     'id': 'mse_ratio',
+#             #     'label': '1 - MSE/Naive MSE',
+#             #     'transform': lambda x, max_ratio: (1 - x/max_ratio),
+#             #     'y_pos': -0.1
+#             # },
+#             {
+#                 'id': 'l1_ratio',
+#                 'label': '1 - MAE/Naive MAE',
+#                 'transform': lambda x, max_ratio: (1 - x/max_ratio),
+#                 'y_pos': -0.1
+#             },
+#             {
+#                 'id': 'pearson',
+#                 'label': 'Pearson\nCorrelation',
+#                 'transform': lambda x: max(0, x),
+#                 'y_pos': -0.05
+#             }
+#         ]
+# create_correlation_radar_plot(metrics_by_type, selected_metrics_5)
     
 
 # def plot_districts_of_capacity_reduction(gdf_input:gpd.GeoDataFrame, font:str ='DejaVu Serif', save_it: bool=False, number_to_plot : int=0):    
