@@ -64,7 +64,6 @@ PARAMETERS = [
     "use_monte_carlo_dropout",
     "gradient_accumulation_steps",
     "use_gradient_clipping",
-    "lr_scheduler_warmup_steps",
     "device_nr",
     "unique_model_description"
 ]
@@ -92,7 +91,6 @@ def get_parameters(args):
         "use_monte_carlo_dropout": args.use_monte_carlo_dropout,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "use_gradient_clipping": args.use_gradient_clipping,
-        "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
         "device_nr": args.device_nr
     }
     
@@ -106,7 +104,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "ensemble_5"
+    params["unique_model_description"] = "wannabe_best_7"
     
     return params
 
@@ -152,7 +150,6 @@ def main():
     parser.add_argument("--use_monte_carlo_dropout", type=hf.str_to_bool, default=False, help="Whether to use monte carlo dropout.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
-    parser.add_argument("--lr_scheduler_warmup_steps", type=int, default=10000, help="The number of steps for the warmup phase of the learning rate scheduler.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
     args = parser.parse_args()
@@ -202,7 +199,7 @@ def main():
         best_val_loss, best_epoch = garch.train(model=model, 
                     config=config, 
                     loss_fct=loss_fct,
-                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=5e-5),
+                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 

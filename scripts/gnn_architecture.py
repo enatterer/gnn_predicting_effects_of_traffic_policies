@@ -276,7 +276,7 @@ def train(model: nn.Module,
     """
     scaler = GradScaler()
     total_steps = config.num_epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/4)
+    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
     best_val_loss = float('inf')
     
     # Create a directory for checkpoints if it doesn't exist
@@ -663,19 +663,19 @@ def load_model(model_path: str) -> tuple:
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
                  initial_lr: float, 
-                 warmup_steps: int, 
                  total_steps: int):
         """
         Linear warmup and cosine decay scheduler.
 
         Parameters:
         - initial_lr (float): Initial learning rate.
-        - warmup_steps (int): Number of warmup steps.
         - total_steps (int): Total number of steps.
         """
         self.initial_lr = initial_lr
-        self.warmup_steps = warmup_steps
         self.total_steps = total_steps
+        
+        self.min_lr = 0.01*initial_lr
+        self.warmup_steps = int(0.05*total_steps)
         self.decay_steps = total_steps - warmup_steps
         self.cosine_decay_rate = 0.5
 
@@ -694,7 +694,7 @@ class LinearWarmupCosineDecayScheduler:
         else:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
-            return self.initial_lr * cosine_decay 
+            return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay 
         
         
         
