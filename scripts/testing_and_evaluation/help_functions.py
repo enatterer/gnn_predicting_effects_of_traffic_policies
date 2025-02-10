@@ -87,6 +87,23 @@ mode_mapping = {
     'artificial,funicular': 19
 }
 
+# Option 1: Ocean Blues (Serene)
+colors = {
+    'All Roads': '#01579b',                               # Darkest ocean blue
+    'Trunk Roads': '#0277bd',                             # Dark ocean blue
+    'Primary Roads': '#0288d1',                           # Medium-dark blue
+    'Secondary Roads': '#039be5',                         # Medium blue
+    'Tertiary Roads': '#03a9f4',                          # Medium-light blue
+    'Residential Streets': '#29b6f6',                     # Light blue
+    'Living Streets': '#4fc3f7',                          # Lighter blue
+    'P/S/T Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+    'P/S/T Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+    # 'Secondary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+    # 'Secondary Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
+    # 'Tertiary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
+    # 'Tertiary Roads with No Capacity Reduction': '#b3e5fc'   # Lightest blue
+}
+
 # DATAFRAME FUNCTIONS
 
 
@@ -882,24 +899,6 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
     
     fig, ax = plt.subplots(figsize=(10, 10), subplot_kw=dict(projection='polar'))
     ax.grid(True, color='gray', alpha=0.3)
-    
-    
-    # Option 1: Ocean Blues (Serene)
-    colors = {
-        'All Roads': '#01579b',                               # Darkest ocean blue
-        'Trunk Roads': '#0277bd',                             # Dark ocean blue
-        'Primary Roads': '#0288d1',                           # Medium-dark blue
-        'Secondary Roads': '#039be5',                         # Medium blue
-        'Tertiary Roads': '#03a9f4',                          # Medium-light blue
-        'Residential Streets': '#29b6f6',                     # Light blue
-        'Living Streets': '#4fc3f7',                          # Lighter blue
-        'P/S/T Roads with Capacity Reduction': '#81d4fa',     # Very light blue
-        'P/S/T Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
-        # 'Secondary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
-        # 'Secondary Roads with No Capacity Reduction': '#b3e5fc',   # Lightest blue
-        # 'Tertiary Roads with Capacity Reduction': '#81d4fa',     # Very light blue
-        # 'Tertiary Roads with No Capacity Reduction': '#b3e5fc'   # Lightest blue
-    }
     
     # Plot data
     for road_type in road_types:
