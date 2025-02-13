@@ -336,11 +336,12 @@ def compute_correlations_scipy(predictions, targets):
     pearson_corr, _ = stats.pearsonr(predictions, targets)
     return spearman_corr, pearson_corr
 
-def get_road_type_indices(gdf):
+def get_road_type_indices(gdf, tolerance=1e-3):
     """
     Get indices for different road types, including dynamic conditions like capacity reduction
     """
     tolerance = 1e-3
+    
     indices = {
         # Static conditions (road types)
         "All Roads": gdf.index,
@@ -954,7 +955,7 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
             labelspacing=1.2,     # Increase spacing between legend entries
             handlelength=3)       # Make the lines in legend longer
     if save_it:
-        plt.savefig(result_path, bbox_inches='tight', dpi=300)
+        plt.savefig(result_path + "radar_plot.png", bbox_inches='tight', dpi=300)
         
     plt.show()
     
@@ -975,14 +976,14 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
         'Tertiary Roads',
         'Residential Streets',
         'Living Streets',
-        'P/S/T Roads with Capacity Reduction',
-        'P/S/T Roads with No Capacity Reduction'
-        # 'Primary Roads with Capacity Reduction',
-        # 'Primary Roads with No Capacity Reduction',
-        # 'Secondary Roads with Capacity Reduction',
-        # 'Secondary Roads with No Capacity Reduction',
-        # 'Tertiary Roads with Capacity Reduction',
-        # 'Tertiary Roads with No Capacity Reduction'
+        # 'P/S/T Roads with Capacity Reduction',
+        # 'P/S/T Roads with No Capacity Reduction'
+        'Primary Roads with Capacity Reduction',
+        'Primary Roads with No Capacity Reduction',
+        'Secondary Roads with Capacity Reduction',
+        'Secondary Roads with No Capacity Reduction',
+        'Tertiary Roads with Capacity Reduction',
+        'Tertiary Roads with No Capacity Reduction'
     ]
     
     # Get data
@@ -1023,7 +1024,7 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
     
     plt.tight_layout()
     if save_it:
-        plt.savefig(result_path, bbox_inches='tight', dpi=300)
+        plt.savefig(result_path + "error_vs_variability_scatterplot.png", bbox_inches='tight', dpi=300)
     plt.show()
     
     
