@@ -33,7 +33,8 @@ class MyGnn(torch.nn.Module):
                 use_dropout: bool = False,
                 use_monte_carlo_dropout: bool = False,
                 predict_mode_stats: bool = False,
-                dtype: torch.dtype = torch.float32, 
+                dtype: torch.dtype = torch.float32,
+                verbose: bool = True
                 ):
         
         """
@@ -91,8 +92,10 @@ class MyGnn(torch.nn.Module):
         )
 
         self.initialize_weights()
-        print("Model initialized")
-        print(self)
+
+        if verbose:
+            print("Model initialized")
+            print(self)
     
     def forward(self, data):
         """
