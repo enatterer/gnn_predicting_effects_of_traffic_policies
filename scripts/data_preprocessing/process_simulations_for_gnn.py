@@ -39,12 +39,10 @@ import data_preprocessing.processing_io as pio
 
 
 # Paths to raw simulation data
-sim_input_paths = ["../../data/raw_data/exp_dist_not_connected_5k/",
-                   "../../data/raw_data/norm_dist_not_connected_5k/",
-                   "../../data/raw_data/single_districts/"]
+sim_input_paths = ["../../data/raw_data/cap_reduction_in_single_roads/"]
 
 # Path to save the processed simulation data
-result_path = '../../data/train_data/not_connected_10k_and_single_dist_1pct'
+result_path = '../../data/test_data/cap_reduction_in_single_roads'
 
 # Path to the basecase links and stats
 basecase_links_path = '../../data/links_and_stats/pop_1pct_basecase_average_output_links.geojson'

@@ -396,18 +396,44 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          use_fixed_norm:bool=True, 
                          fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
                          districts_of_interest: list =[1, 2, 3, 4],
-                         plot_contour_lines:bool=True, is_absolute:bool=False,
+                         plot_contour_lines:bool=False, plot_policy_roads:bool=False,
+                         is_absolute:bool=False,
                          cmap:str='coolwarm',
-                         result_path:str=None):
+                         result_path:str=None,
+                         scale_type:str="continuous",
+                         discrete_thresholds: list = None):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
 
     fig, ax = plt.subplots(1, 1, figsize=(15, 15))    
-    if use_fixed_norm:
-        norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+
+    # Handle discrete vs continuous scale
+    if scale_type == "discrete":
+        if discrete_thresholds is None:
+            discrete_thresholds = [33, 66]  # default thresholds
+            
+        # Create discrete bins for the data
+        def categorize_value(x, thresholds):
+            for i, threshold in enumerate(thresholds):
+                if abs(x) <= threshold:
+                    return i
+            return len(thresholds)  # for values greater than the last threshold
+        
+        gdf['discrete_plot_column'] = gdf[column_to_plot].apply(
+            lambda x: categorize_value(x, discrete_thresholds))
+        
+        # Create a color gradient based on number of categories
+        n_categories = len(discrete_thresholds) + 1
+        colors = plt.cm.RdYlGn_r(np.linspace(0, 1, n_categories))  # Using _r to invert the colormap
+        cmap = plt.cm.colors.ListedColormap(colors)
+        norm = plt.Normalize(vmin=-0.5, vmax=n_categories - 0.5)
+        column_to_plot = 'discrete_plot_column'
     else:
-        norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
+        if use_fixed_norm:
+            norm = TwoSlopeNorm(vmin=-fixed_norm_max, vcenter=0, vmax=fixed_norm_max)
+        else:
+            norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
     
     linewidths = gdf["highway"].apply(get_linewidth)
     gdf['linewidth'] = linewidths
@@ -418,6 +444,13 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
                     norm=norm, label="Street network", zorder=2)
     
+    if plot_policy_roads:
+        tolerance = 1e-3
+        gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
+        edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
+        edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+                                        norm=norm, label="Capacity was decreased on these roads", zorder=3)
+
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     if plot_contour_lines:
         if isinstance(relevant_area_to_plot, set):
@@ -427,8 +460,27 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                     gdf_area.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
         else:
             relevant_area_to_plot.plot(ax=ax, edgecolor='black', linewidth=2, facecolor='None', zorder=2)
+    
+    if scale_type == "discrete":
+        cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])
+        sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+        ticks = range(len(discrete_thresholds) + 1)
+        cbar = plt.colorbar(sm, cax=cax, ticks=ticks)
         
-    cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines,cmap)
+        # Create labels based on thresholds
+        labels = []
+        for i in range(len(discrete_thresholds) + 1):
+            if i == 0:
+                labels.append(f'0-{discrete_thresholds[0]}')
+            elif i == len(discrete_thresholds):
+                labels.append(f'>{discrete_thresholds[-1]}')
+            else:
+                labels.append(f'{discrete_thresholds[i-1]}-{discrete_thresholds[i]}')
+        
+        cbar.ax.set_yticklabels(labels)
+    else:
+        cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads)
+    
     if is_absolute:
         cbar.set_label('Car volume', fontname=font, fontsize=15)
     else:
@@ -706,16 +758,10 @@ def plot_average_prediction_differences(gdf_inputs: list,
     error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
     units = "%" if use_percentage else "vehicles"
     
-    if use_absolute_value_of_difference:
-        cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'{loss_fct} difference in {units}\n'
-                      f'(Averaged across {len(gdf_inputs)} models)', 
-                      fontname=font, fontsize=15)
-    else:
-        cbar.set_label(f'{error_type} Prediction Error\n'
-                      f'{loss_fct} difference in {units}\n'
-                      f'(Averaged across {len(gdf_inputs)} models)', 
-                      fontname=font, fontsize=15)
+    cbar.set_label(f'{error_type} Prediction Error\n'
+                   f'{loss_fct} difference in {units}\n'
+                   f'(Averaged across {len(gdf_inputs)} samples)',
+                   fontname=font, fontsize=15)
 
     if save_it:
         error_type_str = "average_absolute_value_of_difference" if use_absolute_value_of_difference else "average_signed_difference"
@@ -737,7 +783,7 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     return norm
     
 
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap):
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads=False):
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
     plt.xlabel("Longitude", fontname=font, fontsize=15)
@@ -748,13 +794,15 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines
     for label in (ax.get_xticklabels() + ax.get_yticklabels()):
         label.set_fontname(font)
         label.set_fontsize(15)
-    
+
     # Create custom legend
+    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')] # Add more lines for other labels as needed
+
     if plot_contour_lines:
-        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network'),# Add more lines for other labels as needed
-                        Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section')]
-    else:
-        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')]
+        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section'))
+
+    if plot_policy_roads:
+        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased on these roads'))
 
     ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
     ax.set_position([0.1, 0.1, 0.75, 0.75])

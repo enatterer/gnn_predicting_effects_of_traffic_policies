@@ -49,9 +49,12 @@ PARAMETERS = [
     "in_channels",
     "use_all_features",
     "out_channels",
+    "loss_fct",
+    "use_weighted_loss",
     "point_net_conv_layer_structure_local_mlp",
     "point_net_conv_layer_structure_global_mlp",
     "gat_conv_layer_structure",
+    "use_bootrapping",
     "num_epochs",
     "batch_size",
     "lr",
@@ -61,7 +64,6 @@ PARAMETERS = [
     "use_monte_carlo_dropout",
     "gradient_accumulation_steps",
     "use_gradient_clipping",
-    "lr_scheduler_warmup_steps",
     "device_nr",
     "unique_model_description"
 ]
@@ -74,9 +76,12 @@ def get_parameters(args):
         "in_channels": args.in_channels,
         "use_all_features": args.use_all_features,
         "out_channels": args.out_channels,
+        "loss_fct": args.loss_fct,
+        "use_weighted_loss": args.use_weighted_loss,
         "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
         "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
         "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
+        "use_bootrapping": args.use_bootrapping,
         "num_epochs": args.num_epochs,
         "batch_size": int(args.batch_size),
         "lr": float(args.lr),
@@ -86,7 +91,6 @@ def get_parameters(args):
         "use_monte_carlo_dropout": args.use_monte_carlo_dropout,
         "gradient_accumulation_steps": args.gradient_accumulation_steps,
         "use_gradient_clipping": args.use_gradient_clipping,
-        "lr_scheduler_warmup_steps": args.lr_scheduler_warmup_steps,
         "device_nr": args.device_nr
     }
     
@@ -100,7 +104,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "1pct_10k"
+    params["unique_model_description"] = "wannabe_best_7"
     
     return params
 
@@ -130,10 +134,13 @@ def main():
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
+    parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
+    parser.add_argument("--use_weighted_loss", type=hf.str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
     parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
+    parser.add_argument("--use_bootrapping", type=hf.str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -143,7 +150,6 @@ def main():
     parser.add_argument("--use_monte_carlo_dropout", type=hf.str_to_bool, default=False, help="Whether to use monte carlo dropout.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
-    parser.add_argument("--lr_scheduler_warmup_steps", type=int, default=10000, help="The number of steps for the warmup phase of the learning rate scheduler.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
     args = parser.parse_args()
@@ -160,8 +166,12 @@ def main():
         unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description= params['unique_model_description'], model_save_path= 'trained_model/model.pth')
-        train_dl, valid_dl = hf.prepare_data_with_graph_features(datalist=datalist, batch_size= params['batch_size'], path_to_save_dataloader= path_to_save_dataloader, use_all_features= params['use_all_features'])
+        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
+        train_dl, valid_dl, scalers_train, scalers_validation = hf.prepare_data_with_graph_features(datalist=datalist,
+                                                                                                  batch_size=params['batch_size'],
+                                                                                                  path_to_save_dataloader=path_to_save_dataloader,
+                                                                                                  use_all_features=params['use_all_features'],
+                                                                                                  use_bootstrapping=params['use_bootrapping'])
         
         config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
 
@@ -176,10 +186,12 @@ def main():
                         dtype=torch.float32)
         
         model = gnn_instance.to(device)
-        loss_fct = torch.nn.MSELoss().to(dtype=torch.float32).to(device)
+        loss_fct = gio.GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
         
-        baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct)
-        baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct)
+        baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct,
+                                                                        device=device, scalers=scalers_train)
+        baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct,
+                                                            device=device, scalers=scalers_train)
         print("baseline loss mean " + str(baseline_loss_mean_target))
         print("baseline loss no  " + str(baseline_loss) )
 
@@ -192,7 +204,9 @@ def main():
                     valid_dl=valid_dl,
                     device=device, 
                     early_stopping=early_stopping,
-                    model_save_path=model_save_path)
+                    model_save_path=model_save_path,
+                    scalers_train=scalers_train,
+                    scalers_validation=scalers_validation)
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:

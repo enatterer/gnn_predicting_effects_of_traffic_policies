@@ -12,7 +12,7 @@ import signal
 import joblib
 import argparse
 import json
-import os
+import copy
 import subprocess
 from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
@@ -94,13 +94,18 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features):
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
 
         print("Splitting into subsets...")
-        train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+
+        if use_bootstrapping:
+            train_set, valid_set, test_set = gio.split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
+        else:
+            train_set, valid_set, test_set = gio.split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+        
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
         
         print("Saving test set...")
@@ -121,15 +126,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
                              "LENGTH"]
         
         print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, directory_path=path_to_save_dataloader + "train_")
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features)
         print("Train set normalized")      
         
         print("Normalizing validation set...")
-        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, directory_path=path_to_save_dataloader + "valid_")
+        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features)
         print("Validation set normalized")
         
         print("Normalizing test set...")
-        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, directory_path=path_to_save_dataloader + "test_")
+        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features)
         print("Test set normalized")
         
         print("Creating train loader...")
@@ -160,7 +165,7 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         gio.save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         print("Dataloaders and scalers saved")
         
-        return train_loader, val_loader
+        return train_loader, val_loader, scalers_train, scalers_validation
     
     except Exception as e:
         print(f"Error in prepare_data_with_graph_features: {str(e)}")
@@ -168,8 +173,8 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         traceback.print_exc()
         raise
         
-def normalize_dataset(dataset_input, node_features, directory_path):
-    data_list = [dataset_input.dataset[idx] for idx in dataset_input.indices]
+def normalize_dataset(dataset_input, node_features):
+    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
 
     print("Fitting and normalizing x features...")
     normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features)
@@ -275,6 +280,44 @@ def normalize_pos_features_batched(data_list, batch_size=1000):
 #             data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
     
 #     return data_list, scaler
+
+def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_size=100):
+    """
+    Normalize the continuous node features with a given scaler.
+    Categorical features (Allowed Modes) are left as booleans (0 or 1).
+    'HIGHWAY' feature is one-hot encoded.
+
+    Finally, features are filtered to only include the ones specified in node_features. 
+    """
+
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       EdgeFeatures.CAPACITY_REDUCTION,
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
+    
+    # Get number of nodes in the graph
+    num_nodes = data_list[0].x.shape[0]
+    
+    # Second pass: Transform the data
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
+        batch_x_normalized = x_scaler.transform(batch_x)
+        for j, data in enumerate(batch):
+            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*num_nodes:(j+1)*num_nodes], dtype=data.x.dtype)
+
+    # Filter features
+    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+    for data in data_list:
+        data.x = data.x[:, node_feature_filter]
+
+    # One-hot encode highway
+    if "HIGHWAY" in node_features:
+        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+    
+    return data_list
 
 
 def seed_worker(worker_id):
