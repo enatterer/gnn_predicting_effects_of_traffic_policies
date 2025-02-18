@@ -401,7 +401,8 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                          cmap:str='coolwarm',
                          result_path:str=None,
                          scale_type:str="continuous",
-                         discrete_thresholds: list = None):
+                         discrete_thresholds: list = None,
+                         with_legend: bool = False):
 
     gdf = gdf_input.copy()
     gdf, x_min, y_min, x_max, y_max = filter_for_geographic_section(gdf)
@@ -439,17 +440,34 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
     gdf['linewidth'] = linewidths
     large_lines = gdf[gdf['linewidth'] > 1]
     small_lines = gdf[gdf['linewidth'] == 1]
-    small_lines.plot(column=column_to_plot, cmap=cmap, linewidth=small_lines['linewidth'], ax=ax, legend=False,
-                    norm=norm, label="Street network", zorder=1)
-    large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
-                    norm=norm, label="Street network", zorder=2)
+    # small_lines.plot(column=column_to_plot, cmap=cmap, linewidth=small_lines['linewidth'], ax=ax, legend=False,
+    #                 norm=norm, label="Street network", zorder=1)
+    # large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, legend=False,
+    #                 norm=norm, label="Street network", zorder=2)
+    
+    small_lines.plot(column=column_to_plot, cmap=cmap, linewidth=small_lines['linewidth'], ax=ax, 
+                    legend=False,
+                    norm=norm, 
+                    label="Street network" if with_legend else None,  # Only add label if legend is wanted
+                    zorder=1)
+    large_lines.plot(column=column_to_plot, cmap=cmap, linewidth=large_lines['linewidth'], ax=ax, 
+                    legend=False,
+                    norm=norm, 
+                    label="Street network" if with_legend else None,  # Only add label if legend is wanted
+                    zorder=2)
     
     if plot_policy_roads:
         tolerance = 1e-3
         gdf['capacity_reduction_rounded'] = gdf['capacity_reduction'].round(decimals=3)
         edges_with_capacity_reduction = gdf[np.abs(gdf['capacity_reduction_rounded']) > tolerance]
-        edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
-                                        norm=norm, label="Capacity was decreased on these roads", zorder=3)
+        # edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, legend=False,
+        #                                 norm=norm, label="Capacity was decreased on these roads", zorder=3)
+        edges_with_capacity_reduction.plot(color='black', linewidth=large_lines['linewidth'], ax=ax, 
+                                        legend=False,
+                                        norm=norm, 
+                                        label="Capacity was decreased on these roads" if with_legend else None,  # Only add label if legend is wanted
+                                        zorder=3)
+
 
     relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
     if plot_contour_lines:
@@ -479,7 +497,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         
         cbar.ax.set_yticklabels(labels)
     else:
-        cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads)
+        cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads, with_legend)
     
     if is_absolute:
         cbar.set_label('Car volume', fontname=font, fontsize=15)
@@ -490,7 +508,51 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         identifier = "n_" + str(number_to_plot) if number_to_plot is not None else zone_to_plot
         plt.savefig(result_path + identifier + "_" + p, bbox_inches='tight')
     plt.show()
+
+
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads=False, with_legend=False):
+    plt.xlim(x_min, x_max)
+    plt.ylim(y_min, y_max)
     
+    if with_legend:
+        plt.xlabel("Longitude", fontname=font, fontsize=15)
+        plt.ylabel("Latitude", fontname=font, fontsize=15)
+        ax.tick_params(axis='both', which='major', labelsize=10)
+        for label in (ax.get_xticklabels() + ax.get_yticklabels()):
+            label.set_fontname(font)
+            label.set_fontsize(15)
+        ax.legend(prop={'family': font, 'size': 15})
+        ax.set_position([0.1, 0.1, 0.75, 0.75])
+    else:
+        # Remove absolutely everything from the axes
+        ax.set_xticks([])
+        ax.set_yticks([])
+        ax.set_xticklabels([])
+        ax.set_yticklabels([])
+        ax.set_xlabel('')
+        ax.set_ylabel('')
+        for spine in ax.spines.values():
+            spine.set_visible(False)
+        ax.set_position([0, 0, 1, 1])  # Make plot take up entire figure space
+    
+    # Colorbar positioning and creation
+    if with_legend:
+        cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])
+    else:
+        cax = fig.add_axes([0.92, 0.15, 0.02, 0.7])  # Adjusted colorbar position for no-legend case
+
+    # Create the color bar
+    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+    sm._A = []
+    cbar = plt.colorbar(sm, cax=cax)
+
+    # Set color bar font properties
+    cbar.ax.tick_params(labelsize=15)
+    for t in cbar.ax.get_yticklabels():
+        t.set_fontname(font)
+    cbar.ax.yaxis.label.set_fontname(font)
+    cbar.ax.yaxis.label.set_size(15)
+    return cbar
     
 def plot_prediction_difference(gdf_input: gpd.GeoDataFrame, 
                              font: str = 'Times New Roman',
@@ -782,44 +844,6 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
         norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
     return norm
     
-
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads=False):
-    plt.xlim(x_min, x_max)
-    plt.ylim(y_min, y_max)
-    plt.xlabel("Longitude", fontname=font, fontsize=15)
-    plt.ylabel("Latitude", fontname=font, fontsize=15)
-
-    # Customize tick labels
-    ax.tick_params(axis='both', which='major', labelsize=10)
-    for label in (ax.get_xticklabels() + ax.get_yticklabels()):
-        label.set_fontname(font)
-        label.set_fontsize(15)
-
-    # Create custom legend
-    custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')] # Add more lines for other labels as needed
-
-    if plot_contour_lines:
-        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section'))
-
-    if plot_policy_roads:
-        custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased on these roads'))
-
-    ax.legend(handles=custom_lines, prop={'family': font, 'size': 15})
-    ax.set_position([0.1, 0.1, 0.75, 0.75])
-    cax = fig.add_axes([0.87, 0.22, 0.03, 0.5])  # Manually position the color bar
-    
-    # Create the color bar
-    sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
-    sm._A = []
-    cbar = plt.colorbar(sm, cax=cax)
-
-    # Set color bar font properties
-    cbar.ax.tick_params(labelsize=15)
-    for t in cbar.ax.get_yticklabels():
-        t.set_fontname(font)
-    cbar.ax.yaxis.label.set_fontname(font)
-    cbar.ax.yaxis.label.set_size(15)
-    return cbar
 
 def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf):
     if known_districts:
