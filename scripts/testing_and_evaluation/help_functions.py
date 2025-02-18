@@ -633,7 +633,8 @@ def plot_average_prediction_differences(gdf_inputs: list,
                                      result_path: str = None,
                                      loss_fct: str = "l1",
                                      scale_type: str = "continuous",
-                                     discrete_thresholds: list = None):
+                                     discrete_thresholds: list = None, 
+                                     error_threshold: float = 100):
     """
     Plot the average prediction error across multiple models.
     
@@ -668,24 +669,22 @@ def plot_average_prediction_differences(gdf_inputs: list,
     
     base_gdf = gdf_inputs[0].copy()
     
-    # Calculate errors for each model
     all_errors = []
     for gdf in gdf_inputs:
         if use_percentage:
-            # Avoid division by zero by adding small epsilon where actual is zero
             epsilon = 1e-10
             if use_absolute_value_of_difference:
                 if loss_fct == "l1":
                     error = abs((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / 
-                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']))) * 100
+                            (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case'] + epsilon))) * 100
                 elif loss_fct == "mse":
                     error = ((gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / 
                             (abs(gdf['vol_car_change_actual'] + gdf['vol_base_case']) + epsilon)) * 100
             else:
                 if loss_fct == "l1":
-                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / (gdf['vol_car_change_actual'] + gdf['vol_base_case'])* 100
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']) / (gdf['vol_car_change_actual'] + gdf['vol_base_case'] + epsilon)* 100
                 elif loss_fct == "mse":
-                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / (gdf['vol_car_change_actual'] + gdf['vol_base_case']) * 100
+                    error = (gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual']).pow(2) / (gdf['vol_car_change_actual'] + gdf['vol_base_case'] + epsilon) * 100
         else:
             if use_absolute_value_of_difference:
                 error = abs(gdf['vol_car_change_predicted'] - gdf['vol_car_change_actual'])
@@ -820,9 +819,9 @@ def plot_average_prediction_differences(gdf_inputs: list,
     error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
     units = "%" if use_percentage else "vehicles"
     
-    cbar.set_label(f'{error_type} Prediction Error\n'
-                   f'{loss_fct} difference in {units}\n'
-                   f'(Averaged across {len(gdf_inputs)} samples)',
+    cbar.set_label(f'{error_type} Prediction Error\n',
+                #    f'{loss_fct} difference in {units}\n',
+                #    f'(Averaged across {len(gdf_inputs)} samples)',
                    fontname=font, fontsize=15)
 
     if save_it:
@@ -832,10 +831,8 @@ def plot_average_prediction_differences(gdf_inputs: list,
                    bbox_inches='tight')
     
     plt.show()
-    
     return base_gdf
     
-
 
 def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
     if use_fixed_norm:
