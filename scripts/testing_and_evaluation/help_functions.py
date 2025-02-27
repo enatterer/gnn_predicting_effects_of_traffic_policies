@@ -1045,14 +1045,14 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
         'Tertiary Roads',
         'Residential Streets',
         'Living Streets',
-        # 'P/S/T Roads with Capacity Reduction',
-        # 'P/S/T Roads with No Capacity Reduction'
-        'Primary Roads with Capacity Reduction',
-        'Primary Roads with No Capacity Reduction',
-        'Secondary Roads with Capacity Reduction',
-        'Secondary Roads with No Capacity Reduction',
-        'Tertiary Roads with Capacity Reduction',
-        'Tertiary Roads with No Capacity Reduction'
+        'P/S/T Roads with Capacity Reduction',
+        'P/S/T Roads with No Capacity Reduction'
+        # 'Primary Roads with Capacity Reduction',
+        # 'Primary Roads with No Capacity Reduction',
+        # 'Secondary Roads with Capacity Reduction',
+        # 'Secondary Roads with No Capacity Reduction',
+        # 'Tertiary Roads with Capacity Reduction',
+        # 'Tertiary Roads with No Capacity Reduction'
     ]
     
     # Get data
@@ -1080,7 +1080,7 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
                    xytext=(10, 10), textcoords='offset points', fontsize=16)
     
     # Labels with larger font size
-    ax.set_xlabel('Variance', fontsize=16)
+    ax.set_xlabel('Variance in the Base Case', fontsize=16)
     ax.set_ylabel('MSE', fontsize=16)
     
     # Tick labels
