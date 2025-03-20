@@ -104,7 +104,7 @@ def get_parameters(args):
     #     f"predict_mode_stats_{params['predict_mode_stats']}"
     # )
 
-    params["unique_model_description"] = "wannabe_best_7"
+    params["unique_model_description"] = "wannabe_best_6"
     
     return params
 
