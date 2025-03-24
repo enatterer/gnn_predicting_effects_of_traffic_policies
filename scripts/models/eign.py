@@ -7,6 +7,9 @@ As all models in this repository, this model is a Graph Neural Network (GNN) tha
 The parameters UseMonteCarloDropout and PredictModeStats may be implemented in the future.
 '''
 
+import torch
+from models.base_gnn import BaseGNN
+
 class Eign(BaseGNN):
     def __init__(self, 
                 in_channels: int = 0, 

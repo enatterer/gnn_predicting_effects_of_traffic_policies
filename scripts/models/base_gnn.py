@@ -1,7 +1,6 @@
 from abc import ABC, abstractmethod
 import torch.nn as nn
 import torch
-from models.base_model import BaseGNN
 
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 

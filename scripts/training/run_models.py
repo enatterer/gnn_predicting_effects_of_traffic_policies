@@ -27,22 +27,23 @@ import subprocess
 from torch.utils.data import DataLoader, Dataset, Subset
 from sklearn.preprocessing import StandardScaler
 
-import help_functions as hf
+from help_functions import *
 
-# Add the 'scripts' directory to the Python path
-scripts_path = os.path.abspath(os.path.join('..'))
-if scripts_path not in sys.path:
-    sys.path.append(scripts_path)
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')) 
+if project_root not in sys.path:
+    sys.path.append(project_root)
     
-import gnn_io as gio
-from models.point_net_transf_gat import PointNetTransfGAT
+dataset_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
+base_dir = os.path.join(project_root, 'data')
+
+root_models = os.path.abspath(os.path.join(os.path.dirname(__file__), '../models'))
+if root_models not in sys.path:
+    sys.path.append(root_models)
+
+from models.gnn_io import *
 from models.base_gnn import BaseGNN
-
-# Output from data_preprocessing.process_simulations_for_gnn.py
-dataset_path = '../../data/train_data/dist_not_connected_10k_1pct/'
-
-# Base directory for the run
-base_dir = '../../data'
+from models.point_net_transf_gat import PointNetTransfGAT
+from models.eign import Eign
 
 PARAMETERS = [
     "project_name",
@@ -113,7 +114,7 @@ def main():
     try:
         datalist = []
         batch_num = 1
-        while True:
+        while True: # Change this to "and batch_num < 10" for a faster run
             print(f"Processing batch number: {batch_num}")
             # total_memory, available_memory, used_memory = get_memory_info()
             # print(f"Total Memory: {total_memory:.2f} GB")
@@ -139,33 +140,33 @@ def main():
         choices=["point_net_transf_gat", "eign"],  # Add more as you implement them 
     )
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
-    parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
+    parser.add_argument("--use_all_features", type=str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
-    parser.add_argument("--use_weighted_loss", type=hf.str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
-    parser.add_argument("--predict_mode_stats", type=hf.str_to_bool, default=False, help="Whether to predict mode stats or not.")
+    parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
+    parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
     parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
     parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
-    parser.add_argument("--use_bootrapping", type=hf.str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
+    parser.add_argument("--use_bootrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--early_stopping_patience", type=int, default=100, help="The early stopping patience.")
-    parser.add_argument("--use_dropout", type=hf.str_to_bool, default=False, help="Whether to use dropout.")
+    parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
-    parser.add_argument("--use_monte_carlo_dropout", type=hf.str_to_bool, default=False, help="Whether to use monte carlo dropout.")
+    parser.add_argument("--use_monte_carlo_dropout", type=str_to_bool, default=False, help="Whether to use monte carlo dropout.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
-    parser.add_argument("--use_gradient_clipping", type=hf.str_to_bool, default=True, help="Whether to use gradient clipping.")
+    parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
     args = parser.parse_args()
-    hf.set_random_seeds()
+    set_random_seeds()
     
     try:
-        gpus = hf.get_available_gpus()
-        best_gpu = hf.select_best_gpu(gpus)
-        hf.set_cuda_visible_device(best_gpu)
+        gpus = get_available_gpus()
+        best_gpu = select_best_gpu(gpus)
+        set_cuda_visible_device(best_gpu)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         params = get_parameters(args)
         
@@ -173,16 +174,18 @@ def main():
         unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        model_save_path, path_to_save_dataloader = hf.get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
-        train_dl, valid_dl, scalers_train, scalers_validation = hf.prepare_data_with_graph_features(datalist=datalist,
+        model_save_path, path_to_save_dataloader = get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
+        train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(datalist=datalist,
                                                                                                   batch_size=params['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
                                                                                                   use_all_features=params['use_all_features'],
                                                                                                   use_bootstrapping=params['use_bootrapping'])
         
-        config = hf.setup_wandb({param: params[param] for param in PARAMETERS})
+        # Create config
+        config = setup_wandb({param: params[param] for param in PARAMETERS})
 
-        gnn_instance = garch.MyGnn(in_channels=config.in_channels, 
+        # Create model instance
+        gnn_instance = PointNetTransfGAT(in_channels=config.in_channels, 
                         out_channels=config.out_channels, 
                         point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
                         point_net_conv_layer_structure_global_mlp=config.point_net_conv_layer_structure_global_mlp,
@@ -192,21 +195,21 @@ def main():
                         predict_mode_stats=config.predict_mode_stats, 
                         dtype=torch.float32)
         
-        model = gnn_instance.to(device)
-        loss_fct = gio.GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
+        gnn_instance = gnn_instance.to(device)  
+        loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
         
-        baseline_loss_mean_target = gio.compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct,
+        baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct,
                                                                         device=device, scalers=scalers_train)
-        baseline_loss = gio.compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct,
+        baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct,
                                                             device=device, scalers=scalers_train)
         print("baseline loss mean " + str(baseline_loss_mean_target))
         print("baseline loss no  " + str(baseline_loss) )
 
-        early_stopping = gio.EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
-        best_val_loss, best_epoch = garch.train(model=model, 
+        early_stopping = EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
+        best_val_loss, best_epoch = gnn_instance.train_model(  
                     config=config, 
                     loss_fct=loss_fct,
-                    optimizer=torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=1e-4),
+                    optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4),
                     train_dl=train_dl, 
                     valid_dl=valid_dl,
                     device=device, 
@@ -248,7 +251,7 @@ def create_model(architecture: str, config: object, device: torch.device):
             dtype=torch.float32
         ).to(device)
     elif architecture == "eign":
-        return EIGN(
+        return Eign(
             in_channels=config.in_channels,
             out_channels=config.out_channels,
             dtype=torch.float32

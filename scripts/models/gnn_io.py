@@ -31,10 +31,10 @@ import sys
 import json
 import joblib  # For saving the scaler
 
-# Add the 'scripts' directory to the Python path
-scripts_path = os.path.abspath(os.path.join('..'))
-if scripts_path not in sys.path:
-    sys.path.append(scripts_path)
+# Add the project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if project_root not in sys.path:
+    sys.path.append(project_root)
 
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 

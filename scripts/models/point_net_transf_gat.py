@@ -21,7 +21,7 @@ import os
 import math
 from torch.nn import TransformerEncoderLayer, TransformerEncoder
 from torch_geometric.nn import TransformerConv
-from models.base_model import BaseGNN
+from models.base_gnn import BaseGNN
 
 """
 This architecture is a Graph Neural Network (GNN) model that combines PointNet Convolutions, Graph Attention Networks, and Transformer layers.
@@ -277,173 +277,173 @@ class PointNetTransfGAT(BaseGNN):
         if hasattr(m, 'att_dst') and m.att_dst is not None:
             init.xavier_normal_(m.att_dst)
 
+    def train_model(self, 
+            config: object = None, 
+            loss_fct: nn.Module = None, 
+            optimizer: optim.Optimizer = None, 
+            train_dl: DataLoader = None, 
+            valid_dl: DataLoader = None, 
+            device: torch.device = None, 
+            early_stopping: object = None, 
+            model_save_path: str = None,
+            scalers_train: dict = None,
+            scalers_validation: dict = None) -> tuple:
+        """
+        Train the GNN model.
 
-def train(model: nn.Module, 
-          config: object = None, 
-          loss_fct: nn.Module = None, 
-          optimizer: optim.Optimizer = None, 
-          train_dl: DataLoader = None, 
-          valid_dl: DataLoader = None, 
-          device: torch.device = None, 
-          early_stopping: object = None, 
-          model_save_path: str = None,
-          scalers_train: dict = None,
-          scalers_validation: dict = None) -> tuple:
-    """
-    Train the GNN model.
+        Parameters:
+        - model (nn.Module): The model to train.
+        - config (object, optional): Configuration object containing training parameters.
+        - loss_fct (nn.Module, optional): Loss function for training.
+        - optimizer (optim.Optimizer, optional): Optimizer for model training.
+        - train_dl (DataLoader, optional): DataLoader for training data.
+        - valid_dl (DataLoader, optional): DataLoader for validation data.
+        - device (torch.device, optional): Device to use for training.
+        - early_stopping (object, optional): Early stopping mechanism.
+        - model_save_path (str, optional): Path to save the best model.
+        - scalers_train (dict, optional): x and pos scalers for training data.
+        - scalers_validation (dict, optional): x and pos scalers for validation data.
 
-    Parameters:
-    - model (nn.Module): The model to train.
-    - config (object, optional): Configuration object containing training parameters.
-    - loss_fct (nn.Module, optional): Loss function for training.
-    - optimizer (optim.Optimizer, optional): Optimizer for model training.
-    - train_dl (DataLoader, optional): DataLoader for training data.
-    - valid_dl (DataLoader, optional): DataLoader for validation data.
-    - device (torch.device, optional): Device to use for training.
-    - early_stopping (object, optional): Early stopping mechanism.
-    - model_save_path (str, optional): Path to save the best model.
-    - scalers_train (dict, optional): x and pos scalers for training data.
-    - scalers_validation (dict, optional): x and pos scalers for validation data.
+        Returns:
+        - tuple: Validation loss and the best epoch.
+        """
+        if config is None:
+            raise ValueError("Config cannot be None")
+        
+        scaler = GradScaler()
+        total_steps = config.num_epochs * len(train_dl)
+        scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
+        best_val_loss = float('inf')
+        checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        for epoch in range(config.num_epochs):
+            super().train()
+            optimizer.zero_grad()
+            for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
+                step = epoch * len(train_dl) + idx
+                lr = scheduler.get_lr(step)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                    
+                data = data.to(device)
+                targets_node_predictions = data.y
+                x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
 
-    Returns:
-    - tuple: Validation loss and the best epoch.
-    """
-    scaler = GradScaler()
-    total_steps = config.num_epochs * len(train_dl)
-    scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
-    best_val_loss = float('inf')
-    
-    # Create a directory for checkpoints if it doesn't exist
-    checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
-    os.makedirs(checkpoint_dir, exist_ok=True)
-    
-    for epoch in range(config.num_epochs):
-        model.train()
-        optimizer.zero_grad()
-        for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
-            step = epoch * len(train_dl) + idx
-            lr = scheduler.get_lr(step)
-            for param_group in optimizer.param_groups:
-                param_group['lr'] = lr
-                
-            data = data.to(device)
-            targets_node_predictions = data.y
-            x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
-
-            if config.predict_mode_stats:
-                targets_mode_stats = data.mode_stats
-           
-            with autocast():
-                # Forward pass
                 if config.predict_mode_stats:
-                    predicted, mode_stats_pred = model(data)
-                    train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
-                    train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats) # add weight here also later!
-                    train_loss = train_loss_node_predictions + train_loss_mode_stats
-                else:
-                    predicted = model(data)
-                    train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
-      
-            # Backward pass
-            scaler.scale(train_loss).backward() 
+                    targets_mode_stats = data.mode_stats
             
-            # Gradient clipping
-            if config.use_gradient_clipping:
-                torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+                with autocast():
+                    # Forward pass
+                    if config.predict_mode_stats:
+                        predicted, mode_stats_pred = self(data)
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats) # add weight here also later!
+                        train_loss = train_loss_node_predictions + train_loss_mode_stats
+                    else:
+                        predicted = self(data)
+                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
+        
+                # Backward pass
+                scaler.scale(train_loss).backward() 
+                
+                # Gradient clipping
+                if config.use_gradient_clipping:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
 
-            if (idx + 1) % config.gradient_accumulation_steps == 0:
+                if (idx + 1) % config.gradient_accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    
+                # Do not log train loss at every iteration, as it uses CPU
+                if (idx + 1) % 10 == 0:
+                    if config.predict_mode_stats:
+                        wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
+                    else:   
+                        wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
+            
+            if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
                 
-            # Do not log train loss at every iteration, as it uses CPU
-            if (idx + 1) % 10 == 0:
-                if config.predict_mode_stats:
-                    wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
-                else:   
-                    wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
-        
-        if len(train_dl) % config.gradient_accumulation_steps != 0:
-            scaler.step(optimizer)
-            scaler.update()
-            optimizer.zero_grad()
-            
-        # Validation step
-        if config.predict_mode_stats:
-            val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
-                config=config,
-                model=model,
-                dataset=valid_dl,
-                loss_func=loss_fct,
-                device=device,
-                scalers_validation=scalers_validation
-            )
-            wandb.log({
-                "val_loss": val_loss,
-                "epoch": epoch,
-                "lr": lr,
-                "r^2": r_squared,
-                "spearman": spearman_corr,
-                "pearson": pearson_corr,
-                "val_loss_node_predictions": val_loss_node_predictions,
-                "val_loss_mode_stats": val_loss_mode_stats
-            })
-        else:
-            val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
-                config=config,
-                model=model,
-                dataset=valid_dl,
-                loss_func=loss_fct,
-                device=device,
-                scalers_validation=scalers_validation
-            )
-            wandb.log({
-                "val_loss": val_loss,
-                "epoch": epoch,
-                "lr": lr,
-                "r^2": r_squared,
-                "spearman": spearman_corr,
-                "pearson": pearson_corr
-            })
-
-        # Monte Carlo Dropout Logging
-        if config.use_monte_carlo_dropout:
-            data_example = next(iter(valid_dl))  # Use one batch from the validation loader
-            mean_prediction, uncertainty = mc_dropout_predict(model, data_example, num_samples=50, device=device)
-            if epoch % 10 == 0:
+            # Validation step
+            if config.predict_mode_stats:
+                val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                    config=config,
+                    model=self,
+                    dataset=valid_dl,
+                    loss_func=loss_fct,
+                    device=device,
+                    scalers_validation=scalers_validation
+                )
                 wandb.log({
-                    "mc_dropout_uncertainty_std": np.std(uncertainty)
+                    "val_loss": val_loss,
+                    "epoch": epoch,
+                    "lr": lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr,
+                    "val_loss_node_predictions": val_loss_node_predictions,
+                    "val_loss_mode_stats": val_loss_mode_stats
+                })
+            else:
+                val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
+                    config=config,
+                    model=self,
+                    dataset=valid_dl,
+                    loss_func=loss_fct,
+                    device=device,
+                    scalers_validation=scalers_validation
+                )
+                wandb.log({
+                    "val_loss": val_loss,
+                    "epoch": epoch,
+                    "lr": lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr
                 })
 
-        print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+            # Monte Carlo Dropout Logging
+            if config.use_monte_carlo_dropout:
+                data_example = next(iter(valid_dl))  # Use one batch from the validation loader
+                mean_prediction, uncertainty = mc_dropout_predict(self, data_example, num_samples=50, device=device)
+                if epoch % 10 == 0:
+                    wandb.log({
+                        "mc_dropout_uncertainty_std": np.std(uncertainty)
+                    })
+
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+            
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss   
+                if model_save_path:         
+                    torch.save(self.state_dict(), model_save_path)
+                    print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
+            
+            # Save checkpoint
+            if epoch % 20 == 0:
+                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': self.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'best_val_loss': best_val_loss,
+                    'val_loss': val_loss,
+                }, checkpoint_path)
+                print(f'Checkpoint saved to {checkpoint_path}')
+            
+            early_stopping(val_loss)
+            if early_stopping.early_stop:
+                print("Early stopping triggered. Stopping training.")
+                break
         
-        if val_loss < best_val_loss:
-            best_val_loss = val_loss   
-            if model_save_path:         
-                torch.save(model.state_dict(), model_save_path)
-                print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
-        
-        # Save checkpoint
-        if epoch % 20 == 0:
-            checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-            torch.save({
-                'epoch': epoch,
-                'model_state_dict': model.state_dict(),
-                'optimizer_state_dict': optimizer.state_dict(),
-                'best_val_loss': best_val_loss,
-                'val_loss': val_loss,
-            }, checkpoint_path)
-            print(f'Checkpoint saved to {checkpoint_path}')
-        
-        early_stopping(val_loss)
-        if early_stopping.early_stop:
-            print("Early stopping triggered. Stopping training.")
-            break
-    
-    print("Best validation loss: ", best_val_loss)
-    wandb.summary["best_val_loss"] = best_val_loss
-    wandb.finish()
-    return val_loss, epoch
+        print("Best validation loss: ", best_val_loss)
+        wandb.summary["best_val_loss"] = best_val_loss
+        wandb.finish()
+        return val_loss, epoch
 
 def validate_model_during_training(config: object, 
                                    model: nn.Module, 
