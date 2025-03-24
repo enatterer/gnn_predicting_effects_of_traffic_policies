@@ -35,7 +35,8 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
     
 import gnn_io as gio
-import gnn_architecture as garch
+from models.point_net_transf_gat import PointNetTransfGAT
+from models.base_gnn import BaseGNN
 
 # Output from data_preprocessing.process_simulations_for_gnn.py
 dataset_path = '../../data/train_data/dist_not_connected_10k_1pct/'
@@ -71,7 +72,7 @@ PARAMETERS = [
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_01_2025",
+        "project_name": "runs_04_2025",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "use_all_features": args.use_all_features,
@@ -131,6 +132,12 @@ def main():
         print(f"An error occurred: {str(e)}")
     
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
+    parser.add_argument(
+        "--model_architecture", 
+        type=str, 
+        default="point_net_transf_gat",
+        choices=["point_net_transf_gat", "eign"],  # Add more as you implement them 
+    )
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=hf.str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
@@ -213,6 +220,50 @@ def main():
         print(f"Error: {e}")
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
+     
+     
+def create_model(architecture: str, config: object, device: torch.device):
+    """
+    Factory function to create the specified model architecture.
+    
+    Parameters:
+    - architecture: str, the name of the architecture to use
+    - config: object containing model parameters
+    - device: torch device to put the model on
+    
+    Returns:
+    - Initialized model on the specified device
+    """
+    if architecture == "point_net_transf_gat":
+        return PointNetTransfGAT(
+            in_channels=config.in_channels,
+            out_channels=config.out_channels,
+            point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
+            point_net_conv_layer_structure_global_mlp=config.point_net_conv_layer_structure_global_mlp,
+            gat_conv_layer_structure=config.gat_conv_layer_structure,
+            use_dropout=config.use_dropout,
+            dropout=config.dropout,
+            use_monte_carlo_dropout=config.use_monte_carlo_dropout,
+            predict_mode_stats=config.predict_mode_stats,
+            dtype=torch.float32
+        ).to(device)
+    elif architecture == "eign":
+        return EIGN(
+            in_channels=config.in_channels,
+            out_channels=config.out_channels,
+            dtype=torch.float32
+        ).to(device)
+    elif architecture == "gcn":
+        # return GCN(...).to(device)
+        raise NotImplementedError("GCN architecture not implemented yet")
+    elif architecture == "gat":
+        # return GAT(...).to(device)
+        raise NotImplementedError("GAT architecture not implemented yet")
+    elif architecture == "transformer":
+        # return TransformerGNN(...).to(device)
+        raise NotImplementedError("Transformer architecture not implemented yet")
+    else:
+        raise ValueError(f"Unknown architecture: {architecture}")
      
 if __name__ == '__main__':
     main()

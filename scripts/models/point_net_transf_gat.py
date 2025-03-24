@@ -21,8 +21,17 @@ import os
 import math
 from torch.nn import TransformerEncoderLayer, TransformerEncoder
 from torch_geometric.nn import TransformerConv
+from models.base_model import BaseGNN
 
-class MyGnn(torch.nn.Module):
+"""
+This architecture is a Graph Neural Network (GNN) model that combines PointNet Convolutions, Graph Attention Networks, and Transformer layers.
+It is designed to predict the effects of traffic policies using graph-based data.
+The model includes configurations for dropout, Monte Carlo dropout, and mode statistics prediction. Mode statistics prediction is not finetuned. 
+This architecture was used for the paper: https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5182100
+The experiments in the paper were conducted using 10,000 simulations of a 1% downsampled population of Paris.
+"""
+
+class PointNetTransfGAT(BaseGNN):
     def __init__(self, 
                 in_channels: int = 0, 
                 out_channels: int = 0, 
@@ -51,52 +60,75 @@ class MyGnn(torch.nn.Module):
         - use_monte_carlo_dropout (bool, optional): Whether or not to use Monte Carlo Dropout. It does make the inference slower. Note that it only makes sense to have use_monte_carlo_dropout = True if use_dropout = True.
         - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
         """
-        super(MyGnn, self).__init__()
-        self.dtype = dtype
-        self.in_channels = in_channels
-        self.out_channels = out_channels
+        # Call parent class constructor
+        super().__init__(
+            in_channels=in_channels,
+            out_channels=out_channels,
+            dropout=dropout,
+            use_dropout=use_dropout,
+            use_monte_carlo_dropout=use_monte_carlo_dropout,
+            predict_mode_stats=predict_mode_stats,
+            dtype=dtype
+        )
+        
+        # Architecture-specific parameters
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv = gat_conv_layer_structure
-        self.predict_mode_stats = predict_mode_stats
-        self.use_dropout = use_dropout
-        self.dropout = dropout
-        self.use_monte_carlo_dropout = use_monte_carlo_dropout
-        # Ensure logical consistency
-        if self.use_monte_carlo_dropout and not self.use_dropout:
-            raise ValueError("use_monte_carlo_dropout requires use_dropout to be True")
+        
+        # Initialize dropout if needed
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
-       
-        # Use start + end pos
-        self.point_net_conv_1 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=True, is_last_layer=False)
-        self.point_net_conv_2 = self.create_point_net_layer(gat_conv_starts_with_layer=self.gat_conv[0], is_first_layer=False, is_last_layer=True)
         
-        self.read_out_node_predictions = nn.Linear(64, 1)
+        # Initialize network layers
+        self._init_network_layers()
         
-        layers_global = self.define_gat_layers()
-        self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
-                
-        self.mode_stat_predictor = nn.Sequential(
-            nn.Linear(2, 64),
-            nn.ReLU(),
-            TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
-            nn.Linear(64, 2)
-        )
-        
-        self.additional_predictor = nn.Sequential(
-            nn.Linear(64, 64),
-            nn.ReLU(),
-            TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
-            nn.Linear(64, 1)
-        )
-
+        # Initialize weights
         self.initialize_weights()
-
+        
         if verbose:
             print("Model initialized")
             print(self)
-    
+            
+            
+    def _init_network_layers(self):
+        """Initialize all network layers."""
+        # PointNet layers 
+        # Use start + end pos
+        self.point_net_conv_1 = self.create_point_net_layer(
+            gat_conv_starts_with_layer=self.gat_conv[0], 
+            is_first_layer=True, 
+            is_last_layer=False
+        )
+        self.point_net_conv_2 = self.create_point_net_layer(
+            gat_conv_starts_with_layer=self.gat_conv[0], 
+            is_first_layer=False, 
+            is_last_layer=True
+        )
+        
+        # GAT layers
+        layers_global = self.define_gat_layers()
+        self.gat_graph_layers = GeoSequential('x, edge_index', layers_global)
+        
+        # Output layers
+        self.read_out_node_predictions = nn.Linear(64, 1)
+        
+        # Mode stats predictor (if enabled)
+        if self.predict_mode_stats:
+            self.mode_stat_predictor = nn.Sequential(
+                nn.Linear(2, 64),
+                nn.ReLU(),
+                TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
+                nn.Linear(64, 2)
+            )
+            self.additional_predictor = nn.Sequential(
+                nn.Linear(64, 64),
+                nn.ReLU(),
+                TransformerEncoder(TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
+                nn.Linear(64, 1)
+            )
+
+
     def forward(self, data):
         """
         Forward pass for the GNN model.
@@ -199,15 +231,14 @@ class MyGnn(torch.nn.Module):
         return PointNetConv(local_nn=local_MLP, global_nn=global_MLP)
     
     # WEIGHT INITIALIZION
+    
     def initialize_weights(self):
         """
         Initialize model weights using Xavier and Kaiming initialization.
         """
+        super().initialize_weights()  # Call parent's initialization
         for m in self.modules():
-            if isinstance(m, nn.Linear):
-                init.xavier_normal_(m.weight)
-                init.zeros_(m.bias)
-            elif isinstance(m, PointNetConv):
+            if isinstance(m, PointNetConv):
                 self._initialize_pointnetconv(m)
             elif isinstance(m, torch_geometric.nn.GATConv):
                 self._initialize_gatconv(m)
@@ -568,8 +599,6 @@ def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device 
 
     return mean_prediction, uncertainty
 
-
-
 def get_latest_checkpoint(checkpoint_dir: str) -> str:
     """
     Retrieve the latest checkpoint file from the specified directory.
@@ -698,269 +727,3 @@ class LinearWarmupCosineDecayScheduler:
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay 
-        
-        
-        
-    # TODO Elena: introduce smooth transition from one layer to the next. 
-    # def create_point_net_layer(self, gat_conv_starts_with_layer:int, is_first_layer:bool = False, is_last_layer:bool = False):
-    #     """
-    #     Create PointNetConv layers with specified configurations.
-
-    #     Parameters:
-    #     - gat_conv_starts_with_layer (int): Starting layer size for GATConv.
-
-    #     Returns:
-    #     - Tuple[nn.Sequential, nn.Sequential]: Local and global MLP layers.
-    #     """
-    #     # Create local MLP layers
-        
-    #     local_MLP_layers = []
-    #     offset_for_first_layer = 2
-    #     print("in_channels: ", self.in_channels)
-    #     print("pnc_local: ", self.pnc_local)
-    #     print("pnc_global: ", self.pnc_global)
-        
-    #     if is_first_layer:  
-    #         local_MLP_layers.append(nn.Linear(self.in_channels + offset_for_first_layer, self.pnc_local[0]))
-    #     else:
-    #         local_MLP_layers.append(nn.Linear(self.pnc_global[-1] + offset_for_first_layer, self.pnc_local[0]))
-    #     local_MLP_layers.append(nn.ReLU())
-    #     if self.use_dropout:
-    #         local_MLP_layers.append(self.dropout_layer)
-    #     for idx in range(len(self.pnc_local)-1):
-    #         local_MLP_layers.append(nn.Linear(self.pnc_local[idx], self.pnc_local[idx + 1]))
-    #         local_MLP_layers.append(nn.ReLU())
-    #         if self.use_dropout:
-    #             local_MLP_layers.append(self.dropout_layer)
-    #     local_MLP = nn.Sequential(*local_MLP_layers)
-        
-    #     global_MLP_layers = []
-    #     global_MLP_layers.append(nn.Linear(self.pnc_local[-1], self.pnc_global[0]))
-    #     for idx in range(len(self.pnc_global) - 1):
-    #         global_MLP_layers.append(nn.Linear(self.pnc_global[idx], self.pnc_global[idx + 1]))
-    #         global_MLP_layers.append(nn.ReLU())
-    #         if self.use_dropout:
-    #             global_MLP_layers.append(self.dropout_layer)
-                
-    #     if is_last_layer:
-    #         global_MLP_layers.append(nn.Linear(self.pnc_global[ - 1], gat_conv_starts_with_layer))
-    #         global_MLP_layers.append(nn.ReLU())
-    #     if self.use_dropout:
-    #         global_MLP_layers.append(self.dropout_layer)
-    #     global_MLP = nn.Sequential(*global_MLP_layers)
-    #     return local_MLP, global_MLP
-    
-    
-# class CosineWarmupScheduler(optim.lr_scheduler._LRScheduler):
- 
-#     def __init__(self, optimizer, warmup, max_iters):
-#         self.warmup = warmup
-#         self.max_num_iters = max_iters
-#         super().__init__(optimizer)
- 
-#     def get_lr(self):
-#         lr_factor = self.get_lr_factor(epoch=self.last_epoch)
-#         print("self.last_epoch: ", self.last_epoch)
-#         print("lr_factor: ", lr_factor)
-#         return [base_lr * lr_factor for base_lr in self.base_lrs]
- 
-#     def get_lr_factor(self, epoch):
-#         print("epoch: ", epoch)
-#         print("self.max_num_iters: ", self.max_num_iters)
-#         lr_factor = 0.5 * (1 + np.cos(np.pi * epoch / self.max_num_iters))
-#         print("lr_factor: ", lr_factor)
-#         if epoch <= self.warmup:
-#             lr_factor *= epoch * 1.0 / self.warmup
-#         return lr_factor
-
-
-# BACKUP FUNCTIONS BEFORE INTRODUCING MONTE CARLO DROPOUT
-
-
-
-# def train(model: nn.Module, 
-#           config: object = None, 
-#           loss_fct: nn.Module = None, 
-#           optimizer: optim.Optimizer = None, 
-#           train_dl: DataLoader = None, 
-#           valid_dl: DataLoader = None, 
-#           device: torch.device = None, 
-#           early_stopping: object = None, 
-#           model_save_path: str = None) -> tuple:
-#     """
-#     Train the GNN model.
-
-#     Parameters:
-#     - model (nn.Module): The model to train.
-#     - config (object, optional): Configuration object containing training parameters.
-#     - loss_fct (nn.Module, optional): Loss function for training.
-#     - optimizer (optim.Optimizer, optional): Optimizer for model training.
-#     - train_dl (DataLoader, optional): DataLoader for training data.
-#     - valid_dl (DataLoader, optional): DataLoader for validation data.
-#     - device (torch.device, optional): Device to use for training.
-#     - early_stopping (object, optional): Early stopping mechanism.
-#     - accumulation_steps (int, optional): Number of steps for gradient accumulation. Default is 3.
-#     - model_save_path (str, optional): Path to save the best model.
-
-#     Returns:
-#     - tuple: Validation loss and the best epoch.
-#     """
-#     scaler = GradScaler()
-#     total_steps = config.num_epochs * len(train_dl)
-#     scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, warmup_steps=config.lr_scheduler_warmup_steps, total_steps=total_steps/4)
-#     best_val_loss = float('inf')
-    
-#     # Create a directory for checkpoints if it doesn't exist
-#     checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
-#     os.makedirs(checkpoint_dir, exist_ok=True)
-    
-#     for epoch in range(config.num_epochs):
-#         model.train()
-#         optimizer.zero_grad()
-#         for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
-#             step = epoch * len(train_dl) + idx
-#             lr = scheduler.get_lr(step)
-#             for param_group in optimizer.param_groups:
-#                 param_group['lr'] = lr
-                
-#             data = data.to(device)
-#             targets_node_predictions = data.y
-#             targets_mode_stats = data.mode_stats
-           
-#             with autocast():
-#                 # Forward pass
-#                 if config.predict_mode_stats:
-#                     predicted, mode_stats_pred = model(data)
-#                     train_loss_node_predictions = loss_fct(predicted, targets_node_predictions)
-#                     train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats)
-#                     train_loss = train_loss_node_predictions + train_loss_mode_stats
-#                 else:
-#                     predicted = model(data)
-#                     train_loss = loss_fct(predicted, targets_node_predictions)
-      
-#             # Backward pass
-#             scaler.scale(train_loss).backward() 
-            
-#             # Gradient clipping
-#             if config.use_gradient_clipping:
-#                 torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-
-#             if (idx + 1) % config.gradient_accumulation_steps == 0:
-#                 scaler.step(optimizer)
-#                 scaler.update()
-#                 optimizer.zero_grad()
-                
-#             # Do not log train loss at every iteration, as it uses CPU
-#             if (idx + 1) % 10 == 0:
-#                 if config.predict_mode_stats:
-#                     wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
-#                 else:   
-#                     wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
-        
-#         if len(train_dl) % config.gradient_accumulation_steps != 0:
-#             scaler.step(optimizer)
-#             scaler.update()
-#             optimizer.zero_grad()
-            
-#         if config.predict_mode_stats:
-#             val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
-#             wandb.log({
-#                 "val_loss": val_loss, 
-#                 "epoch": epoch, 
-#                 "lr": lr, 
-#                 "r^2": r_squared, 
-#                 "spearman": spearman_corr, 
-#                 "pearson": pearson_corr,
-#                 "val_loss_node_predictions": val_loss_node_predictions, 
-#                 "val_loss_mode_stats": val_loss_mode_stats
-#             })
-#         else:
-#             val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(config=config, model=model, dataset=valid_dl, loss_func=loss_fct, device=device)
-#             wandb.log({
-#                 "val_loss": val_loss, 
-#                 "epoch": epoch, 
-#                 "lr": lr, 
-#                 "r^2": r_squared, 
-#                 "spearman": spearman_corr, 
-#                 "pearson": pearson_corr
-#             })
-#         print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
-        
-#         if val_loss < best_val_loss:
-#             best_val_loss = val_loss   
-#             if model_save_path:         
-#                 torch.save(model.state_dict(), model_save_path)
-#                 print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
-        
-#         # Save checkpoint
-#         if epoch % 20 == 0:
-#             checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-#             torch.save({
-#                 'epoch': epoch,
-#                 'model_state_dict': model.state_dict(),
-#                 'optimizer_state_dict': optimizer.state_dict(),
-#                 'best_val_loss': best_val_loss,
-#                 'val_loss': val_loss,
-#                 # 'r_squared': r_squared
-#             }, checkpoint_path)
-#             print(f'Checkpoint saved to {checkpoint_path}')
-        
-#         early_stopping(val_loss)
-#         if early_stopping.early_stop:
-#             print("Early stopping triggered. Stopping training.")
-#             break
-    
-#     print("Best validation loss: ", best_val_loss)
-#     wandb.summary["best_val_loss"] = best_val_loss
-#     wandb.finish()
-#     return val_loss, epoch
-
-# def validate_model_during_training(config: object, 
-#                                    model: nn.Module, 
-#                                    dataset: DataLoader, 
-#                                    loss_func: nn.Module, 
-#                                    device: torch.device) -> tuple:
-#     """
-#     Validate the model during training and compute validation loss and R^2 score.
-
-#     Parameters:
-#     - model (nn.Module): The model to validate.
-#     - dataset (DataLoader): DataLoader for validation data.
-#     - loss_func (nn.Module): Loss function to compute validation loss.
-#     - device (torch.device): Device to use for validation.
-
-#     Returns:
-#     - tuple: Total validation loss and R^2 score.
-#     """
-#     model.eval()
-#     val_loss = 0
-#     num_batches = 0
-#     actual_node_targets = []
-#     node_predictions = []
-    
-#     with torch.inference_mode():
-#         for idx, data in enumerate(dataset):
-#             data = data.to(device)
-#             input_node_features, targets_node_predictions, targets_mode_stats = data.x, data.y, data.mode_stats
-#             if config.predict_mode_stats:
-#                 node_predicted, mode_stats_pred = model(data)
-#                 val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions).item()
-#                 val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item()
-#                 val_loss += val_loss_node_predictions + val_loss_mode_stats
-#             else:
-#                 node_predicted = model(data)
-#                 val_loss += loss_func(node_predicted, targets_node_predictions).item()
-                
-#             actual_node_targets.append(targets_node_predictions)
-#             node_predictions.append(node_predicted)
-#             num_batches += 1
-            
-#     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
-#     actual_node_targets=torch.cat(actual_node_targets)
-#     node_predictions = torch.cat(node_predictions)
-#     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
-#     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
-#     if config.predict_mode_stats:
-#         return total_validation_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats
-#     else:
-#         return total_validation_loss, r_squared, spearman_corr, pearson_corr
