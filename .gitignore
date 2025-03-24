@@ -1,5 +1,6 @@
 .history/
 data/
+logs/
 scripts/training/wandb/
 scripts/testing_and_evaluation/wandb/
 scripts/training/__pycache__/
@@ -7,3 +8,7 @@ scripts/testing_and_evaluation/__pycache__/
 scripts/__pycache__/
 scripts/visualization/__pycache__/
 scripts/visualization/results/
+scripts/testing_and_evaluation/results/
+scripts/data_preprocessing/__pycache__/
+scripts/data_preprocessing/links_and_stats/
+scripts/explanation/__pycache__/

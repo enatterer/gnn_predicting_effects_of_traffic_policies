@@ -10,24 +10,33 @@ import matplotlib.pyplot as plt
 from matplotlib.cm import ScalarMappable
 from matplotlib.colors import Normalize
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import MinMaxScaler, StandardScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler, RobustScaler
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.sparse as sparse
 from torch.utils.data import DataLoader, Dataset, Subset
+from torch import Tensor
 import torch_geometric
 from torch_geometric.data import Data, Batch
 from torch_geometric.transforms import LineGraph
 from shapely.geometry import LineString
 import tqdm
 import wandb
+import copy
 
+import os
+import sys
 import json
-
 import joblib  # For saving the scaler
 
+# Add the project root to Python path
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if project_root not in sys.path:
+    sys.path.append(project_root)
+
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 class MyGeometricDataset(Dataset):
     def __init__(self, data_list):
@@ -58,6 +67,56 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
+class GNN_Loss:
+    """
+    Custom loss function for GNN that supports weighted loss computation.
+    The road with highesst vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
+    """
+    
+    def __init__(self, loss_fct, num_nodes, device, weighted=False):
+
+        if loss_fct == 'mse':
+            self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
+        elif self.config.loss_fct == 'l1':
+            self.loss_fct = torch.nn.L1Loss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
+        else:
+            raise ValueError(f"Loss function {loss_fct} not supported.")
+        
+        self.num_nodes = num_nodes
+        self.device = device
+        self.weighted = weighted
+
+    def __call__(self, y_pred:Tensor, y_true:Tensor, x: np.ndarray = None) -> Tensor: # x is before normalization (unscaled)
+        
+        if self.weighted:
+
+            loss = self.loss_fct(y_pred, y_true)
+            weights = x[:, EdgeFeatures.VOL_BASE_CASE]
+
+            # Normalize by the maximum value in each sample
+            for i in range(weights.shape[0] // self.num_nodes):
+                weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+
+            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+            return torch.mean(loss * weights.unsqueeze(1))
+
+        else:
+            return self.loss_fct(y_pred, y_true)
+            
+def int_list_to_string(lst: list, delimiter: str = ', ') -> str:
+    """
+    Converts a list of integers to a string representation with the specified delimiter.
+
+    Parameters:
+    lst (list[int]): The list of integers.
+    delimiter (str): The delimiter used to separate the integers in the string. Default is ', '.
+
+    Returns:
+    str: The string representation of the list.
+    """
+    # Join the list elements into a string with the specified delimiter
+    return f"[{delimiter.join(map(str, lst))}]"
+
 
 # This function should be replaced by below create_dataloaders
 def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False):
@@ -81,12 +140,15 @@ def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False)
     print(f"{'Training' if is_train else 'Validation'} subset length: {len(sub_dataset)}")
     return DataLoader(dataset=sub_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
 
-def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
+def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio, shuffle_seed=42):
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
+
+    # Randomly shuffle the dataset
+    random.Random(shuffle_seed).shuffle(dataset)
     
     # Calculate split indices
     train_split_idx = int(dataset_length * train_ratio)
@@ -106,12 +168,32 @@ def create_dataloaders(batch_size, dataset, train_ratio, val_ratio, test_ratio):
     print(f"Validation subset length: {len(val_subset)}")
     print(f"Test subset length: {len(test_subset)}")
     
-    # Create data loaders
-    train_loader = DataLoader(dataset=train_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    val_loader = DataLoader(dataset=val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-    test_loader = DataLoader(dataset=test_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+    return train_subset, val_subset, test_subset
+
+def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_seed=0, shuffle_seed=42):
     
-    return train_loader, val_loader, test_loader
+    dataset_length = len(dataset)
+    print(f"Total dataset length: {dataset_length}")
+
+    # Split the dataset into training and testing sets
+    train_indices, test_indices = train_test_split(range(dataset_length), test_size=test_ratio, random_state=shuffle_seed)
+    
+    # Perform bootstrapping on the training set, OOB validation set
+    rng = np.random.default_rng(seed=bootstrap_seed)
+    train_indices_bootstrap = rng.choice(train_indices, size=len(train_indices), replace=True)
+    oob_indices = list(set(train_indices) - set(train_indices_bootstrap))
+    
+    # Create subsets
+    train_subset_bootstrap = Subset(dataset, train_indices_bootstrap)
+    val_subset_oob = Subset(dataset, oob_indices)
+    test_subset = Subset(dataset, test_indices)
+    
+    print(f"Bootstrapping unique samples: {len(set(train_indices_bootstrap))}")
+    print(f"Training subset length: {len(train_subset_bootstrap)}")
+    print(f"OOB Validation subset length: {len(val_subset_oob)}")
+    print(f"Test subset length: {len(test_subset)}")
+    
+    return train_subset_bootstrap, val_subset_oob, test_subset
 
 def save_dataloader(dataloader, file_path):
     # Extract the dataset from the DataLoader
@@ -131,32 +213,116 @@ def save_dataloader_params(dataloader, file_path):
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
 
+# Function to copy a Subset
+def copy_subset(subset):
+    return Subset(copy.deepcopy(subset.dataset), copy.deepcopy(subset.indices))
+
 # Call this function during training without the scalars and with the directory path, and during the testing with the saved scalars and without a directory path to save.
-def normalize_dataset(dataset, y_scalar=None, pos_scalar=None, x_scalar_list = None, directory_path=None):
-    # Normalize node features
-    dataset = normalize_x_values_with_scalar_saved(dataset, x_scalar_list, directory_path)
-    # Normalize positional features (if any)
-    dataset = normalize_positional_features(dataset, pos_scalar, directory_path)
-    # Normalize y values
-    dataset = normalize_y_values(dataset, y_scalar, directory_path)
+def normalize_dataset_create_scaler(dataset_input, directory_path, normalize_y, normalize_pos):
+    dataset = copy_subset(dataset_input)
+    dataset, x_scaler = normalize_x_values_create_scalers(dataset, directory_path)
+    if normalize_pos:
+        dataset, pos_scaler = normalize_positional_features_create_scaler(dataset, directory_path)
+    if normalize_y:
+        dataset, y_scaler = normalize_y_values_create_scaler(dataset, directory_path)
+        if normalize_pos:
+            return dataset, x_scaler, pos_scaler, y_scaler 
+        else:
+            return dataset, x_scaler, y_scaler
+    else:
+        if normalize_pos:
+            return dataset, x_scaler, pos_scaler 
+        else:
+            return dataset, x_scaler
+
+def normalize_dataset_with_given_scaler(dataset_input, x_scalar_list = None, pos_scalar=None, y_scalar=None, normalize_y=False, normalize_pos=False):
+    dataset = copy_subset(dataset_input)
+    dataset = normalize_x_values_given_scaler(dataset, x_scalar_list)
+    if normalize_pos:
+        dataset = normalize_positional_features_given_scaler(dataset, pos_scalar)
+    if normalize_y:
+        dataset = normalize_y_values_given_scaler(dataset, y_scalar)
     return dataset
 
-# def normalize_dataset_do_not_normalize_y(dataset):
-#     # Normalize node features
-#     dataset = normalize_x_values(dataset)
-#     # Normalize positional features (if any)
-#     dataset = normalize_positional_features(dataset)
-#     # Normalize y values
-#     # dataset = normalize_y_values(dataset)
-#     return dataset
-
-# Function to replace x with normalized_x and remove normalized_x
-def replace_x_with_normalized_x(dataset):
+def normalize_x_values_given_scaler(dataset, x_scaler_list):
+    shape_of_x = dataset[0].x.shape[1]
+    for i in range(shape_of_x):
+        scaler = x_scaler_list[i]
+        for data in dataset:
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
     for data in dataset:
-        if hasattr(data, 'normalized_x'):
-            data.x = data.normalized_x
-            del data.normalized_x
+        data.x = data.normalized_x
+        del data.normalized_x
     return dataset
+
+def normalize_positional_features_given_scaler(dataset, pos_scalar=None):
+    for data in dataset:
+        data.pos = torch.tensor(pos_scalar.transform(data.pos.numpy()), dtype=torch.float)
+    return dataset
+
+def normalize_y_values_given_scaler(dataset, y_scalar=None):
+    for data in dataset:
+        data.y = torch.tensor(y_scalar.transform(data.y.numpy()), dtype=torch.float)
+    return dataset
+
+def normalize_x_values_create_scalers(dataset, directory_path):
+    shape_of_x = dataset[0].x.shape[1]
+    list_of_scalers_to_save = []
+    x_values = torch.cat([data.x for data in dataset], dim=0)
+
+    for i in range(shape_of_x):
+        all_node_features = replace_invalid_values(x_values[:, i].reshape(-1, 1)).numpy()
+        
+        scaler = StandardScaler()
+        print(f"Scaler created for x values at index {i}: {scaler}")
+        scaler.fit(all_node_features)
+        list_of_scalers_to_save.append(scaler)
+
+        for data in dataset:
+            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
+            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
+            if i == 0:
+                data.normalized_x = normalized_x_dim
+            else:
+                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
+
+    joblib.dump(list_of_scalers_to_save, (directory_path + 'x_scaler.pkl'))
+
+    for data in dataset:
+        data.x = data.normalized_x
+        del data.normalized_x
+    return dataset, list_of_scalers_to_save
+
+def normalize_positional_features_create_scaler(dataset, directory_path):
+    all_pos_features = torch.cat([data.pos for data in dataset], dim=0)
+    all_pos_features = replace_invalid_values(all_pos_features).numpy()
+    scaler = StandardScaler()
+    print(f"Scaler created for pos features: {scaler}")
+    scaler.fit(all_pos_features)
+    joblib.dump(scaler, os.path.join(directory_path, 'pos_scaler.pkl'))
+    for data in dataset:
+        data.pos = torch.tensor(scaler.transform(data.pos.numpy()), dtype=torch.float)
+    return dataset, scaler
+
+
+def normalize_y_values_create_scaler(dataset, directory_path):
+    all_y_values = torch.cat([data.y for data in dataset], dim=0).reshape(-1, 1)
+    all_y_values = replace_invalid_values(all_y_values).numpy()
+
+    scaler = RobustScaler()
+    print(f"Scaler created for y values: {scaler}")
+    scaler.fit(all_y_values)
+    joblib.dump(scaler, os.path.join(directory_path, 'y_scaler.pkl'))
+
+    for data in dataset:
+        data.y = torch.tensor(scaler.transform(data.y.reshape(-1, 1).numpy()), dtype=torch.float)
+    return dataset, scaler
+
 
 def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
     dataset_with_fewer_dimensions = dataset.copy()
@@ -167,119 +333,11 @@ def cut_dimensions(dataset, indices_of_dimensions_to_keep: list):
             data.x = data.x[:, indices_of_dimensions_to_keep]
     return dataset_with_fewer_dimensions
 
-def normalize_positional_features(dataset, pos_scalar=None, directory_path=None):
-    # Collect all positional features
-    all_pos_features = []
-    for data in dataset:
-        all_pos_features.append(data.pos)
-
-    # Stack all positional features into a single tensor
-    all_pos_features = torch.cat(all_pos_features, dim=0)
-    
-    if pos_scalar is None:
-        scaler = MinMaxScaler()
-        scaler.fit(all_pos_features)
-        joblib.dump(scaler, directory_path + 'pos_scaler.pkl')
-    else:
-        scaler = pos_scalar
-    
-    # Apply the scaler to each data instance and store as a new feature
-    for data in dataset:
-        data.pos = torch.tensor(scaler.transform(data.pos), dtype=torch.float)
-    return dataset
-
 def replace_invalid_values(tensor):
-    finite_mask = torch.isfinite(tensor)
-    if finite_mask.any():
-        max_finite_value = tensor[finite_mask].max()
-    else:
-        max_finite_value = torch.tensor(0.0)
-    tensor[~finite_mask] = max_finite_value
-    tensor[torch.isnan(tensor)] = max_finite_value
+    tensor[tensor != tensor] = 0  # replace NaNs with 0
+    tensor[tensor == float('inf')] = 0  # replace inf with 0
+    tensor[tensor == float('-inf')] = 0  # replace -inf with 0
     return tensor
-
-# def normalize_x_values(dataset):
-#     shape_of_x = dataset[0].x.shape[1]
-#     for i in range(shape_of_x):
-#         all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
-#         all_node_features = torch.cat(all_node_features, dim=0)
-
-#         all_node_features = replace_invalid_values(all_node_features)
-#         all_node_features_np = all_node_features.numpy()
-
-#         scaler = MinMaxScaler()
-#         scaler.fit(all_node_features_np)
-
-#         for data in dataset:
-#             data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-#             normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
-
-#             if i == 0:
-#                 data.normalized_x = normalized_x_dim
-#             else:
-#                 data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
-
-#     for data in dataset:
-#         data.x = data.normalized_x
-#         del data.normalized_x
-
-#     return dataset
-
-def normalize_x_values_with_scalar_saved(dataset, x_scaler_list, directory_path=None):
-    shape_of_x = dataset[0].x.shape[1]
-    list_of_scalers_to_save = []
-    create_scaler = x_scaler_list is None or len(x_scaler_list) == 0
-    for i in range(shape_of_x):
-        all_node_features = [data.x[:, i].reshape(-1, 1) for data in dataset]
-        all_node_features = torch.cat(all_node_features, dim=0)
-
-        all_node_features = replace_invalid_values(all_node_features)
-        all_node_features_np = all_node_features.numpy()
-        
-        if create_scaler:
-            scaler = MinMaxScaler()
-            scaler.fit(all_node_features_np)
-            list_of_scalers_to_save.append(scaler)
-        else:
-            scaler_of_this_dimension = x_scaler_list[i]
-            scaler = scaler_of_this_dimension
-        
-        for data in dataset:
-            data_x_dim = replace_invalid_values(data.x[:, i].reshape(-1, 1))
-            normalized_x_dim = torch.tensor(scaler.transform(data_x_dim.numpy()), dtype=torch.float)
-            if i == 0:
-                data.normalized_x = normalized_x_dim
-            else:
-                data.normalized_x = torch.cat((data.normalized_x, normalized_x_dim), dim=1)
-    if create_scaler:
-        joblib.dump(list_of_scalers_to_save, directory_path + 'x_scaler.pkl')
-    for data in dataset:
-        data.x = data.normalized_x
-        del data.normalized_x
-    return dataset
-
-
-def normalize_y_values(dataset, y_scalar=None, directory_path=None):
-    # Collect all y values
-    all_y_values = []
-    for data in dataset:
-        all_y_values.append(data.y)
-
-    # Stack all y values into a single tensor
-    all_y_values = torch.cat(all_y_values, dim=0).reshape(-1, 1)
-
-    if y_scalar is None:
-        scaler = MinMaxScaler()
-        scaler.fit(all_y_values)
-        joblib.dump(scaler, directory_path + 'y_scaler.pkl')
-    else:
-        scaler = y_scalar
-
-    # Apply the scaler to each data instance and store as a new feature
-    for data in dataset:
-        data.y = torch.tensor(scaler.transform(data.y), dtype=torch.float)  # Keep the 2D shape
-
-    return dataset
 
 # Define a dictionary to map each mode to an integer
 mode_mapping = {
@@ -310,12 +368,13 @@ def encode_modes(modes):
     return mode_mapping.get(modes, -1)  # Use -1 for any unknown modes
 
 
-def compute_baseline_of_mean_target(dataset, loss_fct):
+def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
     Parameters:
     - dataset: A dataset containing normalized y values.
+    - scalers: The scalers used to normalize the x and pos values.
 
     Returns:
     - mse_value: The baseline MSE value.
@@ -325,34 +384,31 @@ def compute_baseline_of_mean_target(dataset, loss_fct):
 
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
-    # print("mean_y_normalized: ")
-    # print(mean_y_normalized)
+
+    # Original x values
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
     
     # median_y_normalized = np.median(y_values_normalized)   
-    # print("median_y_normalized: ")
-    # print(median_y_normalized)
 
     # Convert numpy arrays to torch tensors
-    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32)
-    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32)
-
+    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32).to(device)
+    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32).to(device)
+    
     # Create the target tensor with the same shape as y_values_normalized_tensor
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
-    # Instantiate the MSELoss function
-    # mse_loss = torch.nn.MSELoss()
-
     # Compute the MSE
-    loss = loss_fct(y_values_normalized_tensor, target_tensor)
+    loss = loss_fct(y_values_normalized_tensor, target_tensor, x)
     return loss.item() 
 
 
-def compute_baseline_of_no_policies(dataset, loss_fct):
+def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
 
     Parameters:
     - dataset: A dataset containing y values: The actual difference of the volume of cars.
+    - scalers: The scalers used to normalize the x and pos values.
 
     Returns:
     - mse_value: The baseline MSE value.
@@ -361,12 +417,15 @@ def compute_baseline_of_no_policies(dataset, loss_fct):
     actual_difference_vol_car = np.concatenate([data.y for data in dataset])
 
     target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
+
+    # Original x values
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
     
-    target_tensor = torch.tensor(target_tensor, dtype=torch.float32)
-    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32)
-    
+    target_tensor = torch.tensor(target_tensor, dtype=torch.float32).to(device)
+    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32).to(device)
+
     # Compute the loss
-    loss = loss_fct(actual_difference_vol_car, target_tensor)
+    loss = loss_fct(actual_difference_vol_car, target_tensor, x)
     return loss.item()
 
 # def visualize_data(policy_features, flow_features, title):
