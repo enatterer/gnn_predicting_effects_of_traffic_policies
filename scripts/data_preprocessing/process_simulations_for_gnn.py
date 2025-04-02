@@ -30,13 +30,7 @@ import alphashape
 import shapely.wkt as wkt
 from shapely.geometry import Polygon, Point
 
-# Add the 'scripts' directory to the Python path
-scripts_path = os.path.abspath(os.path.join('..'))
-if scripts_path not in sys.path:
-    sys.path.append(scripts_path)
-
-import data_preprocessing.processing_io as pio
-
+from .processing_io import *
 
 # Paths to raw simulation data
 sim_input_paths = ["../../data/raw_data/cap_reduction_in_single_roads/"]
@@ -82,16 +76,16 @@ def compute_result_dic(basecase_links, subdirs):
         networks = [network for network in os.listdir(subdir) if not network.endswith(".DS_Store")]
         for network in networks:
             file_path = os.path.join(subdir, network)
-            policy_key = pio.create_policy_key_1pm(network)
-            df_output_links = pio.read_output_links(file_path)
-            df_eqasim_trips = pio.read_eqasim_trips(file_path)
+            policy_key = create_policy_key_1pm(network)
+            df_output_links = read_output_links(file_path)
+            df_eqasim_trips = read_eqasim_trips(file_path)
             if (df_output_links is not None and df_eqasim_trips is not None):
                 df_output_links.drop(columns=['geometry'], inplace=True)
-                gdf_extended = pio.extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
-                gdf_extended = pio.extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
+                gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
+                gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
                 result_dic_output_links[policy_key] = gdf_extended
                 df_eqasim_trips_list = [df_eqasim_trips]
-                mode_stats = pio.calculate_avg_mode_stats(df_eqasim_trips_list)
+                mode_stats = calculate_avg_mode_stats(df_eqasim_trips_list)
                 result_dic_eqasim_trips[policy_key] = mode_stats
     
     return result_dic_output_links, result_dic_eqasim_trips
@@ -100,7 +94,7 @@ def compute_result_dic(basecase_links, subdirs):
 def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
 
     # PROCESS LINK GEOMETRIES
-    edge_start_point_tensor, stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes = pio.get_link_geometries(links_base_case, districts)
+    edge_start_point_tensor, stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes = get_link_geometries(links_base_case, districts)
     
     os.makedirs(save_path, exist_ok=True)
     datalist = []
@@ -110,7 +104,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
     capacity_base_case = np.where(links_base_case['modes'].str.contains('car'), links_base_case['capacity'], 0)
     length = links_base_case['length'].values
     freespeed = links_base_case['freespeed'].values
-    allowed_modes = pio.encode_modes(links_base_case)
+    allowed_modes = encode_modes(links_base_case)
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
     x = torch.zeros((len(nodes), 1), dtype=torch.float)
     data = Data(edge_index=edge_index, x=x)
@@ -118,8 +112,8 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
     batch_counter = 0
     for key, df in tqdm(result_dic.items(), desc="Processing result_dic", unit="dataframe"):   
         if isinstance(df, pd.DataFrame) and key != "base_network_no_policies":
-            gdf = pio.prepare_gdf(df, links_base_case)
-            capacities_new, capacity_reduction, highway, freespeed =  pio.get_basic_edge_attributes(capacity_base_case, gdf)
+            gdf = prepare_gdf(df, links_base_case)
+            capacities_new, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
 
             edge_feature_dict = {
                 EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
@@ -148,7 +142,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
             linegraph_data = linegraph_transformation(data)
             linegraph_data.x = edge_tensor
             linegraph_data.pos = stacked_edge_geometries_tensor
-            linegraph_data.y = pio.compute_target_tensor_only_edge_features(vol_base_case, gdf)
+            linegraph_data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf)
                         
             df_mode_stats = result_dic_mode_stats.get(key)
             if df_mode_stats is not None:
@@ -220,7 +214,7 @@ def main():
     }).reset_index()
 
     # # Analyze results
-    # pio.analyze_geodataframes(result_dic=result_dic_output_links, consider_only_highway_edges=True)
+    # analyze_geodataframes(result_dic=result_dic_output_links, consider_only_highway_edges=True)
 
     gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
     process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, districts=districts, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)

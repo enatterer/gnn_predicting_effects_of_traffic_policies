@@ -31,7 +31,10 @@ from torch_geometric.data import Batch, Data
 from torch_geometric.transforms import LineGraph
 
 
-districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+districts_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
+districts = gpd.read_file(districts_path)
 
 # paris_inside_bvd_peripherique = "../../data/paris_inside_bvd_per/referentiel-comptages-edit.shp"
 # gdf_paris_inside_bvd_per = gpd.read_file(paris_inside_bvd_peripherique)
