@@ -6,29 +6,17 @@ Here we specify all features, then run_models can be called with a reduced set. 
 """
 
 import os
-import sys
 import glob
-import math
-import random
-import pickle
-import argparse
 from enum import IntEnum
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 import torch
 from torch_geometric.transforms import LineGraph
-from torch_geometric.data import Data, Batch
-
-import fiona
-import alphashape
-import shapely.wkt as wkt
-from shapely.geometry import Polygon, Point
+from torch_geometric.data import Data
 
 from .processing_io import *
 
@@ -94,7 +82,7 @@ def compute_result_dic(basecase_links, subdirs):
 def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
 
     # PROCESS LINK GEOMETRIES
-    edge_start_point_tensor, stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes = get_link_geometries(links_base_case, districts)
+    _, stacked_edge_geometries_tensor, _, edges_base, nodes = get_link_geometries(links_base_case, districts)
     
     os.makedirs(save_path, exist_ok=True)
     datalist = []
@@ -113,7 +101,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
     for key, df in tqdm(result_dic.items(), desc="Processing result_dic", unit="dataframe"):   
         if isinstance(df, pd.DataFrame) and key != "base_network_no_policies":
             gdf = prepare_gdf(df, links_base_case)
-            capacities_new, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
+            _, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
 
             edge_feature_dict = {
                 EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
@@ -212,9 +200,6 @@ def main():
         'perimetre': lambda x: list(x.dropna()),
         'surface': lambda x: list(x.dropna()),
     }).reset_index()
-
-    # # Analyze results
-    # analyze_geodataframes(result_dic=result_dic_output_links, consider_only_highway_edges=True)
 
     gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
     process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, districts=districts, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
