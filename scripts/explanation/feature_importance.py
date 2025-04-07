@@ -7,6 +7,7 @@ batches and plotted as a bar chart.
 """
 
 import os
+import sys
 import json
 
 import numpy as np
@@ -17,8 +18,13 @@ import torch
 from torch.utils.data import DataLoader
 from torch_geometric.explain import Explainer, GNNExplainer
 
+# Add "scripts" to Python path
+scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if scripts_root not in sys.path:
+    sys.path.append(scripts_root)
+
 import gnn.gnn_io as gio
-import scripts.gnn.models.point_net_transf_gat as garch
+import gnn.models.point_net_transf_gat as garch
 import training.help_functions as hf
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 

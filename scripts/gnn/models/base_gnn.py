@@ -12,10 +12,10 @@ import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-# Add the project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+# Add "scripts" to Python path
+scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+if scripts_root not in sys.path:
+    sys.path.append(scripts_root)
 
 from gnn.help_functions import validate_model_during_training, mc_dropout_predict, LinearWarmupCosineDecayScheduler
 

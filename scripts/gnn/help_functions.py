@@ -11,10 +11,10 @@ import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import Subset, DataLoader
 
-# Add the project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+# Add "scripts" to Python path
+scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if scripts_root not in sys.path:
+    sys.path.append(scripts_root)
 
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
@@ -41,27 +41,6 @@ def replace_invalid_values(tensor):
 # Function to copy a Subset
 def copy_subset(subset):
     return Subset(copy.deepcopy(subset.dataset), copy.deepcopy(subset.indices))
-
-class EarlyStopping:
-    def __init__(self, patience=5, verbose=False):
-        self.patience = patience
-        self.verbose = verbose
-        self.counter = 0
-        self.best_loss = None
-        self.early_stop = False
-
-    def __call__(self, val_loss):
-        if self.best_loss is None:
-            self.best_loss = val_loss
-        elif val_loss >= self.best_loss:
-            self.counter += 1
-            if self.verbose:
-                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
-            if self.counter >= self.patience:
-                self.early_stop = True
-        else:
-            self.best_loss = val_loss
-            self.counter = 0
 
 class GNN_Loss:
     """

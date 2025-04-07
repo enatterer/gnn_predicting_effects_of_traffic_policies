@@ -8,42 +8,27 @@ Example usage with default architecture, dropout, and most significant features 
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3  --use_monte_carlo_dropout True`
 '''
 
-import math
-import numpy as np
-import wandb
-import random
-import torch
-import torch_geometric
-from torch_geometric.data import Data
+import os
 import sys
-import os
-from tqdm import tqdm
-import signal
-import joblib
 import argparse
-import json
-import os
-import subprocess
-from torch.utils.data import DataLoader, Dataset, Subset
-from sklearn.preprocessing import StandardScaler
 
-from help_functions import *
+import torch
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../')) 
-if project_root not in sys.path:
-    sys.path.append(project_root)
-    
+# Add "scripts" to Python path
+scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if scripts_root not in sys.path:
+    sys.path.append(scripts_root)
+
+from .help_functions import *
+from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
+from gnn.models.point_net_transf_gat import PointNetTransfGAT
+from gnn.models.eign import Eign
+
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+
+# Please adjust as needed
 dataset_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
 base_dir = os.path.join(project_root, 'data')
-
-root_models = os.path.abspath(os.path.join(os.path.dirname(__file__), '../models'))
-if root_models not in sys.path:
-    sys.path.append(root_models)
-
-from gnn.gnn_io import *
-from scripts.gnn.models.base_gnn import BaseGNN
-from scripts.gnn.models.point_net_transf_gat import PointNetTransfGAT
-from scripts.gnn.models.eign import Eign
 
 PARAMETERS = [
     "project_name",
@@ -95,16 +80,6 @@ def get_parameters(args):
         "use_gradient_clipping": args.use_gradient_clipping,
         "device_nr": args.device_nr
     }
-    
-    # params["unique_model_description"] = (
-    #     f"pnc_local_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_local_mlp'], delimiter='_')}_"
-    #     f"pnc_global_{gio.int_list_to_string(lst=params['point_net_conv_layer_structure_global_mlp'], delimiter='_')}_"
-    #     f"gat_conv_{gio.int_list_to_string(lst=params['gat_conv_layer_structure'], delimiter='_')}_"
-    #     f"use_dropout_{params['use_dropout']}_"
-    #     f"dropout_{params['dropout']}_"
-    #     f"use_mc_do_{params['use_monte_carlo_dropout']}_"
-    #     f"predict_mode_stats_{params['predict_mode_stats']}"
-    # )
 
     params["unique_model_description"] = "wannabe_best_6"
     
@@ -185,15 +160,7 @@ def main():
         config = setup_wandb({param: params[param] for param in PARAMETERS})
 
         # Create model instance
-        gnn_instance = PointNetTransfGAT(in_channels=config.in_channels, 
-                        out_channels=config.out_channels, 
-                        point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
-                        point_net_conv_layer_structure_global_mlp=config.point_net_conv_layer_structure_global_mlp,
-                        gat_conv_layer_structure=config.gat_conv_layer_structure,
-                        use_dropout=config.use_dropout, 
-                        dropout=config.dropout, 
-                        predict_mode_stats=config.predict_mode_stats, 
-                        dtype=torch.float32)
+        gnn_instance = create_model("point_net_transf_gat", config, device)
         
         gnn_instance = gnn_instance.to(device)  
         loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
@@ -224,7 +191,7 @@ def main():
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
      
-     
+
 def create_model(architecture: str, config: object, device: torch.device):
     """
     Factory function to create the specified model architecture.
@@ -251,20 +218,12 @@ def create_model(architecture: str, config: object, device: torch.device):
             dtype=torch.float32
         ).to(device)
     elif architecture == "eign":
+        # TO BE IMPLEMENTED
         return Eign(
             in_channels=config.in_channels,
             out_channels=config.out_channels,
             dtype=torch.float32
         ).to(device)
-    elif architecture == "gcn":
-        # return GCN(...).to(device)
-        raise NotImplementedError("GCN architecture not implemented yet")
-    elif architecture == "gat":
-        # return GAT(...).to(device)
-        raise NotImplementedError("GAT architecture not implemented yet")
-    elif architecture == "transformer":
-        # return TransformerGNN(...).to(device)
-        raise NotImplementedError("Transformer architecture not implemented yet")
     else:
         raise ValueError(f"Unknown architecture: {architecture}")
      

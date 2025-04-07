@@ -1,26 +1,21 @@
-import math
-import numpy as np
-import wandb
-import random
-import torch
-import torch_geometric
-from torch_geometric.data import Data
-import sys
 import os
-from tqdm import tqdm
-import signal
-import joblib
-import argparse
-import json
+import sys
 import copy
+import random
+import joblib
 import subprocess
-from torch.utils.data import DataLoader, Dataset, Subset
+
+import numpy as np
+from tqdm import tqdm
+import wandb
 from sklearn.preprocessing import StandardScaler
 
-# Add the project root to Python path
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if project_root not in sys.path:
-    sys.path.append(project_root)
+import torch
+
+# Add "scripts" to Python path
+scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
+if scripts_root not in sys.path:
+    sys.path.append(scripts_root)
 
 from gnn.gnn_io import *
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
@@ -50,7 +45,6 @@ def select_best_gpu(gpus):
 def set_cuda_visible_device(gpu_index):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_index)
     print(f"Using GPU {gpu_index} with CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
-    
     
 def set_random_seeds(seed_value=42):
     # Set environment variable for reproducibility
@@ -368,3 +362,24 @@ def one_hot_highway(datalist, idx):
         one_hot = np.eye(n_types)[mapped_highway]
 
         data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
+
+class EarlyStopping:
+    def __init__(self, patience=5, verbose=False):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_loss = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+        elif val_loss >= self.best_loss:
+            self.counter += 1
+            if self.verbose:
+                print(f'EarlyStopping counter: {self.counter} out of {self.patience}')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_loss = val_loss
+            self.counter = 0

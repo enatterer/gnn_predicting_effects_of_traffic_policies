@@ -15,3 +15,6 @@ Then, activate the environment:
 ```conda activate traffic-gnn```
 
 We use Python 3.10.13 along with CUDA 12.7 and CuDNN 8.7 for this project.
+
+## License
+This project is licensed under the MIT License, see the [LICENSE](LICENSE) file for details. Kindly note that the code is provided for research purposes only and may not be suitable for commercial use. Please contact us for more information.
