@@ -8,16 +8,16 @@ The parameters UseMonteCarloDropout and PredictModeStats may be implemented in t
 '''
 
 import torch
-from models.base_gnn import BaseGNN
+
+from scripts.gnn.models.base_gnn import BaseGNN
 
 class Eign(BaseGNN):
     def __init__(self, 
                 in_channels: int = 0, 
                 out_channels: int = 0, 
-                dropout: float = 0.0, 
+                dropout: float = 0.3, 
                 use_dropout: bool = False,
                 dtype: torch.dtype = torch.float32,
-                verbose: bool = True
                 ):
         """
         Initialize the GNN model with specified configurations.
@@ -25,7 +25,7 @@ class Eign(BaseGNN):
         Parameters:
         - in_channels (int): Number of input channels.
         - out_channels (int): Number of output channels.
-        - dropout (float, optional): Dropout rate. Default is 0.0.
+        - dropout (float, optional): Dropout rate. Default is 0.3.
         - use_dropout (bool, optional): Whether to use dropout. Default is False.
         """
         # Call parent class constructor
@@ -46,7 +46,4 @@ class Eign(BaseGNN):
         pass
     
     def initialize_weights(self):
-        pass    
-
-
-
+        pass

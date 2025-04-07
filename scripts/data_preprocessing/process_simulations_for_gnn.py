@@ -18,7 +18,7 @@ import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
 
-from .processing_io import *
+from .help_functions import *
 
 # Paths to raw simulation data
 sim_input_paths = ["../../data/raw_data/cap_reduction_in_single_roads/"]
@@ -35,7 +35,6 @@ discricts_gdf_path = "../../data/visualisation/districts_paris.geojson"
 
 # Flag to use allowed modes or not
 use_allowed_modes = False
-
 
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0

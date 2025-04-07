@@ -1,45 +1,26 @@
-
-from collections import defaultdict
-import fiona
-import geopandas as gpd
-import glob
-import gzip
-import math
-import matplotlib.cm as cm
-import matplotlib.colors as mcolors
-import matplotlib.pyplot as plt
-import numpy as np
 import os
-import pandas as pd
-import pickle
-import random
 import re
-import shapely.wkt as wkt
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import torch_geometric
-import torchvision
-import torchvision.transforms as T
-import tqdm
-from matplotlib.colors import LogNorm, TwoSlopeNorm
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from shapely.geometry import LineString, Point, Polygon, box
-from shapely.ops import nearest_points, unary_union
-from torch.utils.data import DataLoader, Dataset, Subset
-from torch_geometric.data import Batch, Data
-from torch_geometric.transforms import LineGraph
+import glob
+import random
+from collections import defaultdict
 
+import tqdm
+import numpy as np
+import pandas as pd
+import geopandas as gpd
+import fiona
+import matplotlib.pyplot as plt
+from matplotlib.colors import TwoSlopeNorm
+from shapely.geometry import Point, box
+from shapely.ops import unary_union
+import shapely.wkt as wkt
+
+import torch
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 districts_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
 districts = gpd.read_file(districts_path)
-
-# paris_inside_bvd_peripherique = "../../data/paris_inside_bvd_per/referentiel-comptages-edit.shp"
-# gdf_paris_inside_bvd_per = gpd.read_file(paris_inside_bvd_peripherique)
-# boundary_df = alphashape.alphashape(gdf_paris_inside_bvd_per, 435).exterior[0]
-# linear_ring_polygon = Polygon(boundary_df)
 
 # Custom mapping for highway types
 highway_mapping = {
@@ -125,7 +106,6 @@ def identify_summarized_entries_detailed(original_gdf, summarized_gdf):
     
     return detailed_entries, both_zero, both_nonzero, one_zero_one_nonzero
 
-
 def analyze_geodataframes(result_dic: dict, consider_only_highway_edges: bool = True):
     """
     Analyse the results of the simulation and compare them to the base network data.
@@ -156,7 +136,6 @@ def analyze_geodataframes(result_dic: dict, consider_only_highway_edges: bool = 
         capacity_car_increase = ((total_capacity_car - base_capacity_car) / base_capacity_car) * 100
         print(f"Total change in 'vol_car': {vol_car_increase:.2f}%")
         print(f"Total change in capacity (car edges): {capacity_car_increase:.2f}%")
-        
         
 # Define a dictionary to map each mode to an integer
 mode_mapping = {
@@ -345,7 +324,6 @@ def read_output_links(folder):
             return None
     else:
         return None
-    
 
 def extract_numbers(path):
     name = path.split('/')[-1]
@@ -510,15 +488,6 @@ def process_close_count_to_tensor(close_count_list: list):
     
     close_homes_tensor_sparse = close_homes_tensor.to_sparse()
     return close_homes_tensor_sparse
-
-
-# def calculate_averaged_results(trips_df):
-#     """Calculate average travel time and routed distance grouped by mode."""
-#     return trips_df.groupby('mode').agg(
-#         total_travel_time=('travel_time', 'mean'),
-#         total_routed_distance=('routed_distance', 'mean')
-#     ).reset_index()
-    
     
 def calculate_avg_mode_stats(single_mode_stats_list:list):
     mode_stats_list = []
@@ -554,9 +523,7 @@ def encode_modes(gdf):
     }
     modes_encoded = pd.DataFrame(modes_conditions)
     tensor_list = [torch.tensor(modes_encoded[col].values, dtype=torch.float) for col in modes_encoded.columns]
-    print(len(tensor_list))
     return tensor_list
-    # return torch.tensor(modes_encoded.values, dtype=torch.float)
 
 
 def encode_modes_string(mode_string):
@@ -595,7 +562,6 @@ def get_dfs(base_dir:str):
                 layers = fiona.listlayers(file_path)
                 geodataframes = {layer: gpd.read_file(file_path, layer=layer, geometry = 'geometry', crs="EPSG:2154") for layer in layers}
                 for layer, gdf in geodataframes.items():
-                # print(f"Layer: {layer}")
                     gdf = gdf.to_crs(epsg=4326)
                     globals()[var_name] = gdf
                     print(f"Loaded GPKG file: {file} into variable: {var_name}")
@@ -714,19 +680,6 @@ def preprocess_links(links_gdf):
             row['district'].pop(random.randint(0, len(row['district']) - 1))
     return links_gdf
 
-# def read_output_links(folder):
-#     file_path = os.path.join(folder, 'output_links.csv.gz')
-#     if os.path.exists(file_path):
-#         try:
-#             # Read the CSV file with the correct delimiter
-#             df = pd.read_csv(file_path, delimiter=';')
-#             return df
-#         except Exception:
-#             print("empty data error" + file_path)
-#             return None
-#     else:
-#         return None
-
 def read_eqasim_trips(folder):
     file_path = os.path.join(folder, 'eqasim_trips.csv')
     if os.path.exists(file_path):
@@ -741,14 +694,12 @@ def read_eqasim_trips(folder):
 
 def aggregate_district_information(links_gdf, tensors_edge_information):
     
-    # Assuming tensors_edge_information is a list of tensors
-    # vol_base_case = tensors_edge_information[0]  # Adjust index if needed
-    capacities_base = tensors_edge_information[1]  
+    # Assuming tensors_edge_information is a list of tensors, adjust indices if needed
+    capacities_base = tensors_edge_information[1]
     capacities_new = tensors_edge_information[2] 
     capacity_reduction = tensors_edge_information[3]  
     freespeed_base = tensors_edge_information[4]
     freespeed = tensors_edge_information[5]
-    # highway = tensors_edge_information[6]
     length = tensors_edge_information[7]
     cars_allowed = tensors_edge_information[8]
     bus_allowed = tensors_edge_information[9]
@@ -758,12 +709,10 @@ def aggregate_district_information(links_gdf, tensors_edge_information):
     subway_allowed = tensors_edge_information[13]
     
     district_info = {}
-            
-    # modes_str = ""
+    
     for idx, row in links_gdf.iterrows():
         districts = row['district']
         modes = row['modes']
-        # modes_str += modes + ","
         for district in districts:
             if district not in district_info:
                 district_info[district] = {
@@ -788,7 +737,6 @@ def aggregate_district_information(links_gdf, tensors_edge_information):
                 }
             
             if "car" in modes:
-                # district_info[district]['vol_base_case'] += vol_base_case[idx].item()
                 district_info[district]['capacity_base'] += capacities_base[idx].item()
                 district_info[district]['capacity_new'] += capacities_new[idx].item()
                 district_info[district]['capacity_reduction'] += capacity_reduction[idx].item()
@@ -856,7 +804,6 @@ def aggregate_district_information(links_gdf, tensors_edge_information):
         'subway_allowed': subway_allowed_tensor,
         'edge_count': edge_count_tensor,
     }
-
     
 def compute_combined_tensor_edge_features(vol_base_case, capacity_base_case, length, freespeed_base_case, allowed_modes, capacities_new, capacity_reduction, highway, freespeed):
     edge_tensors = [

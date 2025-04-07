@@ -8,16 +8,17 @@ batches and plotted as a bar chart.
 
 import os
 import json
-import torch
+
 import numpy as np
 from tqdm import tqdm
 import matplotlib.pyplot as plt
 
+import torch
 from torch.utils.data import DataLoader
 from torch_geometric.explain import Explainer, GNNExplainer
 
-import gnn_io as gio
-import gnn_architecture as garch
+import gnn.gnn_io as gio
+import scripts.gnn.models.point_net_transf_gat as garch
 import training.help_functions as hf
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
@@ -32,7 +33,7 @@ test_set_normalized = torch.load(os.path.join(run_path, 'data_created_during_tra
 test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=gio.collate_fn, worker_init_fn=hf.seed_worker)
 
 # Load best model
-model = garch.MyGnn(in_channels=13,
+model = garch.PointNetTransfGAT(in_channels=13,
                     out_channels=1,
                     point_net_conv_layer_structure_local_mlp=[256],
                     point_net_conv_layer_structure_global_mlp=[512],

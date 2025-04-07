@@ -40,10 +40,10 @@ root_models = os.path.abspath(os.path.join(os.path.dirname(__file__), '../models
 if root_models not in sys.path:
     sys.path.append(root_models)
 
-from models.gnn_io import *
-from models.base_gnn import BaseGNN
-from models.point_net_transf_gat import PointNetTransfGAT
-from models.eign import Eign
+from gnn.gnn_io import *
+from scripts.gnn.models.base_gnn import BaseGNN
+from scripts.gnn.models.point_net_transf_gat import PointNetTransfGAT
+from scripts.gnn.models.eign import Eign
 
 PARAMETERS = [
     "project_name",
