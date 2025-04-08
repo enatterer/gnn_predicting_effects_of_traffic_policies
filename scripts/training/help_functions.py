@@ -18,8 +18,7 @@ if scripts_root not in sys.path:
     sys.path.append(scripts_root)
 
 from gnn.gnn_io import *
-from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
-from data_preprocessing.process_simulations_for_gnn import use_allowed_modes
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"

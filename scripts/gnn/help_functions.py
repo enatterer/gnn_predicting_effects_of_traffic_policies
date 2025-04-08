@@ -292,6 +292,12 @@ def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor
     r2 = 1 - ss_res / ss_tot
     return r2
 
+def compute_r2_torch_with_mean_targets(mean_targets, preds, targets):
+    ss_tot = torch.sum((targets - mean_targets) ** 2)
+    ss_res = torch.sum((targets - preds) ** 2)
+    r2 = 1 - (ss_res / ss_tot)
+    return r2
+
 def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device = None):
     """
     Perform Monte Carlo Dropout inference to estimate uncertainty.
