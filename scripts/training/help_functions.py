@@ -12,10 +12,10 @@ from sklearn.preprocessing import StandardScaler
 
 import torch
 
-# Add "scripts" to Python path
-scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if scripts_root not in sys.path:
-    sys.path.append(scripts_root)
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
 from gnn.gnn_io import *
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes

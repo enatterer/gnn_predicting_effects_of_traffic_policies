@@ -11,10 +11,10 @@ import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import Subset, DataLoader
 
-# Add "scripts" to Python path
-scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if scripts_root not in sys.path:
-    sys.path.append(scripts_root)
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 

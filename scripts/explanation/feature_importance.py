@@ -18,10 +18,10 @@ import torch
 from torch.utils.data import DataLoader
 from torch_geometric.explain import Explainer, GNNExplainer
 
-# Add "scripts" to Python path
-scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if scripts_root not in sys.path:
-    sys.path.append(scripts_root)
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
 import gnn.gnn_io as gio
 import gnn.models.point_net_transf_gat as garch

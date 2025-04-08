@@ -10,7 +10,7 @@ from torch_geometric.data import Data
 from torch_geometric.transforms import LineGraph
 
 # Add the 'scripts' directory to Python Path
-scripts_path = os.path.abspath('../')
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 

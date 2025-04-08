@@ -14,10 +14,10 @@ import argparse
 
 import torch
 
-# Add "scripts" to Python path
-scripts_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../'))
-if scripts_root not in sys.path:
-    sys.path.append(scripts_root)
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
 from .help_functions import *
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
