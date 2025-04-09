@@ -1,6 +1,6 @@
 """
 Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various district combinations),
-convert them to dual line graphs, and compute specified edge features. Save as PyTorch tensor batches for efficient loading and training.
+convert them to dual line graphs, and compute specified edge features. Save as PyTorch Geometric data batches for efficient loading and training.
 
 Here we specify all features, then run_models can be called with a reduced set. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
 """
@@ -18,7 +18,7 @@ import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
 
-from .help_functions import *
+from help_functions import *
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
