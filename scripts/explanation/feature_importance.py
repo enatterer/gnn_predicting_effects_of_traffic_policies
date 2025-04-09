@@ -28,14 +28,17 @@ import gnn.models.point_net_transf_gat as garch
 import training.help_functions as hf
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
-# Load test data
-run_path = '../../data/runs_21_10_2024/pnc_local_[256]_pnc_global_[512]_gat_conv_[128_256_512_256]_use_dropout_False_dropout_0.3_predict_mode_stats_False'
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
-with open(os.path.join(run_path, 'data_created_during_training/test_loader_params.json')) as f:
+# Load test data
+run_path = os.path.join(project_root, 'data', 'runs_21_10_2024', 'wannabe_best_6')
+
+with open(os.path.join(run_path, 'data_created_during_training', 'test_loader_params.json')) as f:
     test_loader_params = json.load(f)
 
 batch_size = test_loader_params['batch_size']
-test_set_normalized = torch.load(os.path.join(run_path, 'data_created_during_training/test_dl.pt'))
+test_set_normalized = torch.load(os.path.join(run_path, 'data_created_during_training', 'test_dl.pt'))
 test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=gio.collate_fn, worker_init_fn=hf.seed_worker)
 
 # Load best model
@@ -49,7 +52,7 @@ model = garch.PointNetTransfGAT(in_channels=13,
                     predict_mode_stats=False,
                     dtype=torch.float32)
 
-model_path = os.path.join(run_path, 'trained_model/model.pth')
+model_path = os.path.join(run_path, 'trained_model', 'model.pth')
 model.load_state_dict(torch.load(model_path))
 
 # Create a model wrapper for the explainer, makes the forward function compatible

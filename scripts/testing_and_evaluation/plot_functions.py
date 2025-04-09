@@ -1,4 +1,6 @@
 
+import os
+
 import numpy as np
 import pandas as pd
 import geopandas as gpd
@@ -8,7 +10,10 @@ from matplotlib.lines import Line2D
 from shapely.geometry import box, Polygon
 from shapely.ops import unary_union
 
-districts = gpd.read_file("../../data/visualisation/districts_paris.geojson")
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
+districts = gpd.read_file(os.path.join(project_root, "data", "visualisation", "districts_paris.geojson"))
 
 def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font: str = 'Times New Roman', 
                          save_it: bool = False, number_to_plot: int = 0,

@@ -24,7 +24,7 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
 from gnn.models.eign import Eign
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
 dataset_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')

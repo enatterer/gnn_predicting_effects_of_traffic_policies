@@ -20,18 +20,21 @@ from torch_geometric.data import Data
 
 from .help_functions import *
 
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+
 # Paths to raw simulation data
-sim_input_paths = ["../../data/raw_data/cap_reduction_in_single_roads/"]
+sim_input_paths = os.path.join(project_root, 'data', 'raw_data', 'cap_reduction_in_single_roads')
 
 # Path to save the processed simulation data
-result_path = '../../data/test_data/cap_reduction_in_single_roads'
+result_path = os.path.join(project_root, 'data', 'test_data', 'cap_reduction_in_single_roads')
 
 # Path to the basecase links and stats
-basecase_links_path = '../../data/links_and_stats/pop_1pct_basecase_average_output_links.geojson'
-basecase_stats_path = '../../data/links_and_stats/pop_1pct_basecase_average_mode_stats.csv'
+basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_output_links.geojson')
+basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_mode_stats.csv')
 
 # Path to the districts gdf
-discricts_gdf_path = "../../data/visualisation/districts_paris.geojson"
+discricts_gdf_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
 
 # Flag to use allowed modes or not
 use_allowed_modes = False

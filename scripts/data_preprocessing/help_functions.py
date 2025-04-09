@@ -18,7 +18,7 @@ import shapely.wkt as wkt
 import torch
 
 # Get the absolute path to the project root
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../'))
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 districts_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
 districts = gpd.read_file(districts_path)
 
