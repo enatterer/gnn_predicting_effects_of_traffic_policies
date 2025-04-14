@@ -210,13 +210,13 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
     num_nodes = data_list[0].x.shape[0]
     
     # First pass: Fit the scaler
-    for i in tqdm.tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
         batch = data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         scaler.partial_fit(batch_x)
     
     # Second pass: Transform the data
-    for i in tqdm.tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
         batch = data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = scaler.transform(batch_x)
@@ -241,13 +241,13 @@ def normalize_pos_features_batched(data_list, batch_size=1000):
     num_nodes = data_list[0].x.shape[0]
 
     # First pass: Fit the scaler
-    for i in tqdm.tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
         batch = data_list[i:i+batch_size]
         batch_pos = np.vstack([data.pos.numpy().reshape(-1, 6) for data in batch])
         scaler.partial_fit(batch_pos)
     
     # Second pass: Transform the data
-    for i in tqdm.tqdm(range(0, len(data_list), batch_size), desc="Normalizing pos features"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing pos features"):
         batch = data_list[i:i+batch_size]
         for data in batch:
             pos_reshaped = data.pos.numpy().reshape(-1, 6)
@@ -295,7 +295,7 @@ def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_s
     num_nodes = data_list[0].x.shape[0]
     
     # Second pass: Transform the data
-    for i in tqdm.tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
         batch = data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = x_scaler.transform(batch_x)

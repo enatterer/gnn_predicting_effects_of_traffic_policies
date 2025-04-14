@@ -28,7 +28,7 @@ sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_
                    os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k')]
 
 # Path to save the processed simulation data
-result_path = os.path.join(project_root, 'data', 'test_data', 'dist_not_connected_10k_1pct')
+result_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
 
 # Path to the basecase links and stats
 basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_output_links.geojson')

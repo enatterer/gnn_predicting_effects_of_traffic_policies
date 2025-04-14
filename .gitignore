@@ -1,5 +1,6 @@
 data/
 logs/
+wandb/
 scripts/training/wandb/
 scripts/testing_and_evaluation/wandb/
 scripts/visualization/results/

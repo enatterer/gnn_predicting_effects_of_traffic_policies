@@ -4,7 +4,7 @@ import glob
 import random
 from collections import defaultdict
 
-import tqdm
+from tqdm import tqdm
 import numpy as np
 import pandas as pd
 import geopandas as gpd

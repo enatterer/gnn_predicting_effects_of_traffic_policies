@@ -2,7 +2,7 @@ import os
 import sys
 from abc import ABC, abstractmethod
 
-import tqdm
+from tqdm import tqdm
 import wandb
 import numpy as np
 
