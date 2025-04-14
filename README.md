@@ -20,25 +20,30 @@ We use Python 3.10.13 along with CUDA 12.7 and CuDNN 8.7 for this project.
 
 The project is structured as follows:
 - `gnn_predicting_effects_of_traffic_policies`:
+
     - `data`: Contains data used for training and testing the model, including raw MATSim simulations. Also used to save results from the experiments. (not included in the repo)
+
     - `docs`: Documentation for the project, including how to run the experiments and use the code.
+    
     - `scripts`: 
         - `data_preprocessing`: Data prepration scripts, read more [here](docs/data_preprocessing.md).
         - `gnn`: Define GNN models, and associated helper functions. Read more [here](docs/gnn.md).
         - `training`: Run training experiments, read more [here](docs/training.md).
-        - `testing_and_evaluation`: Benchmark trained models, read more [here](docs/testing_and_evaluation.md).
-        - `explaination`: XAI for GNNs, read more [here](docs/explaination.md).
-    - `run_models.sbatch`: Example batch job script for LRZ AI cluster.
-    - `traffic-gnn.yml`: Conda environment file.
+        - `testing_and_evaluation`: Benchmark trained models.
+        - `explaination`: XAI for GNNs. (Experimental)
+
+    - [`run_models.sbatch`](run_models.sbatch): Example batch job script for LRZ AI cluster.
+
+    - [`traffic-gnn.yml`](traffic-gnn.yml): Conda environment file.
 
 </br>The general workflow would look something like:
 
 1. Run MATSim simulations to generate raw data.
-2. Preprocess the data for GNNs using `scripts/data_preprocessing/process_simulations_for_gnn.py`.
-3. Review GNN models available in `scripts/gnn`, or define your own.
-4. Train the GNN model using `scripts/training/run_models.py`.
-5. Check model performance with `scripts/testing_and_evaluation/test_model.ipynb`.
-6. (Optional) Use `scripts/explaination/feature_importance.py` to interpret the model's predictions and understand features that influence them.
+2. Preprocess the data for GNNs using [`process_simulations_for_gnn.py`](scripts/data_preprocessing/process_simulations_for_gnn.py).
+3. Review GNN models available in [`scripts/gnn/models`](scripts/gnn/models/), or define your own.
+4. Train the GNN model using [`run_models.py`](scripts/training/run_models.py).
+5. Check model performance with [`test_model.ipynb`](scripts/testing_and_evaluation/test_model.ipynb).
+6. (Optional) Use [`feature_importance.py`](scripts/explanation/feature_importance.py) to interpret the model's predictions and understand features that influence them.
 
 ## License
 This project is licensed under the MIT License, see the [LICENSE](LICENSE) for details. Kindly note that the code is provided for research purposes only and may not be suitable for commercial use. Please contact us for more information :-)
