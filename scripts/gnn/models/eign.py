@@ -8,7 +8,7 @@ The parameters UseMonteCarloDropout and PredictModeStats may be implemented in t
 '''
 
 import torch
-from .base_gnn import BaseGNN
+from base_gnn import BaseGNN
 
 class Eign(BaseGNN):
     def __init__(self, 
@@ -16,6 +16,7 @@ class Eign(BaseGNN):
                 out_channels: int = 0, 
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
+                predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
                 ):
         """
@@ -33,8 +34,7 @@ class Eign(BaseGNN):
             out_channels=out_channels,
             dropout=dropout,
             use_dropout=use_dropout,
-            use_monte_carlo_dropout=False,
-            predict_mode_stats=False,
+            predict_mode_stats=predict_mode_stats,
             dtype=dtype
         )
         

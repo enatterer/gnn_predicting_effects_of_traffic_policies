@@ -17,7 +17,7 @@ scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
-from gnn.help_functions import validate_model_during_training, mc_dropout_predict, LinearWarmupCosineDecayScheduler
+from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler
 
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 
@@ -25,7 +25,6 @@ class BaseGNN(nn.Module, ABC):
                  out_channels: int,
                  dropout: float = 0.3,
                  use_dropout: bool = False,
-                 use_monte_carlo_dropout: bool = False,
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  verbose: bool = False):
@@ -41,14 +40,9 @@ class BaseGNN(nn.Module, ABC):
         self.out_channels = out_channels
         self.dropout = dropout
         self.use_dropout = use_dropout
-        self.use_monte_carlo_dropout = use_monte_carlo_dropout
         self.predict_mode_stats = predict_mode_stats
         self.dtype = dtype
         self.verbose = verbose
-
-        # Validate monte carlo dropout usage
-        if self.use_monte_carlo_dropout and not self.use_dropout:
-            raise ValueError("use_monte_carlo_dropout requires use_dropout to be True")
         
     @abstractmethod
     def define_layers(self):
@@ -203,15 +197,6 @@ class BaseGNN(nn.Module, ABC):
                     "spearman": spearman_corr,
                     "pearson": pearson_corr
                 })
-
-            # Monte Carlo Dropout Logging
-            if config.use_monte_carlo_dropout:
-                data_example = next(iter(valid_dl))  # Use one batch from the validation loader
-                mean_prediction, uncertainty = mc_dropout_predict(self, data_example, num_samples=50, device=device)
-                if epoch % 10 == 0:
-                    wandb.log({
-                        "mc_dropout_uncertainty_std": np.std(uncertainty)
-                    })
 
             print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
             

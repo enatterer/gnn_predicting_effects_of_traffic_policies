@@ -13,7 +13,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader, Subset
 from torch_geometric.data import Batch
 
-from .help_functions import replace_invalid_values, copy_subset
+from help_functions import replace_invalid_values, copy_subset
 
 def create_dataloader(is_train, batch_size, dataset, train_ratio, is_test=False):
     dataset_length = len(dataset)

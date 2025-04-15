@@ -3,4 +3,4 @@ logs/
 **/wandb/
 **/.ipynb_checkpoints/
 **/__pycache__/
-scripts/testing_and_evaluation/results/
+scripts/evaluation/results/

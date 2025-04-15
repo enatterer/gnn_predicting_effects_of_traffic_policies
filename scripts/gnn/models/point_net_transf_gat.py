@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch_geometric.nn import Sequential as GeoSequential, TransformerConv, GATConv, PointNetConv, global_mean_pool
 
-from .base_gnn import BaseGNN
+from base_gnn import BaseGNN
 
 """
 This architecture is a Graph Neural Network (GNN) model that combines PointNet Convolutions, Graph Attention Networks, and Transformer layers.
@@ -22,7 +22,6 @@ class PointNetTransfGAT(BaseGNN):
                 gat_conv_layer_structure: list = [], 
                 dropout: float = 0.0, 
                 use_dropout: bool = False,
-                use_monte_carlo_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
                 verbose: bool = True
@@ -39,7 +38,6 @@ class PointNetTransfGAT(BaseGNN):
         - gat_conv_layer_structure (list): Layer structure for GATConv layers.
         - dropout (float, optional): Dropout rate. Default is 0.0.
         - use_dropout (bool, optional): Whether to use dropout. Default is False.
-        - use_monte_carlo_dropout (bool, optional): Whether or not to use Monte Carlo Dropout. It does make the inference slower. Note that it only makes sense to have use_monte_carlo_dropout = True if use_dropout = True.
         - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
         """
         # Call parent class constructor
@@ -48,7 +46,6 @@ class PointNetTransfGAT(BaseGNN):
             out_channels=out_channels,
             dropout=dropout,
             use_dropout=use_dropout,
-            use_monte_carlo_dropout=use_monte_carlo_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
             verbose=verbose)
