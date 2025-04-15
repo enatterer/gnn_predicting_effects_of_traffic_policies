@@ -1,10 +1,6 @@
 data/
 logs/
-wandb/
-scripts/training/wandb/
-scripts/testing_and_evaluation/wandb/
-scripts/visualization/results/
-scripts/testing_and_evaluation/results/
-scripts/data_preprocessing/links_and_stats/
+**/wandb/
 **/.ipynb_checkpoints/
 **/__pycache__/
+scripts/testing_and_evaluation/results/

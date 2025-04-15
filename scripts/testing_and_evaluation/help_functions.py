@@ -14,8 +14,8 @@ scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
-from data_preprocessing.help_functions import encode_modes
-from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, highway_mapping
+from data_preprocessing.help_functions import encode_modes, highway_mapping
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 from gnn.help_functions import compute_r2_torch, compute_r2_torch_with_mean_targets, compute_spearman_pearson
 
 # Get the absolute path to the project root
