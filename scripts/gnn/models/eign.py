@@ -8,7 +8,7 @@ The parameters UseMonteCarloDropout and PredictModeStats may be implemented in t
 '''
 
 import torch
-from base_gnn import BaseGNN
+from .base_gnn import BaseGNN
 
 class Eign(BaseGNN):
     def __init__(self, 
