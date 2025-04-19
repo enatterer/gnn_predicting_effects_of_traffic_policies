@@ -258,7 +258,7 @@ def validate_model_during_training(config: object,
     else:
         return total_validation_loss, r_squared, spearman_corr, pearson_corr
     
-def compute_spearman_pearson(preds: torch.Tensor, targets: torch.Tensor) -> tuple:
+def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     """
     Compute Spearman and Pearson correlation coefficients.
 
@@ -269,8 +269,12 @@ def compute_spearman_pearson(preds: torch.Tensor, targets: torch.Tensor) -> tupl
     Returns:
     - tuple: Spearman and Pearson correlation coefficients.
     """
-    preds = preds.cpu().detach().numpy().flatten()  
-    targets = targets.cpu().detach().numpy().flatten()
+    if not is_np:
+        preds = preds.cpu().detach().numpy()
+        targets = targets.cpu().detach().numpy()
+
+    preds = preds.flatten()
+    targets = targets.flatten()
     spearman_corr, _ = spearmanr(preds, targets)
     pearson_corr, _ = pearsonr(preds, targets)
     return spearman_corr, pearson_corr

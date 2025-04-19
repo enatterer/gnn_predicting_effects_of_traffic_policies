@@ -23,18 +23,6 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 
 districts = gpd.read_file(os.path.join(project_root, "data", "visualisation", "districts_paris.geojson"))
 
-# Professional color palette with good contrast and accessibility
-colors = {
-    'Trunk Roads': '#1f77b4',         # Muted blue
-    'Primary Roads': '#2ca02c',       # Muted green
-    'Secondary Roads': '#ff7f0e',     # Muted orange
-    'Tertiary Roads': '#9467bd',      # Muted purple
-    'Residential Streets': '#8c564b',  # Brown
-    'Living Streets': '#e377c2',      # Pink
-    'P/S/T Roads with Capacity Reduction': '#7f7f7f',    # Gray
-    'P/S/T Roads with No Capacity Reduction': '#bcbd22', # Olive
-}
-
 # DATAFRAME FUNCTIONS
 
 def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x, use_all_features=False):
@@ -258,70 +246,3 @@ def calculate_error_distribution_metric(actual_changes, predicted_changes):
     errors = np.abs(predicted_changes - actual_changes)
     within_sigma = np.sum(errors <= sigma)
     return (within_sigma / len(errors)) * 100
-
-def validate_model_with_interpretable_error(indices, gdf, loss_fct, tolerance):
-    loss_fct_l1 = torch.nn.L1Loss()
-    base_car_vol = gdf.loc[indices, 'vol_base_case']
-    actual_vals = gdf.loc[indices, 'vol_car_change_actual']
-    predicted_vals = gdf.loc[indices, 'vol_car_change_predicted']
-    
-    actual_vals = actual_vals.to_numpy()
-    predicted_vals = predicted_vals.to_numpy()
-    actual_mean = torch.mean(torch.tensor(actual_vals))
-    
-    baseline_vals = torch.full_like(torch.tensor(actual_vals), actual_mean)
-    r_squared = compute_r2_torch(preds=torch.tensor(predicted_vals), targets=torch.tensor(actual_vals))
-    r_squared = round(r_squared.item(), 2)
-    
-    baseline_vals_np = baseline_vals.numpy()
-    base_car_vol_np = base_car_vol.to_numpy()
-    
-    baseline_car_vol = base_car_vol_np + baseline_vals_np
-    actual_car_vol = base_car_vol + actual_vals
-    predicted_car_vol = base_car_vol + predicted_vals
-    
-    mse_loss = loss_fct(torch.tensor(actual_vals), torch.tensor(predicted_vals))
-    l1_loss = loss_fct_l1(torch.tensor(actual_vals), torch.tensor(predicted_vals))
-
-    baseline_mse = loss_fct(torch.tensor(actual_vals), torch.full_like(torch.tensor(actual_vals), actual_mean))
-    baseline_l1 = loss_fct_l1(torch.tensor(actual_vals), torch.full_like(torch.tensor(actual_vals), actual_mean))
-    
-    error_normalized_by_mean_squared = mse_loss /   torch.mean(torch.tensor(actual_vals)).pow(2)
-    baseline_normalized_by_mean_squared = baseline_mse / torch.mean(torch.tensor(actual_vals)).pow(2)
-    
-    variance_actual_car_vol = torch.var(torch.tensor(actual_vals))
-    error_normalized_by_variance = mse_loss / variance_actual_car_vol
-    baseline_normalized_by_variance = baseline_mse / variance_actual_car_vol
-    
-    spearman_corr, pearson_corr = compute_spearman_pearson(torch.tensor(actual_vals), torch.tensor(predicted_vals))
-    
-    print(f"Spearman Correlation: {spearman_corr:.4f}")
-    print(f"Pearson Correlation: {pearson_corr:.4f}")
-    mean_relative_errors, mean_filtered_relative_errors = compute_relative_error_and_relative_filtered_error(actual_car_vol, predicted_car_vol, tolerance)
-    mean_relative_errors_baseline, mean_filtered_relative_errors_baseline = compute_relative_error_and_relative_filtered_error(actual_car_vol, baseline_car_vol, tolerance)
-    
-    print(f"R-squared: {r_squared}")
-    print(f"MSE Loss: {mse_loss}")
-    print(f"Baseline Loss: {baseline_mse}")
-    print(f"L1 Loss: {l1_loss}")
-    print(f"Baseline L1 loss: {baseline_l1}")
-    print(f"Error normalized by mean squared: {error_normalized_by_mean_squared:.4f}")
-    print(f"Baseline normalized by mean squared: {baseline_normalized_by_mean_squared:.4f}")
-    print(f"Error normalized by variance: {error_normalized_by_variance:.4f}")
-    print(f"Baseline normalized by variance: {baseline_normalized_by_variance:.4f}")
-    print(f"Mean Relative Error: {mean_relative_errors:.4f}")
-    print(f"Mean Filtered Relative Error: {mean_filtered_relative_errors:.4f}")
-    print(f"Baseline Mean Relative Error: {mean_relative_errors_baseline:.4f}")
-    print(f"Baseline Mean Filtered Relative Error: {mean_filtered_relative_errors_baseline:.4f}")
-    print(" ")
-    
-    return
-
-def compute_relative_error_and_relative_filtered_error(actual_car_vol, car_vol_to_compare, tolerance):
-    actual_car_vol[actual_car_vol == 0] = 1e-10
-    absolute_errors = torch.abs(torch.tensor(car_vol_to_compare) - torch.tensor(actual_car_vol))
-    relative_errors = absolute_errors / torch.tensor(actual_car_vol)
-    filtered_relative_errors = relative_errors[(relative_errors <= tolerance) & (relative_errors >= -tolerance)]
-    mean_relative_errors = torch.mean(relative_errors)
-    mean_filtered_relative_errors = torch.mean(filtered_relative_errors)
-    return mean_relative_errors,mean_filtered_relative_errors

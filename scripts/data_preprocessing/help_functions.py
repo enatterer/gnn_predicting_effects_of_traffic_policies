@@ -901,7 +901,7 @@ def prepare_gdf(df, gdf_input):
     gdf.crs = gdf_input.crs
     return gdf
 
-def get_link_geometries(links_gdf_input, districts_input):
+def get_link_geometries(links_gdf_input):
     edge_midpoints = np.array([((geom.coords[0][0] + geom.coords[-1][0]) / 2, 
                                     (geom.coords[0][1] + geom.coords[-1][1]) / 2) 
                                 for geom in links_gdf_input.geometry])
@@ -921,9 +921,4 @@ def get_link_geometries(links_gdf_input, districts_input):
 
     stacked_edge_geometries_tensor = torch.stack([edge_start_point_tensor, edge_end_point_tensor, edge_midpoint_tensor], dim=1)
 
-    district_centroids = districts_input['district_centroid'].apply(lambda point: [point.x, point.y])
-    district_centroids_tensor = torch.tensor(district_centroids.tolist(), dtype=torch.float32)
-    if district_centroids_tensor.size(0) != 20 or district_centroids_tensor.size(1) != 2:
-        raise ValueError("The resulting tensor does not have the expected size of (20, 2)")
-    district_centroids_tensor_padded = district_centroids_tensor.unsqueeze(1).expand(-1, 3, -1)
-    return edge_start_point_tensor,stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes
+    return edge_start_point_tensor,stacked_edge_geometries_tensor, edges_base, nodes

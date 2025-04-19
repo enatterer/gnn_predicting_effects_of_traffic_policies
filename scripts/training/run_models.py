@@ -19,7 +19,8 @@ scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
-from help_functions import *
+from training.help_functions import *
+
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
 from gnn.models.eign import Eign

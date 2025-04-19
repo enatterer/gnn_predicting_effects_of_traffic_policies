@@ -6,6 +6,7 @@ Here we specify all features, then run_models can be called with a reduced set. 
 """
 
 import os
+import sys
 import glob
 from enum import IntEnum
 
@@ -18,7 +19,12 @@ import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
 
-from help_functions import *
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+from data_preprocessing.help_functions import *
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))

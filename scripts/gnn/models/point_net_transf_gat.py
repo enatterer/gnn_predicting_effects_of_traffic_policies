@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.init as init
 from torch_geometric.nn import Sequential as GeoSequential, TransformerConv, GATConv, PointNetConv, global_mean_pool
 
-from .base_gnn import BaseGNN
+from gnn.models.base_gnn import BaseGNN
 
 """
 This architecture is a Graph Neural Network (GNN) model that combines PointNet Convolutions, Graph Attention Networks, and Transformer layers.
