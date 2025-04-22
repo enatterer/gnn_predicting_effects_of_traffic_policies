@@ -16,7 +16,7 @@ if scripts_path not in sys.path:
 
 from data_preprocessing.help_functions import encode_modes, highway_mapping
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
-from gnn.help_functions import compute_r2_torch, compute_r2_torch_with_mean_targets, compute_spearman_pearson
+from gnn.help_functions import compute_r2_torch_with_mean_targets
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -240,9 +240,3 @@ def validate_model_on_test_set(model, dataset, loss_func, device):
     baseline_loss = loss_func(all_targets, torch.full_like(all_preds, mean_targets))
     avg_loss = total_loss / len(dataset)
     return avg_loss, r_squared, all_targets, all_preds, baseline_loss
-
-def calculate_error_distribution_metric(actual_changes, predicted_changes):
-    sigma = np.std(actual_changes)
-    errors = np.abs(predicted_changes - actual_changes)
-    within_sigma = np.sum(errors <= sigma)
-    return (within_sigma / len(errors)) * 100

@@ -30,7 +30,7 @@ The project is structured as follows:
         - `gnn`: Define GNN models, and associated helper functions. Read more [here](docs/gnn.md).
         - `training`: Run training experiments, read more [here](docs/training.md).
         - `evaluation`: Benchmark trained models.
-        - `misc`: Miscellaneous analysis scripts. (Under Development) 
+        - `misc`: Miscellaneous scripts. (Under Development) 
 
     - [`run_models.sbatch`](run_models.sbatch): Example batch job script for LRZ AI cluster.
 
@@ -42,7 +42,7 @@ The project is structured as follows:
 2. Preprocess the data for GNNs using [`process_simulations_for_gnn.py`](scripts/data_preprocessing/process_simulations_for_gnn.py).
 3. Review GNN models available in [`scripts/gnn/models`](scripts/gnn/models/), or define your own.
 4. Train the GNN model using [`run_models.py`](scripts/training/run_models.py).
-5. Check model performance with [`test_model.ipynb`](scripts/evaluation/test_model.ipynb).
+5. Check model performance with [`test_model.ipynb`](scripts/evaluation/test_model.ipynb). Use [`in_depth_analysis.ipynb`](scripts/evaluation/in_depth_analysis.ipynb) for a more detailed evaluation.
 6. (Optional) Use [`feature_importance.py`](scripts/misc/feature_importance.py) to interpret the model's predictions and understand features that influence them.
 
 ## License
