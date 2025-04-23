@@ -1,7 +1,6 @@
 import os
 import sys
 import math
-import copy
 
 import numpy as np
 from scipy.stats import spearmanr, pearsonr
@@ -9,7 +8,7 @@ from scipy.stats import spearmanr, pearsonr
 import torch
 import torch.nn as nn
 from torch import Tensor
-from torch.utils.data import Subset, DataLoader
+from torch.utils.data import DataLoader
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -17,30 +16,6 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
-
-def int_list_to_string(lst: list, delimiter: str = ', ') -> str:
-    """
-    Converts a list of integers to a string representation with the specified delimiter.
-
-    Parameters:
-    lst (list[int]): The list of integers.
-    delimiter (str): The delimiter used to separate the integers in the string. Default is ', '.
-
-    Returns:
-    str: The string representation of the list.
-    """
-    # Join the list elements into a string with the specified delimiter
-    return f"[{delimiter.join(map(str, lst))}]"
-
-def replace_invalid_values(tensor):
-    tensor[tensor != tensor] = 0  # replace NaNs with 0
-    tensor[tensor == float('inf')] = 0  # replace inf with 0
-    tensor[tensor == float('-inf')] = 0  # replace -inf with 0
-    return tensor
-
-# Function to copy a Subset
-def copy_subset(subset):
-    return Subset(copy.deepcopy(subset.dataset), copy.deepcopy(subset.indices))
 
 class GNN_Loss:
     """

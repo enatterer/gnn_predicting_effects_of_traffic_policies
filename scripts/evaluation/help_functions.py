@@ -20,10 +20,7 @@ from gnn.help_functions import compute_r2_torch_with_mean_targets
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
 districts = gpd.read_file(os.path.join(project_root, "data", "visualisation", "districts_paris.geojson"))
-
-# DATAFRAME FUNCTIONS
 
 def data_to_geodataframe_with_og_values(data, original_gdf, predicted_values, inversed_x, use_all_features=False):
     ' use_all_features is a flag for whether to use all features or not, as shown in the ablation tests'
@@ -171,43 +168,6 @@ def get_road_type_indices(gdf, tolerance=1e-3):
         ].index
     }
     return indices
-
-### NORMALIZATION FUNCTIONS ###
-
-def normalize_tensor(tensor, scaler):
-    """
-    Normalizes a given tensor using the provided scaler.
-
-    Parameters:
-    tensor (torch.Tensor): The tensor to normalize.
-    scaler (sklearn.preprocessing.StandardScaler or similar): The scaler to use for normalization.
-
-    Returns:
-    torch.Tensor: The normalized tensor.
-    """
-    # Convert the tensor to a numpy array, apply the scaler, and convert back to a tensor
-    tensor_np = tensor.numpy()
-    normalized_np = scaler.transform(tensor_np)
-    normalized_tensor = torch.tensor(normalized_np, dtype=tensor.dtype)
-    return normalized_tensor
-
-def normalize_pos_features(tensor, scaler):
-    """
-    Normalizes the position features of a given tensor using the provided scaler.
-
-    Parameters:
-    tensor (torch.Tensor): The tensor to normalize, expected shape (31140, 3, 2).
-    scaler (sklearn.preprocessing.StandardScaler or similar): The scaler to use for normalization.
-
-    Returns:
-    torch.Tensor: The normalized tensor.
-    """
-    # Reshape the tensor to (31140, 6) for normalization
-    tensor_reshaped = tensor.view(-1, 6).numpy()
-    normalized_np = scaler.transform(tensor_reshaped)
-    # Reshape back to (31140, 3, 2) after normalization
-    normalized_tensor = torch.tensor(normalized_np, dtype=tensor.dtype).view(31140, 3, 2)
-    return normalized_tensor
 
 def validate_model_on_test_set(model, dataset, loss_func, device):
     model.eval()
