@@ -9,15 +9,15 @@
     - avg_trav_time_seconds
     - avg_traveled_distance
     - average_trip_count
-- `discricts_gdf_path`: Path to the districts shapefile, in geojson format.
 
-Additionaly, the flag `use_allowed_modes` can be set to `True` if needed. This then adds the allowed transport modes (per road segment, bool values) to the features of the output graphs.
+Additionaly, the following flags can be set:
+
+- `use_allowed_modes`: If `True`, adds the allowed transport modes (per road segment, bool values) to the features of the output graphs.
+- `use_linegraph`: Defaults to `True`, where dual graph is created: Roads segments are the nodes, and the edges are the connections between them.
 
 ## Input Format
 
-The script expects folders named `output_networks_*` in each directory specified in `sim_input_path`. For example, we kept 1000 simulations per folder, naming them `output_networks_1000`, `output_networks_2000`, etc.
-
-Each such folder then contains subdirectories named `network_d_*`, where `*` are the districts where the policy was applied, separated by uderscores. For example, `network_d_1_2_3_4_16_17`. Each one of these scenarios (with policy being applied to different combinations of districts) have the following files:
+Each directory specified in `sim_input_path` should contain subdirectories named `network_d_*`, where `*` are the districts where the policy was applied, separated by uderscores. For example, `network_d_1_2_3_4_16_17`. Each one of these scenarios (with policy being applied to different combinations of districts) have the following files:
 - `eqasim_pt.csv`
 - `eqasim_trips.csv`
 - `output_links.csv.gz`
@@ -26,8 +26,8 @@ These scenarios act as individual samples for the GNN, i.e. runs simulating the 
 
 ## Output Format
 
-PyTorch Geometric (PyG) data batches are saved in the `result_path` as `.pt` tensor files. Each sample is a homogenous graph (representing a scenario as decribed above) with the following attributes per node (road segment):
-- `x`: Node features:
+PyTorch Geometric (PyG) data batches are saved in the `result_path` as `.pt` tensor files. Each sample is a homogenous graph (representing a scenario as decribed above) with the following attributes per road segment:
+- `x`: Node/Edge features (depending on `use_linegraph`) including:
     - Volume Base Case
     - Capacity Base Case
     - Capacity Reduction

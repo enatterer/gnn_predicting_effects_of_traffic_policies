@@ -23,11 +23,11 @@ highway_mapping = {
     'pt': -1, 
 }
     
-def create_policy_key_1pm(folder_name):
+def create_policy_key(folder_name):
     # Extract the relevant part of the folder name
     base_name = os.path.basename(folder_name)  # Get the base name of the file or folder
     parts = base_name.split('_')[1:]  # Ignore the first part ('network')
-    district_info = '_'.join(parts) #.replace('d_', '')
+    district_info = '_'.join(parts)
     districts = district_info.split('_')
     return f"Policy introduced in Arrondissement(s) {', '.join(districts)}"
     
@@ -155,4 +155,4 @@ def get_link_geometries(links_gdf_input):
 
     stacked_edge_geometries_tensor = torch.stack([edge_start_point_tensor, edge_end_point_tensor, edge_midpoint_tensor], dim=1)
 
-    return edge_start_point_tensor,stacked_edge_geometries_tensor, edges_base, nodes
+    return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes
