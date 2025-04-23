@@ -100,12 +100,6 @@ class PointNetTransfGAT(BaseGNN):
                 nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
                 nn.Linear(64, 2)
             )
-            self.additional_predictor = nn.Sequential(
-                nn.Linear(64, 64),
-                nn.ReLU(),
-                nn.TransformerEncoder(nn.TransformerEncoderLayer(d_model=64, nhead=4), num_layers=2),
-                nn.Linear(64, 1)
-            )  
 
     def forward(self, data):
         """
@@ -127,13 +121,10 @@ class PointNetTransfGAT(BaseGNN):
         x = self.point_net_conv_2(x, pos2, edge_index)
         
         x = self.gat_graph_layers(x, edge_index)
-        
-        if self.predict_mode_stats:
-            node_predictions= self.additional_predictor(x)
-        
         node_predictions = self.read_out_node_predictions(x)
         
         if self.predict_mode_stats:
+            
             mode_stats = data.mode_stats
             batch = data.batch
             pooled_node_predictions = global_mean_pool(x, batch)
@@ -145,6 +136,7 @@ class PointNetTransfGAT(BaseGNN):
             
             mode_stats_pred = self.mode_stat_predictor(mode_stats_pooled)
             mode_stats_pred = mode_stats_pred.repeat_interleave(shape_mode_stats, dim=0)
+            
             return node_predictions, mode_stats_pred
         
         return node_predictions

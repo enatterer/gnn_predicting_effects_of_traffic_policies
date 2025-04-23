@@ -13,7 +13,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 # Add the 'scripts' directory to Python Path
-scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
@@ -108,6 +108,10 @@ class BaseGNN(nn.Module, ABC):
         best_val_loss = float('inf')
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
+
+        # TODO: Maybe add as a parameter later?
+        # Separate loss for mode stats
+        mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
         
         for epoch in range(config.num_epochs):
             super().train()
@@ -136,7 +140,7 @@ class BaseGNN(nn.Module, ABC):
                     if config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
                         train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
-                        train_loss_mode_stats = loss_fct(mode_stats_pred, targets_mode_stats) # add weight here also later!
+                        train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         predicted = self(data)

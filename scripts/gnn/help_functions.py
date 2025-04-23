@@ -45,7 +45,7 @@ def copy_subset(subset):
 class GNN_Loss:
     """
     Custom loss function for GNN that supports weighted loss computation.
-    The road with highesst vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
+    The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
     """
     
     def __init__(self, loss_fct, num_nodes, device, weighted=False):
@@ -178,7 +178,7 @@ def validate_model_during_training(config: object,
                                    device: torch.device,
                                    scalers_validation: dict) -> tuple:
     """
-    Validate the model during training, with support for Monte Carlo Dropout and mode stats predictions.
+    Validate the model during training, with support for mode stats predictions.
 
     Parameters:
     - config (object): Configuration object with flags and parameters.
@@ -199,32 +199,33 @@ def validate_model_during_training(config: object,
     mode_stats_targets = []
     mode_stats_predictions = []
 
+    # TODO: Maybe add as a parameter later?
+    # Separate loss for mode stats
+    mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
+
     # Choose the appropriate inference mode
-    with torch.inference_mode() if not config.use_monte_carlo_dropout else torch.no_grad():
+    with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
             x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
-            # Monte Carlo Dropout Inference
-            if config.use_monte_carlo_dropout:
-                mean_prediction, uncertainty = mc_dropout_predict(
-                    model, data, num_samples=50, device=device
-                )
-                node_predicted = torch.tensor(mean_prediction).to(device)
-                mode_stats_pred = None  # MC Dropout currently only affects node predictions
+            # Standard Forward Pass
+            if config.predict_mode_stats:
+                node_predicted, mode_stats_pred = model(data)
             else:
-                # Standard Forward Pass
-                if config.predict_mode_stats:
-                    node_predicted, mode_stats_pred = model(data)
-                else:
-                    node_predicted = model(data)
+                node_predicted = model(data)
+
+            # # Example MC Dropout Prediction, if to be used later. Use with torch.no_grad().
+            # mean_prediction, uncertainty = mc_dropout_predict(model, data, num_samples=50, device=device)
+            # node_predicted = torch.tensor(mean_prediction).to(device)
+            # mode_stats_pred = None  # MC Dropout currently only affects node predictions
 
             # Compute validation losses
             if config.predict_mode_stats:
                 val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
-                val_loss_mode_stats = loss_func(mode_stats_pred, targets_mode_stats).item() # add weight here also later!
+                val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
