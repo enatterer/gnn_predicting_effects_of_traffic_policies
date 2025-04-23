@@ -112,6 +112,12 @@ class BaseGNN(nn.Module, ABC):
         for epoch in range(config.num_epochs):
             super().train()
             optimizer.zero_grad()
+
+            # Total loss
+            epoch_train_loss = 0
+            epoch_train_loss_node_predictions = 0
+            epoch_train_loss_mode_stats = 0
+
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
@@ -135,6 +141,12 @@ class BaseGNN(nn.Module, ABC):
                     else:
                         predicted = self(data)
                         train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
+
+                # Total loss
+                epoch_train_loss += train_loss.item()
+                if config.predict_mode_stats:
+                    epoch_train_loss_node_predictions += train_loss_node_predictions.item()
+                    epoch_train_loss_mode_stats += train_loss_mode_stats.item()
         
                 # Backward pass
                 scaler.scale(train_loss).backward() 
@@ -148,12 +160,15 @@ class BaseGNN(nn.Module, ABC):
                     scaler.update()
                     optimizer.zero_grad()
                     
-                # Do not log train loss at every iteration, as it uses CPU
-                if (idx + 1) % 10 == 0:
-                    if config.predict_mode_stats:
-                        wandb.log({"train_loss": train_loss.item(), "epoch": epoch, "train_loss_node_predictions": train_loss_node_predictions.item(), "train_loss_mode_stats": train_loss_mode_stats.item()})
-                    else:   
-                        wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
+                # Batch level logging
+                if config.predict_mode_stats:
+                    wandb.log({"batch_train_loss": train_loss.item(),
+                               "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
+                               "batch_train_loss-mode_stats": train_loss_mode_stats.item()},
+                               step=epoch*len(train_dl) + idx)
+                else:   
+                    wandb.log({"batch_train_loss": train_loss.item()},
+                              step=epoch*len(train_dl) + idx)
             
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
@@ -170,16 +185,19 @@ class BaseGNN(nn.Module, ABC):
                     device=device,
                     scalers_validation=scalers_validation
                 )
+                # Epoch level logging
                 wandb.log({
                     "val_loss": val_loss,
-                    "epoch": epoch,
+                    "train_loss": epoch_train_loss / len(train_dl),
                     "lr": lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
-                    "val_loss_node_predictions": val_loss_node_predictions,
-                    "val_loss_mode_stats": val_loss_mode_stats
-                })
+                    "train_loss-node_predictions": epoch_train_loss_node_predictions / len(train_dl),
+                    "train_loss-mode_stats": epoch_train_loss_mode_stats / len(train_dl),
+                    "val_loss-node_predictions": val_loss_node_predictions,
+                    "val_loss-mode_stats": val_loss_mode_stats},
+                    step=epoch)
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
                     config=config,
@@ -189,14 +207,15 @@ class BaseGNN(nn.Module, ABC):
                     device=device,
                     scalers_validation=scalers_validation
                 )
+                # Epoch level logging
                 wandb.log({
                     "val_loss": val_loss,
-                    "epoch": epoch,
+                    "train_loss": epoch_train_loss / len(train_dl),
                     "lr": lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
-                    "pearson": pearson_corr
-                })
+                    "pearson": pearson_corr},
+                    step=epoch)
 
             print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
             
