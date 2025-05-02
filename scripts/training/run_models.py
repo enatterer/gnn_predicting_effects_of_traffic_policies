@@ -24,6 +24,7 @@ from training.help_functions import *
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
 from gnn.models.eign import Eign
+from gnn.models.graphSAGE import GraphSAGE
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -58,7 +59,7 @@ PARAMETERS = [
 def get_parameters(args):
     params = {
         # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_04_2025",
+        "project_name": "runs_05_2025",
         "predict_mode_stats": args.predict_mode_stats,
         "in_channels": args.in_channels,
         "use_all_features": args.use_all_features,
@@ -80,7 +81,7 @@ def get_parameters(args):
         "device_nr": args.device_nr
     }
 
-    params["unique_model_description"] = "wannabe_best_6"
+    params["unique_model_description"] = "basic_graphSAGE"
     
     return params
 
@@ -158,7 +159,7 @@ def main():
         config = setup_wandb({param: params[param] for param in PARAMETERS})
 
         # Create model instance
-        gnn_instance = create_model("point_net_transf_gat", config, device)
+        gnn_instance = create_model("graphSAGE", config, device)
         
         gnn_instance = gnn_instance.to(device)  
         loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
@@ -214,6 +215,19 @@ def create_model(architecture: str, config: object, device: torch.device):
             predict_mode_stats=config.predict_mode_stats,
             dtype=torch.float32
         ).to(device)
+    
+    elif architecture == "graphSAGE":
+        return GraphSAGE(
+            in_channels=config.in_channels,
+            out_channels=config.out_channels,
+            hidden_channels=32,
+            num_layers=3,
+            use_dropout=config.use_dropout,
+            dropout=config.dropout,
+            predict_mode_stats=config.predict_mode_stats,
+            dtype=torch.float32
+        ).to(device)
+
     elif architecture == "eign":
         # TO BE IMPLEMENTED
         return Eign(
