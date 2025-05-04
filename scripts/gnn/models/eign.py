@@ -130,6 +130,12 @@ class EIGN(BaseGNN):
         *args,
         **kwargs,
     ) -> EIGNOutput:
+        
+        # change x_signed to float32
+        if x_signed is not None:
+            x_signed = x_signed.to(torch.float32)
+        if x_unsigned is not None:
+            x_unsigned = x_unsigned.to(torch.float32)      
         for block in self.blocks:
             x_signed, x_unsigned = block(
                 x_signed=x_signed,
@@ -211,7 +217,7 @@ class EIGN(BaseGNN):
                 with autocast():
                     # Forward pass
                     if config.predict_mode_stats:
-                        predicted, mode_stats_pred = self(data)
+                        predicted, mode_stats_pred = self(x_signed=data.x, x_unsigned=data.x, edge_index=data.edge_index, is_directed=data.edge_is_directed)
                         train_loss_node_predictions = loss_fct(
                             predicted, targets_node_predictions, x_unscaled
                         )
@@ -220,7 +226,7 @@ class EIGN(BaseGNN):
                         )  # add weight here also later!
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
-                        predicted = self(data)
+                        predicted = self(x_signed=data.x, x_unsigned=data.x, edge_index=data.edge_index, is_directed=data.edge_is_directed)
                         train_loss = loss_fct(
                             predicted, targets_node_predictions, x_unscaled
                         )

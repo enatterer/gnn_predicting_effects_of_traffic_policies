@@ -40,7 +40,7 @@ sim_input_paths = [
 ]
 
 # Path to save the processed simulation data
-result_path = os.path.join(project_root, "data", "train_data", "edge_features")
+result_path = os.path.join(project_root, "data", "train_data", "edge_features2")
 
 # Path to the basecase links and stats
 basecase_links_path = os.path.join(
@@ -82,7 +82,7 @@ def compute_result_dic(basecase_links, networks):
     result_dic_eqasim_trips = {}
     result_dic_output_links["base_network_no_policies"] = basecase_links
 
-    for network in tqdm(networks, desc="Processing Networks", unit="network"):
+    for network in tqdm(networks[:10], desc="Processing Networks", unit="network"):
 
         policy_key = create_policy_key(network)
         df_output_links = read_output_links(network)
@@ -351,24 +351,22 @@ def process_result_dic_eign(
 
 def add_edge_is_directed(data: Data) -> Data:
     edge_index = data.edge_index
-
-    # Get forward and reverse edges
     src, dst = edge_index
-    forward = torch.stack([src, dst], dim=1)
-    reverse = torch.stack([dst, src], dim=1)
+    edges = torch.stack([src, dst], dim=1)
 
-    # Use set logic to determine directedness
-    forward_set = {tuple(edge.tolist()) for edge in forward}
-    reverse_set = {tuple(edge.tolist()) for edge in reverse}
+    # Create a set of reversed edges
+    reversed_edges_set = {tuple(edge.tolist()) for edge in torch.stack([dst, src], dim=1)}
 
+    # Mark each edge as directed if its reverse is not in the set
     is_directed = torch.tensor(
-        [tuple(edge.tolist()) not in reverse_set for edge in forward],
+        [tuple(edge.tolist()) not in reversed_edges_set for edge in edges],
         dtype=torch.bool,
-        device=edge_index.device,
+        device=edge_index.device
     )
 
     data.edge_is_directed = is_directed
     return data
+
 
 
 def validate_data(data: Data) -> bool:
