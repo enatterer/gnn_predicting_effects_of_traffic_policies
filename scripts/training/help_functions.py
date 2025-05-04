@@ -323,6 +323,27 @@ def setup_wandb(config):
     wandb.init(project=config['project_name'], name=config['unique_model_description'], config=config)
     return wandb.config
 
+def setup_wandb_metrics(predict_mode_stats=False):
+
+    wandb.define_metric("epoch") # Custom X-axis
+    wandb.define_metric("batch_step") # Custom X-axis
+    
+    wandb.define_metric("batch_train_loss", step_metric="batch_step")
+    wandb.define_metric("train_loss", step_metric="epoch")
+    wandb.define_metric("val_loss", step_metric="epoch")
+    wandb.define_metric("lr", step_metric="epoch")
+    wandb.define_metric("r^2", step_metric="epoch")
+    wandb.define_metric("spearman", step_metric="epoch")
+    wandb.define_metric("pearson", step_metric="epoch")
+
+    if predict_mode_stats:
+        wandb.define_metric("batch_train_loss-node_predictions", step_metric="batch_step")
+        wandb.define_metric("batch_train_loss-mode_stats", step_metric="batch_step")
+        wandb.define_metric("train_loss-node_predictions", step_metric="epoch")
+        wandb.define_metric("train_loss-mode_stats", step_metric="epoch")
+        wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
+        wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
+
 def str_to_bool(value):
     if isinstance(value, str):
         if value.lower() in ['true', '1', 'yes', 'y']:

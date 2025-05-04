@@ -220,7 +220,7 @@ def create_model(architecture: str, config: object, device: torch.device):
         return GraphSAGE(
             in_channels=config.in_channels,
             out_channels=config.out_channels,
-            hidden_channels=32,
+            hidden_channels=128,
             num_layers=3,
             use_dropout=config.use_dropout,
             dropout=config.dropout,
