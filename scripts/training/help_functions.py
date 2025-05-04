@@ -116,6 +116,8 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
 
         print("Splitting into subsets...")
 
+        # bootstrapping refers to randomly sampling the training set with replacement to create a new training subset, 
+        # while using the unseen (out-of-bag) samples as a validation set.
         if use_bootstrapping:
             train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
         else:
@@ -175,6 +177,7 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         print("Dataloaders and scalers saved")
         
+        # scalers are used to normalized inputs
         return train_loader, val_loader, scalers_train, scalers_validation
     
     except Exception as e:

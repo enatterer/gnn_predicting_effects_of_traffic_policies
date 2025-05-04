@@ -16,7 +16,11 @@ scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
-from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler
+from gnn.help_functions import (
+    validate_model_during_training,
+    LinearWarmupCosineDecayScheduler,
+)
+
 
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 
@@ -30,7 +34,7 @@ class BaseGNN(nn.Module, ABC):
         """
         Base class for all GNN implementations.
         Core parameters are defined here, additional parameters can be added in child classes.
-        
+
         Child classes must call super().__init__() in their __init__ method. Followed by self.define_layers() and self.initialize_weights().
         See the PointNetTransfGAT class for an example.
         """
@@ -51,7 +55,7 @@ class BaseGNN(nn.Module, ABC):
         Define layers of the model. Must be implemented by all child classes.
         """
         pass
-            
+
     @abstractmethod
     def forward(self, data):
         """
@@ -70,17 +74,19 @@ class BaseGNN(nn.Module, ABC):
                 nn.init.kaiming_normal_(m.weight)
                 nn.init.zeros_(m.bias)
 
-    def train_model(self, 
-            config: object = None, 
-            loss_fct: nn.Module = None, 
-            optimizer: optim.Optimizer = None, 
-            train_dl: DataLoader = None, 
-            valid_dl: DataLoader = None, 
-            device: torch.device = None, 
-            early_stopping: object = None, 
-            model_save_path: str = None,
-            scalers_train: dict = None,
-            scalers_validation: dict = None) -> tuple:
+    def train_model(
+        self,
+        config: object = None,
+        loss_fct: nn.Module = None,
+        optimizer: optim.Optimizer = None,
+        train_dl: DataLoader = None,
+        valid_dl: DataLoader = None,
+        device: torch.device = None,
+        early_stopping: object = None,
+        model_save_path: str = None,
+        scalers_train: dict = None,
+        scalers_validation: dict = None,
+    ) -> tuple:
         """
         Basic training pipeline for GNN models, can be overridden by child classes.
 
@@ -102,11 +108,13 @@ class BaseGNN(nn.Module, ABC):
         """
         if config is None:
             raise ValueError("Config cannot be None")
-        
+
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
-        scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
-        best_val_loss = float('inf')
+        scheduler = LinearWarmupCosineDecayScheduler(
+            initial_lr=config.lr, total_steps=total_steps
+        )
+        best_val_loss = float("inf")
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
 
@@ -131,15 +139,17 @@ class BaseGNN(nn.Module, ABC):
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr
-                    
+                    param_group["lr"] = lr
+
                 data = data.to(device)
                 targets_node_predictions = data.y
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+                x_unscaled = scalers_train["x_scaler"].inverse_transform(
+                    data.x.detach().clone().cpu().numpy()
+                )
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
-            
+
                 with autocast():
                     # Forward pass
                     if config.predict_mode_stats:
@@ -158,8 +168,8 @@ class BaseGNN(nn.Module, ABC):
                     epoch_train_loss_mode_stats += train_loss_mode_stats.item()
         
                 # Backward pass
-                scaler.scale(train_loss).backward() 
-                
+                scaler.scale(train_loss).backward()
+
                 # Gradient clipping
                 if config.use_gradient_clipping:
                     torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
@@ -183,16 +193,23 @@ class BaseGNN(nn.Module, ABC):
                 scaler.step(optimizer)
                 scaler.update()
                 optimizer.zero_grad()
-                
+
             # Validation step
             if config.predict_mode_stats:
-                val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                (
+                    val_loss,
+                    r_squared,
+                    spearman_corr,
+                    pearson_corr,
+                    val_loss_node_predictions,
+                    val_loss_mode_stats,
+                ) = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_validation=scalers_validation
+                    scalers_validation=scalers_validation,
                 )
                 # Epoch level logging
                 wandb.log({
@@ -208,13 +225,15 @@ class BaseGNN(nn.Module, ABC):
                     "val_loss-mode_stats": val_loss_mode_stats,
                     "epoch":epoch})
             else:
-                val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
-                    config=config,
-                    model=self,
-                    dataset=valid_dl,
-                    loss_func=loss_fct,
-                    device=device,
-                    scalers_validation=scalers_validation
+                val_loss, r_squared, spearman_corr, pearson_corr = (
+                    validate_model_during_training(
+                        config=config,
+                        model=self,
+                        dataset=valid_dl,
+                        loss_func=loss_fct,
+                        device=device,
+                        scalers_validation=scalers_validation,
+                    )
                 )
                 # Epoch level logging
                 wandb.log({
@@ -226,31 +245,40 @@ class BaseGNN(nn.Module, ABC):
                     "pearson": pearson_corr,
                     "epoch":epoch})
 
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
-            
+            print(
+                f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}"
+            )
+
             if val_loss < best_val_loss:
-                best_val_loss = val_loss   
-                if model_save_path:         
+                best_val_loss = val_loss
+                if model_save_path:
                     torch.save(self.state_dict(), model_save_path)
-                    print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
-            
+                    print(
+                        f"Best model saved to {model_save_path} with validation loss: {val_loss}"
+                    )
+
             # Save checkpoint
             if epoch % 20 == 0:
-                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-                torch.save({
-                    'epoch': epoch,
-                    'model_state_dict': self.state_dict(),
-                    'optimizer_state_dict': optimizer.state_dict(),
-                    'best_val_loss': best_val_loss,
-                    'val_loss': val_loss,
-                }, checkpoint_path)
-                print(f'Checkpoint saved to {checkpoint_path}')
-            
+                checkpoint_path = os.path.join(
+                    checkpoint_dir, f"checkpoint_epoch_{epoch}.pt"
+                )
+                torch.save(
+                    {
+                        "epoch": epoch,
+                        "model_state_dict": self.state_dict(),
+                        "optimizer_state_dict": optimizer.state_dict(),
+                        "best_val_loss": best_val_loss,
+                        "val_loss": val_loss,
+                    },
+                    checkpoint_path,
+                )
+                print(f"Checkpoint saved to {checkpoint_path}")
+
             early_stopping(val_loss)
             if early_stopping.early_stop:
                 print("Early stopping triggered. Stopping training.")
                 break
-        
+
         print("Best validation loss: ", best_val_loss)
         wandb.summary["best_val_loss"] = best_val_loss
         wandb.finish()
