@@ -1,3 +1,5 @@
+import wandb
+
 import torch
 from torch_geometric.nn import SAGEConv
 import torch.nn.functional as F
@@ -6,9 +8,9 @@ from gnn.models.base_gnn import BaseGNN
 
 class GraphSAGE(BaseGNN):
     def __init__(self, 
-                in_channels: int = 0, 
-                out_channels: int = 0,
-                hidden_channels: int = 32,
+                in_channels: int = 5, 
+                out_channels: int = 1,
+                hidden_channels: int = 128,
                 num_layers: int = 3,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
@@ -29,6 +31,10 @@ class GraphSAGE(BaseGNN):
         # Model specific parameters
         self.hidden_channels = hidden_channels
         self.num_layers = num_layers
+
+        # Log them to WandB
+        wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
+                                     'num_layers': num_layers}
         
         # Define the layers of the model
         self.define_layers()

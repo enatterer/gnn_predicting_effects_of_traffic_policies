@@ -13,7 +13,7 @@ Example usage with default architecture, dropout, and most significant features 
 
 ## Results
 
-The results are primarily logged using [WandB](https://wandb.ai/), structured as decribed by arguments `project_name` and `unique_model_description` in the script (an initial api setup is required). Locally, the results are saved under `base_dir/project_name/unique_model_description/`, it contains:
+The results are primarily logged using [WandB](https://wandb.ai/), structured as decribed by the arguments `project_name` and `unique_model_description` (an initial api setup is required). Locally, the results are saved under `base_dir/project_name/unique_model_description/`, it contains:
 - `data_created_during_training`:
     - `x` and `pos` scalers (normalization params) for train, validation, and test sets.
     - Test set in `.pt` format.

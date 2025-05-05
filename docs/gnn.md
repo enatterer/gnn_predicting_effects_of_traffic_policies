@@ -2,7 +2,7 @@
 
 The `gnn/models/` directory can be used to define GNN model classes. These classes must inherit from [`BaseGNN`](../scripts/gnn/models/base_gnn.py) and implement the following methods:
 
-- `__init__`: This method should initialize the model parameters and layers. It should also call the `super().__init__()` method to ensure that the base class is properly initialized.
+- `__init__`: This method should initialize the model parameters and layers. It should also call the `super().__init__()` method to ensure that the base class is properly initialized. In addition, model specific parameters can be logged to WandB using `wandb.config.model_kwargs = model_kwargs` where `model_kwargs` is a dictionary.
 - `define_layers`: Define the model architecture. It should create instances of the layers and store them as attributes of the model class.
 - `forward`: Define the forward pass of the model. It should take the input `data` and pass it through the model layers to produce the output.
 

@@ -12,13 +12,13 @@ from gnn.models.base_gnn import BaseGNN
 
 class Eign(BaseGNN):
     def __init__(self, 
-                in_channels: int = 0, 
-                out_channels: int = 0, 
+                in_channels: int = 5, 
+                out_channels: int = 1, 
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                ):
+                verbose: bool = True):
         """
         Initialize the GNN model with specified configurations.
 
@@ -35,8 +35,8 @@ class Eign(BaseGNN):
             dropout=dropout,
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
-            dtype=dtype
-        )
+            dtype=dtype,
+            verbose=verbose)
         
     def forward(self, data):
         pass

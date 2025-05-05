@@ -1,3 +1,5 @@
+import wandb
+
 import torch
 import torch.nn as nn
 import torch.nn.init as init
@@ -15,17 +17,16 @@ The experiments in the paper were conducted using 10,000 simulations of a 1% dow
 
 class PointNetTransfGAT(BaseGNN):
     def __init__(self, 
-                in_channels: int = 0, 
-                out_channels: int = 0, 
-                point_net_conv_layer_structure_local_mlp: list = [], 
-                point_net_conv_layer_structure_global_mlp: list = [], 
-                gat_conv_layer_structure: list = [], 
-                dropout: float = 0.0, 
+                in_channels: int = 5, 
+                out_channels: int = 1, 
+                point_net_conv_layer_structure_local_mlp: list = [256], 
+                point_net_conv_layer_structure_global_mlp: list = [512], 
+                gat_conv_layer_structure: list = [128, 256, 512], 
+                dropout: float = 0.3, 
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                verbose: bool = True
-                ):
+                verbose: bool = True):
         
         """
         Initialize the GNN model with specified configurations.
@@ -54,6 +55,11 @@ class PointNetTransfGAT(BaseGNN):
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv = gat_conv_layer_structure
+
+        # Log them to WandB
+        wandb.config.model_kwargs = {"pnc_local": self.pnc_local,
+                                     "pnc_global": self.pnc_global,
+                                     "gat_conv": self.gat_conv}
 
         # Define the layers of the model
         self.define_layers()

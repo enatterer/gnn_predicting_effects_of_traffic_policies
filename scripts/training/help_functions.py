@@ -19,6 +19,9 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from gnn.gnn_io import *
+from gnn.models.point_net_transf_gat import PointNetTransfGAT
+from gnn.models.graphSAGE import GraphSAGE
+from gnn.models.eign import Eign
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
 
 def get_available_gpus():
@@ -45,6 +48,14 @@ def select_best_gpu(gpus):
 def set_cuda_visible_device(gpu_index):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_index)
     print(f"Using GPU {gpu_index} with CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
+
+def str_to_bool(value):
+    if isinstance(value, str):
+        if value.lower() in ['true', '1', 'yes', 'y']:
+            return True
+        elif value.lower() in ['false', '0', 'no', 'n']:
+            return False
+    raise ValueError(f"Cannot convert {value} to a boolean.")
     
 def set_random_seeds(seed_value=42):
     # Set environment variable for reproducibility
@@ -70,6 +81,11 @@ def set_random_seeds(seed_value=42):
     # If using torch.distributed for distributed training, set the seed
     if torch.distributed.is_initialized():
         torch.distributed.manual_seed_all(seed_value)
+
+def seed_worker(worker_id):
+    worker_seed = torch.initial_seed() % 2**32
+    np.random.seed(worker_seed)
+    random.seed(worker_seed)
         
 def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth'):
     data_path = os.path.join(base_dir, unique_model_description)
@@ -313,45 +329,6 @@ def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_s
     
     return data_list
 
-def seed_worker(worker_id):
-    worker_seed = torch.initial_seed() % 2**32
-    np.random.seed(worker_seed)
-    random.seed(worker_seed)
-
-def setup_wandb(config):
-    wandb.login()
-    wandb.init(project=config['project_name'], name=config['unique_model_description'], config=config)
-    return wandb.config
-
-def setup_wandb_metrics(predict_mode_stats=False):
-
-    wandb.define_metric("epoch") # Custom X-axis
-    wandb.define_metric("batch_step") # Custom X-axis
-    
-    wandb.define_metric("batch_train_loss", step_metric="batch_step")
-    wandb.define_metric("train_loss", step_metric="epoch")
-    wandb.define_metric("val_loss", step_metric="epoch")
-    wandb.define_metric("lr", step_metric="epoch")
-    wandb.define_metric("r^2", step_metric="epoch")
-    wandb.define_metric("spearman", step_metric="epoch")
-    wandb.define_metric("pearson", step_metric="epoch")
-
-    if predict_mode_stats:
-        wandb.define_metric("batch_train_loss-node_predictions", step_metric="batch_step")
-        wandb.define_metric("batch_train_loss-mode_stats", step_metric="batch_step")
-        wandb.define_metric("train_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("train_loss-mode_stats", step_metric="epoch")
-        wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
-
-def str_to_bool(value):
-    if isinstance(value, str):
-        if value.lower() in ['true', '1', 'yes', 'y']:
-            return True
-        elif value.lower() in ['false', '0', 'no', 'n']:
-            return False
-    raise ValueError(f"Cannot convert {value} to a boolean.")
-
 def one_hot_highway(datalist, idx):
 
     """
@@ -381,6 +358,67 @@ def one_hot_highway(datalist, idx):
         one_hot = np.eye(n_types)[mapped_highway]
 
         data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
+
+
+def setup_wandb(args):
+    wandb.login()
+    wandb.init(project=args['project_name'], name=args['unique_model_description'],
+               config={k: v for k, v in args.items() if k not in ['project_name', 'unique_model_description', 'model_kwargs']})
+    return wandb.config
+
+def setup_wandb_metrics(predict_mode_stats=False):
+
+    wandb.define_metric("epoch") # Custom X-axis
+    wandb.define_metric("batch_step") # Custom X-axis
+    
+    wandb.define_metric("batch_train_loss", step_metric="batch_step")
+    wandb.define_metric("train_loss", step_metric="epoch")
+    wandb.define_metric("val_loss", step_metric="epoch")
+    wandb.define_metric("lr", step_metric="epoch")
+    wandb.define_metric("r^2", step_metric="epoch")
+    wandb.define_metric("spearman", step_metric="epoch")
+    wandb.define_metric("pearson", step_metric="epoch")
+
+    if predict_mode_stats:
+        wandb.define_metric("batch_train_loss-node_predictions", step_metric="batch_step")
+        wandb.define_metric("batch_train_loss-mode_stats", step_metric="batch_step")
+        wandb.define_metric("train_loss-node_predictions", step_metric="epoch")
+        wandb.define_metric("train_loss-mode_stats", step_metric="epoch")
+        wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
+        wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
+
+def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device):
+    """
+    Factory function to create the specified model architecture.
+    
+    Args:
+    - gnn_arch (str): The architecture of the GNN model to create.
+    - config (object): WandB config with run arguments.
+    - device (torch.device): The device to which the model should be moved (CPU or GPU).
+    
+    Returns:
+    - Initialized model on the specified device
+    """
+
+    common_kwargs = {
+        "in_channels": config.in_channels,
+        "out_channels": config.out_channels,
+        "use_dropout": config.use_dropout,
+        "dropout": config.dropout,
+        "predict_mode_stats": config.predict_mode_stats,
+        "dtype": torch.float32,
+        "verbose": True}
+
+    if gnn_arch == "point_net_transf_gat":
+        return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "graphSAGE":
+        return GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+
+    elif gnn_arch == "eign":
+        return Eign(**common_kwargs, **model_kwargs).to(device)
+    else:
+        raise ValueError(f"Unknown architecture: {gnn_arch}")
 
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):

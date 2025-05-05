@@ -20,70 +20,13 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from training.help_functions import *
-
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
-from gnn.models.point_net_transf_gat import PointNetTransfGAT
-from gnn.models.eign import Eign
-from gnn.models.graphSAGE import GraphSAGE
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
 dataset_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
 base_dir = os.path.join(project_root, 'data')
-
-PARAMETERS = [
-    "project_name",
-    "predict_mode_stats",
-    "in_channels",
-    "use_all_features",
-    "out_channels",
-    "loss_fct",
-    "use_weighted_loss",
-    "point_net_conv_layer_structure_local_mlp",
-    "point_net_conv_layer_structure_global_mlp",
-    "gat_conv_layer_structure",
-    "use_bootstrapping",
-    "num_epochs",
-    "batch_size",
-    "lr",
-    "early_stopping_patience",
-    "use_dropout",
-    "dropout",
-    "gradient_accumulation_steps",
-    "use_gradient_clipping",
-    "device_nr",
-    "unique_model_description"
-]
-
-def get_parameters(args):
-    params = {
-        # KEEP IN MIND: IF WE CHANGE PARAMETERS, WE NEED TO CHANGE THE NAME OF THE RUN IN WANDB (for the config)
-        "project_name": "runs_05_2025",
-        "predict_mode_stats": args.predict_mode_stats,
-        "in_channels": args.in_channels,
-        "use_all_features": args.use_all_features,
-        "out_channels": args.out_channels,
-        "loss_fct": args.loss_fct,
-        "use_weighted_loss": args.use_weighted_loss,
-        "point_net_conv_layer_structure_local_mlp": [int(x) for x in args.point_net_conv_layer_structure_local_mlp.split(',')],
-        "point_net_conv_layer_structure_global_mlp": [int(x) for x in args.point_net_conv_layer_structure_global_mlp.split(',')],
-        "gat_conv_layer_structure": [int(x) for x in args.gat_conv_layer_structure.split(',')],
-        "use_bootstrapping": args.use_bootstrapping,
-        "num_epochs": args.num_epochs,
-        "batch_size": int(args.batch_size),
-        "lr": float(args.lr),
-        "early_stopping_patience": args.early_stopping_patience,
-        "use_dropout": args.use_dropout,
-        "dropout": args.dropout,
-        "gradient_accumulation_steps": args.gradient_accumulation_steps,
-        "use_gradient_clipping": args.use_gradient_clipping,
-        "device_nr": args.device_nr
-    }
-
-    params["unique_model_description"] = "basic_graphSAGE"
-    
-    return params
 
 def main():
     try:
@@ -108,21 +51,21 @@ def main():
         print(f"An error occurred: {str(e)}")
     
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument(
-        "--model_architecture", 
-        type=str, 
-        default="point_net_transf_gat",
-        choices=["point_net_transf_gat", "eign"],  # Add more as you implement them 
-    )
+    parser.add_argument("--gnn_arch", type=str, default="point_net_transf_gat",
+                        help="The GNN architecture to use. Supported: point_net_transf_gat, graphSAGE, eign.",
+                        choices=["point_net_transf_gat", "graphSAGE", "eign"])  # Add more as you implement them
+    parser.add_argument("--project_name", type=str, default="runs_05_2025",
+                        help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
+    parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features",
+                        help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
+    parser.add_argument("--model_kwargs", type=json.loads, default={},
+                        help='Additional model parameters (as defined in the class) in JSON format. If not provided, defaults will be used.')
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
-    parser.add_argument("--point_net_conv_layer_structure_local_mlp", type=str, default="256", help="Structure of PointNet Conv local MLP (comma-separated).")
-    parser.add_argument("--point_net_conv_layer_structure_global_mlp", type=str, default="512", help="Structure of PointNet Conv global MLP (comma-separated).")
-    parser.add_argument("--gat_conv_layer_structure", type=str, default="128,256,512,256", help="Structure of GAT Conv hidden layer sizes (comma-separated).")
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
@@ -134,7 +77,7 @@ def main():
     parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
 
-    args = parser.parse_args()
+    args = vars(parser.parse_args())
     set_random_seeds()
     
     try:
@@ -142,36 +85,36 @@ def main():
         best_gpu = select_best_gpu(gpus)
         set_cuda_visible_device(best_gpu)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        params = get_parameters(args)
         
         # Create directory for the run
-        unique_run_dir = os.path.join(base_dir, params['project_name'], params['unique_model_description'])
+        unique_run_dir = os.path.join(base_dir, args['project_name'], args['unique_model_description'])
         os.makedirs(unique_run_dir, exist_ok=True)
         
-        model_save_path, path_to_save_dataloader = get_paths(base_dir=os.path.join(base_dir, params['project_name']), unique_model_description=params['unique_model_description'], model_save_path='trained_model/model.pth')
+        model_save_path, path_to_save_dataloader = get_paths(base_dir=os.path.join(base_dir, args['project_name']), unique_model_description=args['unique_model_description'], model_save_path='trained_model/model.pth')
         train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(datalist=datalist,
-                                                                                                  batch_size=params['batch_size'],
+                                                                                                  batch_size=args['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
-                                                                                                  use_all_features=params['use_all_features'],
-                                                                                                  use_bootstrapping=params['use_bootstrapping'])
+                                                                                                  use_all_features=args['use_all_features'],
+                                                                                                  use_bootstrapping=args['use_bootstrapping'])
         
-        # Create config
-        config = setup_wandb({param: params[param] for param in PARAMETERS})
+        # Create WandB config
+        config = setup_wandb(args)
 
         # Create model instance
-        gnn_instance = create_model("graphSAGE", config, device)
+        gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
+                                        config=config,
+                                        model_kwargs=args["model_kwargs"],
+                                        device=device)
         
         gnn_instance = gnn_instance.to(device)  
         loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
         
-        baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct,
-                                                                        device=device, scalers=scalers_train)
-        baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct,
-                                                            device=device, scalers=scalers_train)
+        baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
+        baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
         print("baseline loss mean " + str(baseline_loss_mean_target))
         print("baseline loss no  " + str(baseline_loss) )
 
-        early_stopping = EarlyStopping(patience=params['early_stopping_patience'], verbose=True)
+        early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
         best_val_loss, best_epoch = gnn_instance.train_model(  
                     config=config, 
                     loss_fct=loss_fct,
@@ -189,54 +132,7 @@ def main():
         print(f"Error: {e}")
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
-     
 
-def create_model(architecture: str, config: object, device: torch.device):
-    """
-    Factory function to create the specified model architecture.
-    
-    Parameters:
-    - architecture: str, the name of the architecture to use
-    - config: object containing model parameters
-    - device: torch device to put the model on
-    
-    Returns:
-    - Initialized model on the specified device
-    """
-    if architecture == "point_net_transf_gat":
-        return PointNetTransfGAT(
-            in_channels=config.in_channels,
-            out_channels=config.out_channels,
-            point_net_conv_layer_structure_local_mlp=config.point_net_conv_layer_structure_local_mlp,
-            point_net_conv_layer_structure_global_mlp=config.point_net_conv_layer_structure_global_mlp,
-            gat_conv_layer_structure=config.gat_conv_layer_structure,
-            use_dropout=config.use_dropout,
-            dropout=config.dropout,
-            predict_mode_stats=config.predict_mode_stats,
-            dtype=torch.float32
-        ).to(device)
-    
-    elif architecture == "graphSAGE":
-        return GraphSAGE(
-            in_channels=config.in_channels,
-            out_channels=config.out_channels,
-            hidden_channels=128,
-            num_layers=3,
-            use_dropout=config.use_dropout,
-            dropout=config.dropout,
-            predict_mode_stats=config.predict_mode_stats,
-            dtype=torch.float32
-        ).to(device)
 
-    elif architecture == "eign":
-        # TO BE IMPLEMENTED
-        return Eign(
-            in_channels=config.in_channels,
-            out_channels=config.out_channels,
-            dtype=torch.float32
-        ).to(device)
-    else:
-        raise ValueError(f"Unknown architecture: {architecture}")
-     
 if __name__ == '__main__':
     main()
