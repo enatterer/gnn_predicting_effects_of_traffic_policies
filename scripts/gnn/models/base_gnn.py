@@ -17,7 +17,6 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler
-from training.help_functions import setup_wandb_metrics
 
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 
@@ -114,6 +113,7 @@ class BaseGNN(nn.Module, ABC):
         mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
 
         # Define WandB Logging Metrics
+        from training.help_functions import setup_wandb_metrics
         setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
 
         for epoch in range(config.num_epochs):
@@ -172,10 +172,10 @@ class BaseGNN(nn.Module, ABC):
                     wandb.log({"batch_train_loss": train_loss.item(),
                                "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
                                "batch_train_loss-mode_stats": train_loss_mode_stats.item(),
-                               "batch_step":epoch*len(train_dl) + idx})
+                               "batch_step":step})
                 else:   
                     wandb.log({"batch_train_loss": train_loss.item(),
-                               "batch_step":epoch*len(train_dl) + idx})
+                               "batch_step":step})
             
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)

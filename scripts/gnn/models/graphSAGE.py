@@ -1,8 +1,18 @@
+import os
+import sys
+
+import tqdm as tqdm
 import wandb
 
 import torch
+from torch import nn
+
 from torch_geometric.nn import SAGEConv
-import torch.nn.functional as F
+
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
 from gnn.models.base_gnn import BaseGNN
 
@@ -11,7 +21,7 @@ class GraphSAGE(BaseGNN):
                 in_channels: int = 5, 
                 out_channels: int = 1,
                 hidden_channels: int = 128,
-                num_layers: int = 3,
+                num_sage_layers: int = 3,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
@@ -30,11 +40,11 @@ class GraphSAGE(BaseGNN):
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
-        self.num_layers = num_layers
+        self.num_sage_layers = num_sage_layers
 
         # Log them to WandB
         wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'num_layers': num_layers}
+                                     'num_layers': num_sage_layers}
         
         # Define the layers of the model
         self.define_layers()
@@ -48,23 +58,20 @@ class GraphSAGE(BaseGNN):
 
     def define_layers(self):
         
-        for i in range(self.num_layers):
+        for i in range(self.num_sage_layers):
             if i == 0:
                 in_channels = self.in_channels
             else:
                 in_channels = self.hidden_channels
 
-            if i == self.num_layers - 1:
-                out_channels = self.out_channels
-            else:
-                out_channels = self.hidden_channels
-
             # Define the convolutional layer
-            conv = SAGEConv(in_channels, out_channels)
+            conv = SAGEConv(in_channels, self.hidden_channels)
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:
-            self.dropout = torch.nn.Dropout(self.dropout)
+            self.dropout = nn.Dropout(self.dropout)
+
+        self.fc = nn.Linear(self.hidden_channels, self.out_channels)
 
     def forward(self, data):
 
@@ -72,13 +79,14 @@ class GraphSAGE(BaseGNN):
         x = data.x.to(self.dtype)
         edge_index = data.edge_index
 
-        for i in range(self.num_layers):
+        for i in range(self.num_sage_layers):
             conv = getattr(self, f'conv{i + 1}')
             x = conv(x, edge_index)
+            x = nn.functional.relu(x)
+            if self.use_dropout:
+                x = self.dropout(x)
 
-            if i != self.num_layers - 1:
-                x = F.relu(x)
-                if self.use_dropout:
-                    x = self.dropout(x)
+        # Read out predictions
+        x = self.fc(x)
         
         return x
