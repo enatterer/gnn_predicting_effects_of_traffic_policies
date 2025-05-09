@@ -20,8 +20,11 @@ if scripts_path not in sys.path:
 
 from gnn.gnn_io import *
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
-from gnn.models.graphSAGE import GraphSAGE
+from gnn.models.gcn import GCN, GCN2
+from gnn.models.gat import GAT
+from gnn.models.trans_conv import TransConv
 from gnn.models.eign import Eign
+from gnn.models.graphSAGE import GraphSAGE
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
 
 def get_available_gpus():
@@ -414,6 +417,18 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     
     elif gnn_arch == "graphSAGE":
         return GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gcn":
+        return GCN(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gcn2":
+        return GCN2(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gat":
+        return GAT(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "trans_conv":
+        return TransConv(**common_kwargs, **model_kwargs).to(device)
 
     elif gnn_arch == "eign":
         return Eign(**common_kwargs, **model_kwargs).to(device)

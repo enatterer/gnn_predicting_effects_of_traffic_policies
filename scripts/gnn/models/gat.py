@@ -7,7 +7,7 @@ import wandb
 import torch
 from torch import nn
 
-from torch_geometric.nn import SAGEConv
+from torch_geometric.nn import GATConv
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -16,18 +16,13 @@ if scripts_path not in sys.path:
 
 from gnn.models.base_gnn import BaseGNN
 
-class GraphSAGE(BaseGNN):
-    """
-    Incomplete Masterpiece for Inductive Learning.
-    Missing Neighbor Sampling (NeighborSampler is confusing, check internal workings).
-    
-    Also, make compatible with other baselines.
-    """
+class GAT(BaseGNN):
     def __init__(self, 
                 in_channels: int = 5, 
+                use_pos: bool = False,
                 out_channels: int = 1,
-                hidden_channels: list[int] = [128,128],
-                aggregator: str = 'mean',
+                hidden_channels: list[int] = [128,256,512,256,128],
+                num_heads: int = 4,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
@@ -46,11 +41,16 @@ class GraphSAGE(BaseGNN):
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
-        self.aggregator = aggregator
+        self.num_heads = num_heads
+        self.use_pos = use_pos
+
+        if self.use_pos:
+            self.in_channels += 4 # x and y for start and end points
 
         # Log them to WandB
         wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'aggregator': aggregator}
+                                     'num_heads': num_heads,
+                                     'use_pos': use_pos}
         
         # Define the layers of the model
         self.define_layers()
@@ -71,7 +71,7 @@ class GraphSAGE(BaseGNN):
                 in_channels = self.hidden_channels[i - 1]
 
             # Define the convolutional layer
-            conv = SAGEConv(in_channels, self.hidden_channels[i], aggr=self.aggregator)
+            conv = GATConv(in_channels, self.hidden_channels[i], heads=self.num_heads)
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:
@@ -82,8 +82,15 @@ class GraphSAGE(BaseGNN):
     def forward(self, data):
 
         # Unpack data
-        x = data.x.to(self.dtype)
+        x = data.x
         edge_index = data.edge_index
+
+        if self.use_pos:
+            pos1 = data.pos[:, 0, :]  # Start position
+            pos2 = data.pos[:, 1, :]  # End position
+            x = torch.cat((x, pos1, pos2), dim=1)  # Concatenate along the feature dimension
+
+        x = x.to(self.dtype)
 
         for i in range(len(self.hidden_channels)):
             conv = getattr(self, f'conv{i + 1}')
