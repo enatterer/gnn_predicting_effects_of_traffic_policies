@@ -21,7 +21,7 @@ class TransConv(BaseGNN):
                 in_channels: int = 5, 
                 use_pos: bool = False,
                 out_channels: int = 1,
-                hidden_channels: list[int] = [64,128,256,128,64],
+                hidden_channels: list[int] = [128,256,512,256,128],
                 num_heads: int = 4,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
@@ -46,11 +46,12 @@ class TransConv(BaseGNN):
 
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
-
+        
         # Log them to WandB
-        wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'num_heads': num_heads,
-                                     'use_pos': use_pos}
+        wandb.config.update({'hidden_channels': hidden_channels,
+                             'num_heads': num_heads,
+                             'use_pos': use_pos},
+                             allow_val_change=True)
         
         # Define the layers of the model
         self.define_layers()
@@ -71,7 +72,7 @@ class TransConv(BaseGNN):
                 in_channels = self.hidden_channels[i - 1]
 
             # Define the convolutional layer
-            conv = TransformerConv(in_channels, self.hidden_channels[i], heads=self.num_heads)
+            conv = TransformerConv(in_channels, int(self.hidden_channels[i]/self.num_heads), heads=self.num_heads)
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:

@@ -57,9 +57,10 @@ class PointNetTransfGAT(BaseGNN):
         self.gat_conv = gat_conv_layer_structure
 
         # Log them to WandB
-        wandb.config.model_kwargs = {"pnc_local": self.pnc_local,
-                                     "pnc_global": self.pnc_global,
-                                     "gat_conv": self.gat_conv}
+        wandb.cofig.update({"pnc_local": self.pnc_local,
+                            "pnc_global": self.pnc_global,
+                            "gat_conv": self.gat_conv},
+                            allow_val_change=True)
 
         # Define the layers of the model
         self.define_layers()

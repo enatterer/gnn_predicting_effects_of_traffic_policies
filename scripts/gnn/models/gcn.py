@@ -45,9 +45,10 @@ class GCN(BaseGNN):
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
 
-        # # Log them to WandB
-        wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'use_pos': use_pos}
+        # Log them to WandB
+        wandb.config.update({'hidden_channels': hidden_channels,
+                             'use_pos': use_pos},
+                             allow_val_change=True)
         
         # Define the layers of the model
         self.define_layers()
@@ -145,13 +146,14 @@ class GCN2(BaseGNN):
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
 
-        # # Log them to WandB
-        wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'num_layers': num_layers,
-                                     'alpha': alpha,
-                                     'theta': theta,
-                                     'num_feed_forward': num_feed_forward,
-                                     'use_pos': use_pos}
+        # Log them to WandB
+        wandb.config.update({'hidden_channels': hidden_channels,
+                             'num_layers': num_layers,
+                             'alpha': alpha,
+                             'theta': theta,
+                             'num_feed_forward': num_feed_forward,
+                             'use_pos': use_pos},
+                             allow_val_change=True)
 
         # Define the layers of the model
         self.define_layers()

@@ -47,11 +47,12 @@ class GraphSAGE(BaseGNN):
         # Model specific parameters
         self.hidden_channels = hidden_channels
         self.aggregator = aggregator
-
-        # Log them to WandB
-        wandb.config.model_kwargs = {'hidden_channels': hidden_channels,
-                                     'aggregator': aggregator}
         
+        # Log them to WandB
+        wandb.config.update({'hidden_channels': hidden_channels,
+                             'aggregator': aggregator},
+                             allow_val_change=True)
+
         # Define the layers of the model
         self.define_layers()
 
