@@ -32,7 +32,7 @@ class GraphSAGE(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                verbose: bool = True):
+                log_kwargs_to_wandb: bool = False):
     
         # Call parent class constructor
         super().__init__(
@@ -42,26 +42,22 @@ class GraphSAGE(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            verbose=verbose)
+            log_kwargs_to_wandb=log_kwargs_to_wandb)
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
         self.aggregator = aggregator
         
-        # Log them to WandB
-        wandb.config.update({'hidden_channels': hidden_channels,
-                             'aggregator': aggregator},
-                             allow_val_change=True)
+        if self.log_kwargs_to_wandb:
+            wandb.config.update({'hidden_channels': hidden_channels,
+                                'aggregator': aggregator},
+                                allow_val_change=True)
 
         # Define the layers of the model
         self.define_layers()
 
         # Initialize weights
         self.initialize_weights()
-
-        if verbose:
-            print("Model initialized")
-            print(self) # Print the model architecture
 
     def define_layers(self):
         

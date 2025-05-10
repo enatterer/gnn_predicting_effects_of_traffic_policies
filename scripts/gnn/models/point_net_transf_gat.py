@@ -26,7 +26,7 @@ class PointNetTransfGAT(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                verbose: bool = True):
+                log_kwargs_to_wandb: bool = False):
         
         """
         Initialize the GNN model with specified configurations.
@@ -49,30 +49,25 @@ class PointNetTransfGAT(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            verbose=verbose)
+            log_kwargs_to_wandb=log_kwargs_to_wandb)
         
         # Architecture-specific parameters
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv = gat_conv_layer_structure
 
-        # Log them to WandB
-        wandb.cofig.update({"pnc_local": self.pnc_local,
-                            "pnc_global": self.pnc_global,
-                            "gat_conv": self.gat_conv},
-                            allow_val_change=True)
+        if self.log_kwargs_to_wandb:
+            wandb.cofig.update({"pnc_local": self.pnc_local,
+                                "pnc_global": self.pnc_global,
+                                "gat_conv": self.gat_conv},
+                                allow_val_change=True)
 
         # Define the layers of the model
         self.define_layers()
 
         # Initialize weights
         self.initialize_weights()
-
-        if verbose:
-            print("Model initialized")
-            print(self) # Print the model architecture
         
-
     def define_layers(self):
 
         # Initialize dropout if needed

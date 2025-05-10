@@ -26,7 +26,7 @@ class BaseGNN(nn.Module, ABC):
                  use_dropout: bool = False,
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
-                 verbose: bool = False):
+                 log_kwargs_to_wandb: bool = False):
         """
         Base class for all GNN implementations.
         Core parameters are defined here, additional parameters can be added in child classes.
@@ -41,7 +41,9 @@ class BaseGNN(nn.Module, ABC):
         self.use_dropout = use_dropout
         self.predict_mode_stats = predict_mode_stats
         self.dtype = dtype
-        self.verbose = verbose
+        
+        # Log specific model kwargs to wandb (during training runs)
+        self.log_kwargs_to_wandb = log_kwargs_to_wandb
         
     @abstractmethod
     def define_layers(self):

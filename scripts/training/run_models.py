@@ -10,6 +10,7 @@ Example usage with default architecture, dropout, and most significant features 
 
 import os
 import sys
+import json
 import argparse
 
 import torch
@@ -65,8 +66,9 @@ def main():
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
-    parser.add_argument("--model_kwargs", type=json.loads, default={},
-                        help='Additional model parameters (as defined in the class) in JSON format. If not provided, defaults will be used.')
+    parser.add_argument("--model_kwargs", type=str, default=None,
+                        help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
+                        'If not provided, defaults params will be used.')
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
@@ -104,10 +106,16 @@ def main():
         # Create WandB config
         config = setup_wandb(args)
 
+        if args["model_kwargs"] is not None:
+            with open(args["model_kwargs"], 'r') as f:
+                model_kwargs = json.load(f)
+        else:
+            model_kwargs = {}
+        
         # Create model instance
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
                                         config=config,
-                                        model_kwargs=args["model_kwargs"],
+                                        model_kwargs=model_kwargs,
                                         device=device)
         
         gnn_instance = gnn_instance.to(device)  

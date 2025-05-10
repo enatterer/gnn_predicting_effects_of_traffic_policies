@@ -18,16 +18,8 @@ class Eign(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                verbose: bool = True):
-        """
-        Initialize the GNN model with specified configurations.
-
-        Parameters:
-        - in_channels (int): Number of input channels.
-        - out_channels (int): Number of output channels.
-        - dropout (float, optional): Dropout rate. Default is 0.3.
-        - use_dropout (bool, optional): Whether to use dropout. Default is False.
-        """
+                log_kwargs_to_wandb: bool = False):
+        
         # Call parent class constructor
         super().__init__(
             in_channels=in_channels,
@@ -36,7 +28,7 @@ class Eign(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            verbose=verbose)
+            log_kwargs_to_wandb=log_kwargs_to_wandb)
         
     def forward(self, data):
         pass
