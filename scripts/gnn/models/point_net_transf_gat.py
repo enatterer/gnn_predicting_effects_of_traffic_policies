@@ -26,7 +26,7 @@ class PointNetTransfGAT(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_kwargs_to_wandb: bool = False):
+                log_to_wandb: bool = False):
         
         """
         Initialize the GNN model with specified configurations.
@@ -49,14 +49,14 @@ class PointNetTransfGAT(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_kwargs_to_wandb=log_kwargs_to_wandb)
+            log_to_wandb=log_to_wandb)
         
         # Architecture-specific parameters
         self.pnc_local = point_net_conv_layer_structure_local_mlp
         self.pnc_global = point_net_conv_layer_structure_global_mlp
         self.gat_conv = gat_conv_layer_structure
 
-        if self.log_kwargs_to_wandb:
+        if self.log_to_wandb:
             wandb.cofig.update({"pnc_local": self.pnc_local,
                                 "pnc_global": self.pnc_global,
                                 "gat_conv": self.gat_conv},

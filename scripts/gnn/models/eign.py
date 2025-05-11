@@ -18,7 +18,7 @@ class Eign(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_kwargs_to_wandb: bool = False):
+                log_to_wandb: bool = False):
         
         # Call parent class constructor
         super().__init__(
@@ -28,7 +28,7 @@ class Eign(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_kwargs_to_wandb=log_kwargs_to_wandb)
+            log_to_wandb=log_to_wandb)
         
     def forward(self, data):
         pass

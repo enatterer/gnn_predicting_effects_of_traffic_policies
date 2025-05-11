@@ -26,7 +26,7 @@ class GCN(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_kwargs_to_wandb: bool = False):
+                log_to_wandb: bool = False):
     
         # Call parent class constructor
         super().__init__(
@@ -36,7 +36,7 @@ class GCN(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_kwargs_to_wandb=log_kwargs_to_wandb)
+            log_to_wandb=log_to_wandb)
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
@@ -45,9 +45,10 @@ class GCN(BaseGNN):
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
 
-        if self.log_kwargs_to_wandb:
+        if self.log_to_wandb:
             wandb.config.update({'hidden_channels': hidden_channels,
-                                'use_pos': use_pos},
+                                'use_pos': use_pos,
+                                'in_channels': self.in_channels},
                                 allow_val_change=True)
         
         # Define the layers of the model
@@ -119,7 +120,7 @@ class GCN2(BaseGNN):
                  alpha: float = 0.1,
                  theta: float = 1.5,
                  num_feed_forward: int = 3,
-                 log_kwargs_to_wandb: bool = False):
+                 log_to_wandb: bool = False):
         
         # Call parent class constructor
         super().__init__(
@@ -129,7 +130,7 @@ class GCN2(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_kwargs_to_wandb=log_kwargs_to_wandb)
+            log_to_wandb=log_to_wandb)
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
@@ -142,13 +143,14 @@ class GCN2(BaseGNN):
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
 
-        if self.log_kwargs_to_wandb:
+        if self.log_to_wandb:
             wandb.config.update({'hidden_channels': hidden_channels,
                                 'num_layers': num_layers,
                                 'alpha': alpha,
                                 'theta': theta,
                                 'num_feed_forward': num_feed_forward,
-                                'use_pos': use_pos},
+                                'use_pos': use_pos,
+                                'in_channels': self.in_channels},
                                 allow_val_change=True)
 
         # Define the layers of the model

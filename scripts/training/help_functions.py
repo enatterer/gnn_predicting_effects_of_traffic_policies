@@ -410,7 +410,7 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dropout": config.dropout,
         "predict_mode_stats": config.predict_mode_stats,
         "dtype": torch.float32,
-        "log_kwargs_to_wandb": True} # During training, yes
+        "log_to_wandb": True} # During training, yes
 
     if gnn_arch == "point_net_transf_gat":
         return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
