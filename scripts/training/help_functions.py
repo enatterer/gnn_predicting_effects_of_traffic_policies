@@ -24,6 +24,7 @@ from gnn.models.gcn import GCN, GCN2
 from gnn.models.gat import GAT
 from gnn.models.trans_conv import TransConv
 from gnn.models.pnc import PNC
+from gnn.models.fc_nn import FC_NN
 from gnn.models.eign import Eign
 from gnn.models.graphSAGE import GraphSAGE
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
@@ -433,6 +434,9 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     
     elif gnn_arch == "pnc":
         return PNC(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "fc_nn":
+        return FC_NN(**common_kwargs, **model_kwargs).to(device)
 
     elif gnn_arch == "eign":
         return Eign(**common_kwargs, **model_kwargs).to(device)

@@ -70,7 +70,7 @@ class GCN(BaseGNN):
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:
-            self.dropout = nn.Dropout(self.dropout)
+            self.dropout_layer = nn.Dropout(self.dropout)
 
         self.fc = nn.Linear(self.hidden_channels[-1], self.out_channels)
 
@@ -92,7 +92,7 @@ class GCN(BaseGNN):
             x = conv(x, edge_index)
             x = nn.functional.relu(x)
             if self.use_dropout:
-                x = self.dropout(x)
+                x = self.dropout_layer(x)
 
         # Read out predictions
         x = self.fc(x)
@@ -175,7 +175,7 @@ class GCN2(BaseGNN):
                 torch.nn.Linear(self.hidden_channels, self.hidden_channels)])
             
         if self.use_dropout:
-            self.dropout = nn.Dropout(self.dropout)
+            self.dropout_layer = nn.Dropout(self.dropout)
 
         self.lin_prt_final = torch.nn.Linear(self.hidden_channels, self.out_channels)
 
@@ -200,7 +200,7 @@ class GCN2(BaseGNN):
             conv = self.convs[idx + 1]
 
             if self.use_dropout:
-                x = self.dropout(x)
+                x = self.dropout_layer(x)
 
             x = conv(x, x_1, edge_index)
             x = norm(x, batch=data.batch)

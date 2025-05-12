@@ -73,7 +73,7 @@ class GAT(BaseGNN):
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:
-            self.dropout = nn.Dropout(self.dropout)
+            self.dropout_layer = nn.Dropout(self.dropout)
 
         self.fc = nn.Linear(self.hidden_channels[-1], self.out_channels)
 
@@ -95,7 +95,7 @@ class GAT(BaseGNN):
             x = conv(x, edge_index)
             x = nn.functional.relu(x)
             if self.use_dropout:
-                x = self.dropout(x)
+                x = self.dropout_layer(x)
 
         # Read out predictions
         x = self.fc(x)

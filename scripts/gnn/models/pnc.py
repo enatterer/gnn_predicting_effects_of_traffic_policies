@@ -21,18 +21,6 @@ class PNC(BaseGNN):
                 dtype: torch.dtype = torch.float32,
                 log_to_wandb: bool = False):
         
-        """
-        Initialize the GNN model with specified configurations.
-
-        Parameters:
-        - in_channels (int): Number of input channels.
-        - out_channels (int): Number of output channels.
-        - pnc_local_mlp (list): Layer structure for local MLP in PointNetConv.
-        - pnc_global_mlp (list): Layer structure for global MLP in PointNetConv.
-        - dropout (float, optional): Dropout rate. Default is 0.0.
-        - use_dropout (bool, optional): Whether to use dropout. Default is False.
-        - predict_mode_stats (bool, optional): Whether to predict mode stats. Default is False.
-        """
         # Call parent class constructor
         super().__init__(
             in_channels=in_channels,

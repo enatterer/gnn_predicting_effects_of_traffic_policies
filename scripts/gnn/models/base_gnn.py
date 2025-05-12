@@ -67,7 +67,7 @@ class BaseGNN(nn.Module, ABC):
         """
         for m in self.modules():
             if isinstance(m, nn.Linear):
-                nn.init.xavier_normal_(m.weight)
+                nn.init.kaiming_normal_(m.weight)
                 nn.init.zeros_(m.bias)
 
     def train_model(self, 
