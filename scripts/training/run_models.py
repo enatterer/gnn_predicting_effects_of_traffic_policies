@@ -58,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="point_net_transf_gat",
                         help="The GNN architecture to use.",
-                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "graphSAGE", "eign"])  # Add more as you implement them
+                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "graphSAGE", "eign"])  # Add more as you implement them
     parser.add_argument("--project_name", type=str, default="TR-C_Benchmarks",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features",

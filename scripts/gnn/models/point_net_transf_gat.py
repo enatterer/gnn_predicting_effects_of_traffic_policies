@@ -57,7 +57,7 @@ class PointNetTransfGAT(BaseGNN):
         self.gat_conv = gat_conv_layer_structure
 
         if self.log_to_wandb:
-            wandb.cofig.update({"pnc_local": self.pnc_local,
+            wandb.config.update({"pnc_local": self.pnc_local,
                                 "pnc_global": self.pnc_global,
                                 "gat_conv": self.gat_conv},
                                 allow_val_change=True)
