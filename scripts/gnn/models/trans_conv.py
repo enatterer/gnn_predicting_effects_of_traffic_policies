@@ -7,7 +7,7 @@ import wandb
 import torch
 from torch import nn
 
-from torch_geometric.nn import TransformerConv
+from torch_geometric.nn import TransformerConv, GraphNorm
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -22,6 +22,7 @@ class TransConv(BaseGNN):
                 use_pos: bool = False,
                 out_channels: int = 1,
                 hidden_channels: list[int] = [128,256,512,256,128],
+                use_graph_norm: bool = False,
                 num_heads: int = 4,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
@@ -43,6 +44,7 @@ class TransConv(BaseGNN):
         self.hidden_channels = hidden_channels
         self.num_heads = num_heads
         self.use_pos = use_pos
+        self.use_graph_norm = use_graph_norm
 
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
@@ -51,7 +53,8 @@ class TransConv(BaseGNN):
             wandb.config.update({'hidden_channels': hidden_channels,
                                 'num_heads': num_heads,
                                 'use_pos': use_pos,
-                                'in_channels': self.in_channels},
+                                'in_channels': self.in_channels,
+                                'use_graph_norm': use_graph_norm},
                                 allow_val_change=True)
         
         # Define the layers of the model
@@ -71,6 +74,10 @@ class TransConv(BaseGNN):
             # Define the convolutional layer
             conv = TransformerConv(in_channels, int(self.hidden_channels[i]/self.num_heads), heads=self.num_heads)
             setattr(self, f'conv{i + 1}', conv)
+
+            if self.use_graph_norm:
+                graph_norm = GraphNorm(self.hidden_channels[i-1] if i > 0 else self.in_channels)
+                setattr(self, f'graph_norm{i + 1}', graph_norm)
         
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
@@ -91,6 +98,11 @@ class TransConv(BaseGNN):
         x = x.to(self.dtype)
 
         for i in range(len(self.hidden_channels)):
+
+            if self.use_graph_norm:
+                graph_norm = getattr(self, f'graph_norm{i + 1}')
+                x = graph_norm(x)
+
             conv = getattr(self, f'conv{i + 1}')
             x = conv(x, edge_index)
             x = nn.functional.relu(x)

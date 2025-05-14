@@ -122,11 +122,6 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
             train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
         
         print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
-        
-        print("Saving test set...")
-        test_set_path = os.path.join(path_to_save_dataloader, 'test_set.pt')
-        torch.save(test_set, test_set_path)
-        print(f"Test set saved to {test_set_path}")
 
         if use_all_features:
             node_features = [feat.name for feat in EdgeFeatures]
