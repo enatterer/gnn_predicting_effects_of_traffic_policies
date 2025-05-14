@@ -6,6 +6,7 @@ import wandb
 
 import torch
 from torch import nn
+from torch_geometric.data import Batch, Data
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -81,7 +82,12 @@ class FC_NN(BaseGNN):
     def forward(self, data):
 
         # Unpack data
-        datalist = data.to_data_list()
+        if isinstance(data, Batch):
+            datalist = data.to_data_list()
+        elif isinstance(data, Data):
+            datalist = [data]
+        else:
+            raise ValueError("Input data must be a Batch or Data object")
 
         # Reshape x to (batch_size, num_nodes * in_channels)
         x = [data.x.flatten() for data in datalist]
