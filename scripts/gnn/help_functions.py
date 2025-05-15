@@ -53,6 +53,27 @@ class GNN_Loss:
         else:
             return self.loss_fct(y_pred, y_true)
         
+class EIGN_Loss:
+    """
+    Custom loss function for GNN that supports weighted loss computation.
+    The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
+    """
+    
+    def __init__(self, loss_fct, num_nodes, device):
+
+        if loss_fct == 'mse':
+            self.loss_fct = torch.nn.MSELoss(reduction='mean').to(dtype=torch.float32).to(device)
+        elif self.config.loss_fct == 'l1':
+            self.loss_fct = torch.nn.L1Loss(reduction='mean').to(dtype=torch.float32).to(device)
+        else:
+            raise ValueError(f"Loss function {loss_fct} not supported.")
+        
+        self.num_nodes = num_nodes
+        self.device = device
+
+    def __call__(self, y_pred:Tensor, y_true:Tensor) -> Tensor:
+        return self.loss_fct(y_pred, y_true)
+        
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
                  initial_lr: float, 
@@ -117,7 +138,7 @@ def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
     # Compute the MSE
-    loss = loss_fct(y_values_normalized_tensor, target_tensor, x)
+    loss = loss_fct(y_values_normalized_tensor, target_tensor)
     return loss.item()
 
 def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
@@ -143,7 +164,7 @@ def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32).to(device)
 
     # Compute the loss
-    loss = loss_fct(actual_difference_vol_car, target_tensor, x)
+    loss = loss_fct(actual_difference_vol_car, target_tensor)
     return loss.item()
 
 def validate_model_during_training(config: object, 

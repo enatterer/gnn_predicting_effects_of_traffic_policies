@@ -40,7 +40,7 @@ sim_input_paths = [
 ]
 
 # Path to save the processed simulation data
-result_path = os.path.join(project_root, "data", "train_data", "edge_features2")
+result_path = os.path.join(project_root, "data", "train_data", "edge_features_with_net_flow")
 
 # Path to the basecase links and stats
 basecase_links_path = os.path.join(
@@ -73,6 +73,7 @@ class EdgeFeatures(IntEnum):
     ALLOWED_MODE_TRAIN = 9
     ALLOWED_MODE_RAIL = 10
     ALLOWED_MODE_SUBWAY = 11
+    NET_FLOW = 12
 
 
 # Read all network data into a dictionary of GeoDataFrames
@@ -257,6 +258,11 @@ def process_result_dic_eign(
     allowed_modes = encode_modes(links_base_case)
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
 
+    # Calculate net flow for base case
+    net_flow = np.zeros_like(vol_base_case)
+    for i, (src, dst) in enumerate(edges_base):
+        net_flow[i] = vol_base_case[src] - vol_base_case[dst]
+
     batch_counter = 0
     for key, df in tqdm(
         result_dic.items(), desc="Processing result_dic", unit="dataframe"
@@ -274,6 +280,10 @@ def process_result_dic_eign(
                 EdgeFeatures.FREESPEED: torch.tensor(freespeed),
                 EdgeFeatures.HIGHWAY: torch.tensor(highway),
                 EdgeFeatures.LENGTH: torch.tensor(length),
+            }
+
+            edge_feature_dict_signed = {
+                EdgeFeatures.NET_FLOW: torch.tensor(net_flow),
             }
 
             if use_allowed_modes:
@@ -295,14 +305,22 @@ def process_result_dic_eign(
                 if feature in edge_feature_dict
             ]
 
+            edge_tensor_signed = [
+                edge_feature_dict_signed[feature]
+                for feature in EdgeFeatures
+                if feature in edge_feature_dict_signed
+            ]
+
             # Stack the tensors
             edge_tensor = torch.stack(edge_tensor, dim=1)
-
+            edge_tensor_signed = torch.stack(edge_tensor_signed, dim=1)
             data = Data(edge_index=edge_index)
             data.num_nodes = edge_index.shape[1]
             data.x = edge_tensor
+            data.x_signed = edge_tensor_signed
             data.pos = stacked_edge_geometries_tensor
             data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf)
+            data.y_signed = edge_tensor_signed
             add_edge_is_directed(data)
 
             df_mode_stats = result_dic_mode_stats.get(key)
@@ -368,9 +386,13 @@ def add_edge_is_directed(data: Data) -> Data:
     return data
 
 
-
 def validate_data(data: Data) -> bool:
     if data.x.shape != (data.num_nodes, 6):
+        print(
+            f"Invalid shape for data.x: expected ({data.num_nodes}, 6), got {data.x.shape}"
+        )
+        return False
+    if data.x_signed.shape != (data.num_nodes, 1):
         print(
             f"Invalid shape for data.x: expected ({data.num_nodes}, 6), got {data.x.shape}"
         )
@@ -399,6 +421,7 @@ def main():
 
     networks = list()
 
+    
     for path in sim_input_paths:
         networks += [os.path.join(path, network) for network in os.listdir(path)]
 
@@ -430,7 +453,7 @@ def main():
         result_dic=result_dic_output_links,
         result_dic_mode_stats=result_dic_eqasim_trips,
         save_path=result_path,
-        batch_size=50,
+        batch_size=5,
         links_base_case=base_gdf,
         gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
     )

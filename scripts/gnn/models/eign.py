@@ -94,12 +94,11 @@ class EIGN(BaseGNN):
 
         if self.out_channels_signed:
             self.signed_head = nn.Linear(
-                hidden_channels_signed,
-                out_channels_signed,  # type: ignore
-                bias=False,
+                hidden_channels_signed, out_channels_signed, bias=False
             )
         else:
             self.register_buffer("signed_head", None)
+        
         if self.out_channels_unsigned:
             self.unsigned_head = nn.Linear(
                 hidden_channels_unsigned, out_channels_unsigned, bias=False
@@ -130,12 +129,14 @@ class EIGN(BaseGNN):
         *args,
         **kwargs,
     ) -> EIGNOutput:
-        
+
         # change x_signed to float32
         if x_signed is not None:
             x_signed = x_signed.to(torch.float32)
         if x_unsigned is not None:
-            x_unsigned = x_unsigned.to(torch.float32)      
+            x_unsigned = x_unsigned.to(torch.float32)
+        
+        print(f"enter forward")
         for block in self.blocks:
             x_signed, x_unsigned = block(
                 x_signed=x_signed,
@@ -150,6 +151,7 @@ class EIGN(BaseGNN):
             if x_unsigned is not None:
                 x_unsigned = self.unsigned_activation_fn(x_unsigned)
                 x_unsigned = self.dropout(x_unsigned)
+        print(f"out of forward")
 
         if self.out_channels_signed:
             x_signed = self.signed_head(x_signed)
@@ -176,12 +178,10 @@ class EIGN(BaseGNN):
         scalers_validation: dict = None,
     ) -> tuple:
         """
-        Overriding train_model method from base_gnn 
+        Overriding train_model method from base_gnn
         """
         if config is None:
             raise ValueError("Config cannot be None")
-
-        print("this method is being called")
 
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
@@ -205,42 +205,74 @@ class EIGN(BaseGNN):
                 for param_group in optimizer.param_groups:
                     param_group["lr"] = lr
 
+                # Ensure data is in float32
                 data = data.to(device)
-                targets_node_predictions = data.y
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(
-                    data.x.detach().clone().cpu().numpy()
-                )
+                targets_node_predictions_signed = data.y_signed.to(torch.float32)
+                targets_node_predictions_unsigned = data.y.to(torch.float32)
+
+                # x_unscaled = scalers_train["x_scaler"].inverse_transform(
+                #     data.x.detach().clone().cpu().numpy()
+                # )
 
                 if config.predict_mode_stats:
-                    targets_mode_stats = data.mode_stats
+                    raise NotImplementedError(
+                        "Predicting mode stats is not implemented yet."
+                    )
+                    # targets_mode_stats = data.mode_stats
 
                 with autocast():
                     # Forward pass
                     if config.predict_mode_stats:
-                        predicted, mode_stats_pred = self(
-                            x_signed=data.x,
-                            edge_index=data.edge_index,
-                            is_directed=data.edge_is_directed,
+                        raise NotImplementedError(
+                            "Predicting mode stats is not implemented yet."
                         )
-                        train_loss_node_predictions = loss_fct(
-                            predicted, targets_node_predictions, x_unscaled
-                        )
-                        train_loss_mode_stats = loss_fct(
-                            mode_stats_pred, targets_mode_stats
-                        )  # add weight here also later!
-                        train_loss = train_loss_node_predictions + train_loss_mode_stats
+                        # predicted, mode_stats_pred = self(
+                        #     x_signed=data.x_signed,
+                        #     x_unsigned=data.x,
+                        #     edge_index=data.edge_index,
+                        #     is_directed=data.edge_is_directed,
+                        # )
+                        # train_loss_node_predictions = loss_fct(
+                        #     predicted, targets_node_predictions, x_unscaled
+                        # )
+                        # train_loss_mode_stats = loss_fct(
+                        #     mode_stats_pred, targets_mode_stats
+                        # )  # add weight here also later!
+                        # train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
-                        predicted = self(
-                            x_signed=data.x,
-                            x_unsigned=None,
+                        # Ensure inputs to model are float32
+                        x_signed = data.x_signed.to(torch.float32)
+                        x_unsigned = data.x.to(torch.float32)
+                        
+                        print(f"epoch: {epoch}")
+                        print(f"eign x_signed: {x_signed.shape}")
+                        print(f"eign x_unsigned: {x_unsigned.shape}\n")
+                        
+                        eign_output = self(
+                            x_signed=x_signed,
+                            x_unsigned=x_unsigned,
                             edge_index=data.edge_index,
                             is_directed=data.edge_is_directed,
-                        ).unsigned
-                        train_loss = loss_fct(
-                            predicted, targets_node_predictions, x_unscaled
+                        )
+                        predicted_signed, predicted_unsigned = eign_output.signed, eign_output.unsigned
+                        
+                        # Ensure predictions and targets are float32
+                        predicted_signed = predicted_signed.to(torch.float32)
+                        predicted_unsigned = predicted_unsigned.to(torch.float32)
+                        
+                        train_loss = (
+                            loss_fct(
+                                predicted_signed,
+                                targets_node_predictions_signed,
+                            )
+                            + loss_fct(
+                                predicted_unsigned,
+                                targets_node_predictions_unsigned,
+                            )
                         )
 
                 # Backward pass
+                train_loss = train_loss.to(dtype=torch.float32)
                 scaler.scale(train_loss).backward()
 
                 # Gradient clipping
@@ -255,14 +287,19 @@ class EIGN(BaseGNN):
                 # Do not log train loss at every iteration, as it uses CPU
                 if (idx + 1) % 10 == 0:
                     if config.predict_mode_stats:
-                        wandb.log(
-                            {
-                                "train_loss": train_loss.item(),
-                                "epoch": epoch,
-                                "train_loss_node_predictions": train_loss_node_predictions.item(),
-                                "train_loss_mode_stats": train_loss_mode_stats.item(),
-                            }
+                        raise NotImplementedError(
+                            "Predicting mode stats is not implemented yet."
                         )
+                        # wandb.log(
+                        #     {
+                        #         "train_loss": train_loss.item(),
+                        #         "epoch": epoch,
+                        #         "train_loss_node_predictions_signed": train_loss_node_predictions_signed.item(),
+                        #         "train_loss_node_predictions_unsigned": train_loss_node_predictions_signed.item(),
+                                
+                        #         "train_loss_mode_stats": train_loss_mode_stats.item(),
+                        #     }
+                        # )
                     else:
                         wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
 
@@ -273,33 +310,36 @@ class EIGN(BaseGNN):
 
             # Validation step
             if config.predict_mode_stats:
-                (
-                    val_loss,
-                    r_squared,
-                    spearman_corr,
-                    pearson_corr,
-                    val_loss_node_predictions,
-                    val_loss_mode_stats,
-                ) = validate_model_during_training_eign(
-                    config=config,
-                    model=self,
-                    dataset=valid_dl,
-                    loss_func=loss_fct,
-                    device=device,
-                    scalers_validation=scalers_validation,
+                raise NotImplementedError(
+                    "Predicting mode stats is not implemented yet."
                 )
-                wandb.log(
-                    {
-                        "val_loss": val_loss,
-                        "epoch": epoch,
-                        "lr": lr,
-                        "r^2": r_squared,
-                        "spearman": spearman_corr,
-                        "pearson": pearson_corr,
-                        "val_loss_node_predictions": val_loss_node_predictions,
-                        "val_loss_mode_stats": val_loss_mode_stats,
-                    }
-                )
+                # (
+                #     val_loss,
+                #     r_squared,
+                #     spearman_corr,
+                #     pearson_corr,
+                #     val_loss_node_predictions,
+                #     val_loss_mode_stats,
+                # ) = validate_model_during_training_eign(
+                #     config=config,
+                #     model=self,
+                #     dataset=valid_dl,
+                #     loss_func=loss_fct,
+                #     device=device,
+                #     scalers_validation=scalers_validation,
+                # )
+                # wandb.log(
+                #     {
+                #         "val_loss": val_loss,
+                #         "epoch": epoch,
+                #         "lr": lr,
+                #         "r^2": r_squared,
+                #         "spearman": spearman_corr,
+                #         "pearson": pearson_corr,
+                #         "val_loss_node_predictions": val_loss_node_predictions,
+                #         "val_loss_mode_stats": val_loss_mode_stats,
+                #     }
+                # )
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = (
                     validate_model_during_training_eign(
@@ -359,7 +399,7 @@ class EIGN(BaseGNN):
         print("Best validation loss: ", best_val_loss)
         wandb.summary["best_val_loss"] = best_val_loss
         wandb.finish()
-        return val_loss, epoch
+        return val_loss, epoch    
 
     def define_layers(self):
         pass
