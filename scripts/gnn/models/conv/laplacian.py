@@ -81,7 +81,7 @@ class MagneticEdgeLaplacianConv(nn.Module):
             if self.cached:
                 self._cached_laplacian = laplacian
 
-        x = self.lin(x)
+        x = self.lin(x).to(torch.float32)
         if self.q == 0.0:
             x = laplacian @ x
         else:

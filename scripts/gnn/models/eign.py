@@ -28,7 +28,7 @@ from torch.utils.data import DataLoader
 from .block import EIGNBlock, EIGNBlockMagneticEdgeLaplacianConv
 
 from gnn.help_functions import (
-    validate_model_during_training,
+    validate_model_during_training_eign,
     LinearWarmupCosineDecayScheduler,
 )
 
@@ -217,7 +217,11 @@ class EIGN(BaseGNN):
                 with autocast():
                     # Forward pass
                     if config.predict_mode_stats:
-                        predicted, mode_stats_pred = self(x_signed=data.x, x_unsigned=data.x, edge_index=data.edge_index, is_directed=data.edge_is_directed)
+                        predicted, mode_stats_pred = self(
+                            x_signed=data.x,
+                            edge_index=data.edge_index,
+                            is_directed=data.edge_is_directed,
+                        )
                         train_loss_node_predictions = loss_fct(
                             predicted, targets_node_predictions, x_unscaled
                         )
@@ -226,7 +230,12 @@ class EIGN(BaseGNN):
                         )  # add weight here also later!
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
-                        predicted = self(x_signed=data.x, x_unsigned=data.x, edge_index=data.edge_index, is_directed=data.edge_is_directed)
+                        predicted = self(
+                            x_signed=data.x,
+                            x_unsigned=None,
+                            edge_index=data.edge_index,
+                            is_directed=data.edge_is_directed,
+                        ).unsigned
                         train_loss = loss_fct(
                             predicted, targets_node_predictions, x_unscaled
                         )
@@ -271,7 +280,7 @@ class EIGN(BaseGNN):
                     pearson_corr,
                     val_loss_node_predictions,
                     val_loss_mode_stats,
-                ) = validate_model_during_training(
+                ) = validate_model_during_training_eign(
                     config=config,
                     model=self,
                     dataset=valid_dl,
@@ -293,7 +302,7 @@ class EIGN(BaseGNN):
                 )
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = (
-                    validate_model_during_training(
+                    validate_model_during_training_eign(
                         config=config,
                         model=self,
                         dataset=valid_dl,
