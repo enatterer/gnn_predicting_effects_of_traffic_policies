@@ -23,6 +23,7 @@ class TransConv(BaseGNN):
                 out_channels: int = 1,
                 hidden_channels: list[int] = [128,256,512,256,128],
                 use_graph_norm: bool = False,
+                use_residuals: bool = False,
                 num_heads: int = 4,
                 dropout: float = 0.3, 
                 use_dropout: bool = False,
@@ -45,6 +46,7 @@ class TransConv(BaseGNN):
         self.num_heads = num_heads
         self.use_pos = use_pos
         self.use_graph_norm = use_graph_norm
+        self.use_residuals = use_residuals
 
         if self.use_pos:
             self.in_channels += 4 # x and y for start and end points
@@ -54,7 +56,8 @@ class TransConv(BaseGNN):
                                 'num_heads': num_heads,
                                 'use_pos': use_pos,
                                 'in_channels': self.in_channels,
-                                'use_graph_norm': use_graph_norm},
+                                'use_graph_norm': use_graph_norm,
+                                'use_residuals': use_residuals},
                                 allow_val_change=True)
         
         # Define the layers of the model
@@ -99,13 +102,22 @@ class TransConv(BaseGNN):
 
         for i in range(len(self.hidden_channels)):
 
+            if self.use_residuals and i > 0:
+                x_0 = x
+
             if self.use_graph_norm:
                 graph_norm = getattr(self, f'graph_norm{i + 1}')
                 x = graph_norm(x)
 
             conv = getattr(self, f'conv{i + 1}')
             x = conv(x, edge_index)
+
+            # Makes sense?
+            if self.use_residuals and i > 0:
+                x = x + x_0
+
             x = nn.functional.relu(x)
+            
             if self.use_dropout:
                 x = self.dropout_layer(x)
 
