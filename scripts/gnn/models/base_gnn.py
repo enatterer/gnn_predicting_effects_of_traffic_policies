@@ -12,7 +12,7 @@ from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
 # Add the 'scripts' directory to Python Path
-scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
@@ -23,14 +23,16 @@ from gnn.help_functions import (
 
 
 class BaseGNN(nn.Module, ABC):
-    def __init__(self, 
-                 in_channels: int,
-                 out_channels: int,
-                 dropout: float = 0.3,
-                 use_dropout: bool = False,
-                 predict_mode_stats: bool = False,
-                 dtype: torch.dtype = torch.float32,
-                 log_to_wandb: bool = False):
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        dropout: float = 0.3,
+        use_dropout: bool = False,
+        predict_mode_stats: bool = False,
+        dtype: torch.dtype = torch.float32,
+        log_to_wandb: bool = False,
+    ):
         """
         Base class for all GNN implementations.
         Core parameters are defined here, additional parameters can be added in child classes.
@@ -45,10 +47,10 @@ class BaseGNN(nn.Module, ABC):
         self.use_dropout = use_dropout
         self.predict_mode_stats = predict_mode_stats
         self.dtype = dtype
-        
+
         # Log specific model kwargs to wandb (during training runs)
         self.log_to_wandb = log_to_wandb
-        
+
     @abstractmethod
     def define_layers(self):
         """
@@ -124,6 +126,7 @@ class BaseGNN(nn.Module, ABC):
 
         # Define WandB Logging Metrics
         from training.help_functions import setup_wandb_metrics
+
         setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
 
         for epoch in range(config.num_epochs):
@@ -135,7 +138,11 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
 
-            for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
+            for idx, data in tqdm(
+                enumerate(train_dl),
+                total=len(train_dl),
+                desc=f"Epoch {epoch+1}/{config.num_epochs}",
+            ):
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
@@ -154,19 +161,28 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     if config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
-                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
-                        train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
+                        train_loss_node_predictions = loss_fct(
+                            predicted, targets_node_predictions, x_unscaled
+                        )
+                        train_loss_mode_stats = mode_stats_loss(
+                            mode_stats_pred, targets_mode_stats
+                        )
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         predicted = self(data)
-                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss = loss_fct(
+                            predicted, targets_node_predictions, x_unscaled
+                        )
+                        print(predicted.shape, targets_node_predictions.shape)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
                 if config.predict_mode_stats:
-                    epoch_train_loss_node_predictions += train_loss_node_predictions.item()
+                    epoch_train_loss_node_predictions += (
+                        train_loss_node_predictions.item()
+                    )
                     epoch_train_loss_mode_stats += train_loss_mode_stats.item()
-        
+
                 # Backward pass
                 scaler.scale(train_loss).backward()
 
@@ -178,17 +194,22 @@ class BaseGNN(nn.Module, ABC):
                     scaler.step(optimizer)
                     scaler.update()
                     optimizer.zero_grad()
-                    
+
                 # Batch level logging
                 if config.predict_mode_stats:
-                    wandb.log({"batch_train_loss": train_loss.item(),
-                               "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
-                               "batch_train_loss-mode_stats": train_loss_mode_stats.item(),
-                               "batch_step":step})
-                else:   
-                    wandb.log({"batch_train_loss": train_loss.item(),
-                               "batch_step":step})
-            
+                    wandb.log(
+                        {
+                            "batch_train_loss": train_loss.item(),
+                            "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
+                            "batch_train_loss-mode_stats": train_loss_mode_stats.item(),
+                            "batch_step": step,
+                        }
+                    )
+                else:
+                    wandb.log(
+                        {"batch_train_loss": train_loss.item(), "batch_step": step}
+                    )
+
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
                 scaler.update()
@@ -212,18 +233,23 @@ class BaseGNN(nn.Module, ABC):
                     scalers_validation=scalers_validation,
                 )
                 # Epoch level logging
-                wandb.log({
-                    "val_loss": val_loss,
-                    "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
-                    "r^2": r_squared,
-                    "spearman": spearman_corr,
-                    "pearson": pearson_corr,
-                    "train_loss-node_predictions": epoch_train_loss_node_predictions / len(train_dl),
-                    "train_loss-mode_stats": epoch_train_loss_mode_stats / len(train_dl),
-                    "val_loss-node_predictions": val_loss_node_predictions,
-                    "val_loss-mode_stats": val_loss_mode_stats,
-                    "epoch":epoch})
+                wandb.log(
+                    {
+                        "val_loss": val_loss,
+                        "train_loss": epoch_train_loss / len(train_dl),
+                        "lr": lr,
+                        "r^2": r_squared,
+                        "spearman": spearman_corr,
+                        "pearson": pearson_corr,
+                        "train_loss-node_predictions": epoch_train_loss_node_predictions
+                        / len(train_dl),
+                        "train_loss-mode_stats": epoch_train_loss_mode_stats
+                        / len(train_dl),
+                        "val_loss-node_predictions": val_loss_node_predictions,
+                        "val_loss-mode_stats": val_loss_mode_stats,
+                        "epoch": epoch,
+                    }
+                )
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = (
                     validate_model_during_training(
@@ -236,14 +262,17 @@ class BaseGNN(nn.Module, ABC):
                     )
                 )
                 # Epoch level logging
-                wandb.log({
-                    "val_loss": val_loss,
-                    "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
-                    "r^2": r_squared,
-                    "spearman": spearman_corr,
-                    "pearson": pearson_corr,
-                    "epoch":epoch})
+                wandb.log(
+                    {
+                        "val_loss": val_loss,
+                        "train_loss": epoch_train_loss / len(train_dl),
+                        "lr": lr,
+                        "r^2": r_squared,
+                        "spearman": spearman_corr,
+                        "pearson": pearson_corr,
+                        "epoch": epoch,
+                    }
+                )
 
             print(
                 f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}"

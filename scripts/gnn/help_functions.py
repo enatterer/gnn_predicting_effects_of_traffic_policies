@@ -11,33 +11,44 @@ from torch import Tensor
 from torch.utils.data import DataLoader
 
 # Add the 'scripts' directory to Python Path
-scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
+
 
 class GNN_Loss:
     """
     Custom loss function for GNN that supports weighted loss computation.
     The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
     """
-    
+
     def __init__(self, loss_fct, num_nodes, device, weighted=False):
 
-        if loss_fct == 'mse':
-            self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
-        elif self.config.loss_fct == 'l1':
-            self.loss_fct = torch.nn.L1Loss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
+        if loss_fct == "mse":
+            self.loss_fct = (
+                torch.nn.MSELoss(reduction="none" if weighted else "mean")
+                .to(dtype=torch.float32)
+                .to(device)
+            )
+        elif self.config.loss_fct == "l1":
+            self.loss_fct = (
+                torch.nn.L1Loss(reduction="none" if weighted else "mean")
+                .to(dtype=torch.float32)
+                .to(device)
+            )
         else:
             raise ValueError(f"Loss function {loss_fct} not supported.")
-        
+
         self.num_nodes = num_nodes
         self.device = device
         self.weighted = weighted
 
-    def __call__(self, y_pred:Tensor, y_true:Tensor, x: np.ndarray = None) -> Tensor: # x is before normalization (unscaled)
-        
+    def __call__(
+        self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None
+    ) -> Tensor:  # x is before normalization (unscaled)
+
         if self.weighted:
 
             loss = self.loss_fct(y_pred, y_true)
@@ -45,39 +56,45 @@ class GNN_Loss:
 
             # Normalize by the maximum value in each sample
             for i in range(weights.shape[0] // self.num_nodes):
-                weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+                weights[i * self.num_nodes : (i + 1) * self.num_nodes] /= np.max(
+                    weights[i * self.num_nodes : (i + 1) * self.num_nodes]
+                )
 
             weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
             return torch.mean(loss * weights.unsqueeze(1))
 
         else:
             return self.loss_fct(y_pred, y_true)
-        
+
+
 class EIGN_Loss:
     """
     Custom loss function for GNN that supports weighted loss computation.
     The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
     """
-    
+
     def __init__(self, loss_fct, num_nodes, device):
 
-        if loss_fct == 'mse':
-            self.loss_fct = torch.nn.MSELoss(reduction='mean').to(dtype=torch.float32).to(device)
-        elif self.config.loss_fct == 'l1':
-            self.loss_fct = torch.nn.L1Loss(reduction='mean').to(dtype=torch.float32).to(device)
+        if loss_fct == "mse":
+            self.loss_fct = (
+                torch.nn.MSELoss(reduction="mean").to(dtype=torch.float32).to(device)
+            )
+        elif self.config.loss_fct == "l1":
+            self.loss_fct = (
+                torch.nn.L1Loss(reduction="mean").to(dtype=torch.float32).to(device)
+            )
         else:
             raise ValueError(f"Loss function {loss_fct} not supported.")
-        
+
         self.num_nodes = num_nodes
         self.device = device
 
-    def __call__(self, y_pred:Tensor, y_true:Tensor) -> Tensor:
+    def __call__(self, y_pred: Tensor, y_true: Tensor) -> Tensor:
         return self.loss_fct(y_pred, y_true)
-        
+
+
 class LinearWarmupCosineDecayScheduler:
-    def __init__(self, 
-                 initial_lr: float, 
-                 total_steps: int):
+    def __init__(self, initial_lr: float, total_steps: int):
         """
         Linear warmup and cosine decay scheduler.
 
@@ -87,9 +104,9 @@ class LinearWarmupCosineDecayScheduler:
         """
         self.initial_lr = initial_lr
         self.total_steps = total_steps
-        
-        self.min_lr = 0.01*initial_lr
-        self.warmup_steps = int(0.05*total_steps)
+
+        self.min_lr = 0.01 * initial_lr
+        self.warmup_steps = int(0.05 * total_steps)
         self.decay_steps = total_steps - self.warmup_steps
         self.cosine_decay_rate = 0.5
 
@@ -110,6 +127,7 @@ class LinearWarmupCosineDecayScheduler:
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay
 
+
 def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
@@ -128,18 +146,25 @@ def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     mean_y_normalized = np.mean(y_values_normalized)
 
     # Original x values
-    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])  
+    x = np.concatenate(
+        [scalers["x_scaler"].inverse_transform(data.x) for data in dataset]
+    )
 
     # Convert numpy arrays to torch tensors
-    y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32).to(device)
-    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32).to(device)
-    
+    y_values_normalized_tensor = torch.tensor(
+        y_values_normalized, dtype=torch.float32
+    ).to(device)
+    mean_y_normalized_tensor = torch.tensor(mean_y_normalized, dtype=torch.float32).to(
+        device
+    )
+
     # Create the target tensor with the same shape as y_values_normalized_tensor
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
     # Compute the MSE
     loss = loss_fct(y_values_normalized_tensor, target_tensor)
     return loss.item()
+
 
 def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     """
@@ -155,24 +180,33 @@ def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     # Concatenate the normalized y values from the dataset
     actual_difference_vol_car = np.concatenate([data.y for data in dataset])
 
-    target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
+    target_tensor = np.zeros(
+        actual_difference_vol_car.shape
+    )  # presume no difference in vol car due to policy
 
     # Original x values
-    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
-    
+    x = np.concatenate(
+        [scalers["x_scaler"].inverse_transform(data.x) for data in dataset]
+    )
+
     target_tensor = torch.tensor(target_tensor, dtype=torch.float32).to(device)
-    actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32).to(device)
+    actual_difference_vol_car = torch.tensor(
+        actual_difference_vol_car, dtype=torch.float32
+    ).to(device)
 
     # Compute the loss
     loss = loss_fct(actual_difference_vol_car, target_tensor)
     return loss.item()
 
-def validate_model_during_training(config: object, 
-                                   model: nn.Module, 
-                                   dataset: DataLoader, 
-                                   loss_func: nn.Module, 
-                                   device: torch.device,
-                                   scalers_validation: dict) -> tuple:
+
+def validate_model_during_training(
+    config: object,
+    model: nn.Module,
+    dataset: DataLoader,
+    loss_func: nn.Module,
+    device: torch.device,
+    scalers_validation: dict,
+) -> tuple:
     """
     Validate the model during training, with support for mode stats predictions.
 
@@ -204,7 +238,9 @@ def validate_model_during_training(config: object,
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
-            x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+            x_unscaled = scalers_validation["x_scaler"].inverse_transform(
+                data.x.detach().clone().cpu().numpy()
+            )
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Standard Forward Pass
@@ -220,13 +256,19 @@ def validate_model_during_training(config: object,
 
             # Compute validation losses
             if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
-                val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
+                val_loss_node_predictions = loss_func(
+                    node_predicted, targets_node_predictions, x_unscaled
+                ).item()
+                val_loss_mode_stats = mode_stats_loss(
+                    mode_stats_pred, targets_mode_stats
+                ).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
+                val_loss += loss_func(
+                    node_predicted, targets_node_predictions, x_unscaled
+                ).item()
 
             # Collect predictions and targets
             actual_node_targets.append(targets_node_predictions)
@@ -238,7 +280,9 @@ def validate_model_during_training(config: object,
     actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
-    spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
+    spearman_corr, pearson_corr = compute_spearman_pearson(
+        node_predictions, actual_node_targets
+    )
 
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
@@ -255,12 +299,15 @@ def validate_model_during_training(config: object,
     else:
         return total_validation_loss, r_squared, spearman_corr, pearson_corr
 
-def validate_model_during_training_eign(config: object, 
-                                   model: nn.Module, 
-                                   dataset: DataLoader, 
-                                   loss_func: nn.Module, 
-                                   device: torch.device,
-                                   scalers_validation: dict) -> tuple:
+
+def validate_model_during_training_eign(
+    config: object,
+    model: nn.Module,
+    dataset: DataLoader,
+    loss_func: nn.Module,
+    device: torch.device,
+    scalers_validation: dict,
+) -> tuple:
     """
     Validate the model during training, with support for mode stats predictions.
 
@@ -292,19 +339,35 @@ def validate_model_during_training_eign(config: object,
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
-            x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+            x_unscaled = scalers_validation["x_scaler"].inverse_transform(
+                data.x.detach().clone().cpu().numpy()
+            )
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Standard Forward Pass
             if config.predict_mode_stats:
-                node_predicted, mode_stats_pred = model(data)
+                raise NotImplementedError(
+                    "EIGN model does not support mode stats prediction."
+                )
+                # node_predicted, mode_stats_pred = model(data)
             else:
-                node_predicted = model(
-                    x_signed=data.x,
-                    x_unsigned=None,
+                eign_output = model(
+                    x_unsigned=(
+                        data.x if hasattr(data, "x") and data.x is not None else None
+                    ),
+                    x_signed=(
+                        data.x_signed
+                        if hasattr(data, "x_signed") and data.x_signed is not None
+                        else None
+                    ),
                     edge_index=data.edge_index,
-                    is_directed=data.edge_is_directed
-                ).unsigned
+                    is_directed=data.edge_is_directed,
+                )
+
+                predicted_signed, predicted_unsigned = (
+                    eign_output.signed,
+                    eign_output.unsigned,
+                )
 
             # # Example MC Dropout Prediction, if to be used later. Use with torch.no_grad().
             # mean_prediction, uncertainty = mc_dropout_predict(model, data, num_samples=50, device=device)
@@ -313,17 +376,27 @@ def validate_model_during_training_eign(config: object,
 
             # Compute validation losses
             if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
-                val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
-                val_loss += val_loss_node_predictions + val_loss_mode_stats
-                mode_stats_targets.append(targets_mode_stats)
-                mode_stats_predictions.append(mode_stats_pred)
+                raise NotImplementedError(
+                    "EIGN model does not support mode stats prediction."
+                )
+                # val_loss_node_predictions = loss_func(
+                #     node_predicted, targets_node_predictions, x_unscaled
+                # ).item()
+                # val_loss_mode_stats = mode_stats_loss(
+                #     mode_stats_pred, targets_mode_stats
+                # ).item()
+                # val_loss += val_loss_node_predictions + val_loss_mode_stats
+                # mode_stats_targets.append(targets_mode_stats)
+                # mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
+                val_loss += (
+                    loss_func(predicted_unsigned, targets_node_predictions).item()
+                    + loss_func(predicted_signed, targets_node_predictions).item()
+                )
 
             # Collect predictions and targets
             actual_node_targets.append(targets_node_predictions)
-            node_predictions.append(node_predicted)
+            node_predictions.append(predicted_unsigned)
             num_batches += 1
 
     # Compute overall metrics
@@ -331,24 +404,27 @@ def validate_model_during_training_eign(config: object,
     actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
-    spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
+    spearman_corr, pearson_corr = compute_spearman_pearson(
+        node_predictions, actual_node_targets
+    )
 
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
-        mode_stats_targets = torch.cat(mode_stats_targets)
-        mode_stats_predictions = torch.cat(mode_stats_predictions)
-        return (
-            total_validation_loss,
-            r_squared,
-            spearman_corr,
-            pearson_corr,
-            val_loss_node_predictions,
-            val_loss_mode_stats,
-        )
+        raise NotImplementedError("EIGN model does not support mode stats prediction.")
+        # mode_stats_targets = torch.cat(mode_stats_targets)
+        # mode_stats_predictions = torch.cat(mode_stats_predictions)
+        # return (
+        #     total_validation_loss,
+        #     r_squared,
+        #     spearman_corr,
+        #     pearson_corr,
+        #     val_loss_node_predictions,
+        #     val_loss_mode_stats,
+        # )
     else:
         return total_validation_loss, r_squared, spearman_corr, pearson_corr
- 
-   
+
+
 def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     """
     Compute Spearman and Pearson correlation coefficients.
@@ -370,6 +446,7 @@ def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     pearson_corr, _ = pearsonr(preds, targets)
     return spearman_corr, pearson_corr
 
+
 def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
     """
     Compute R^2 score using PyTorch.
@@ -387,11 +464,13 @@ def compute_r2_torch(preds: torch.Tensor, targets: torch.Tensor) -> torch.Tensor
     r2 = 1 - ss_res / ss_tot
     return r2
 
+
 def compute_r2_torch_with_mean_targets(mean_targets, preds, targets):
     ss_tot = torch.sum((targets - mean_targets) ** 2)
     ss_res = torch.sum((targets - preds) ** 2)
     r2 = 1 - (ss_res / ss_tot)
     return r2
+
 
 def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device = None):
     """
@@ -420,6 +499,6 @@ def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device 
     # Stack predictions and calculate statistics
     predictions = np.stack(predictions, axis=0)  # Shape: (num_samples, num_predictions)
     mean_prediction = predictions.mean(axis=0)  # Mean prediction
-    uncertainty = predictions.std(axis=0)       # Uncertainty (standard deviation)
+    uncertainty = predictions.std(axis=0)  # Uncertainty (standard deviation)
 
     return mean_prediction, uncertainty

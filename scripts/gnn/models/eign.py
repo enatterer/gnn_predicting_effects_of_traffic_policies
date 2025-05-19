@@ -52,7 +52,6 @@ class EIGN(BaseGNN):
         use_dropout: bool = False,
         predict_mode_stats: bool = False,
         dtype: torch.dtype = torch.float32,
-        verbose: bool = False,
         signed_activation_fn=F.tanh,
         unsigned_activation_fn=F.relu,
         **kwargs_block,
@@ -64,7 +63,6 @@ class EIGN(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            verbose=verbose,
         )
 
         self.out_channels_signed = out_channels_signed
@@ -269,6 +267,17 @@ class EIGN(BaseGNN):
                         loss_unsigned = loss_fct(
                             predicted_unsigned,
                             targets_node_predictions_unsigned,
+                        )
+
+                        print("predicted_signed: ", predicted_signed.shape)
+                        print(
+                            "targets_node_predictions_signed: ",
+                            targets_node_predictions_signed.shape,
+                        )
+                        print("predicted_unsigned: ", predicted_unsigned.shape)
+                        print(
+                            "targets_node_predictions_unsigned: ",
+                            targets_node_predictions_unsigned.shape,
                         )
 
                         train_loss = loss_signed + loss_unsigned
