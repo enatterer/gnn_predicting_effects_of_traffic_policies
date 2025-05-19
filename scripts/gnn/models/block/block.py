@@ -194,10 +194,7 @@ class EIGNBlock(nn.Module):
             None,
             None,
         )
-        
-        print(f"block x_signed: {x_signed.shape}")
-        print(f"block x_unsigned: {x_unsigned.shape}\n")
-        
+
         # Convolutions
         if x_signed is not None and x_signed.size(-1) > 0:
             h_signed_signed = self.signed_conv(

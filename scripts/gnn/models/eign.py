@@ -98,7 +98,7 @@ class EIGN(BaseGNN):
             )
         else:
             self.register_buffer("signed_head", None)
-        
+
         if self.out_channels_unsigned:
             self.unsigned_head = nn.Linear(
                 hidden_channels_unsigned, out_channels_unsigned, bias=False
@@ -135,8 +135,7 @@ class EIGN(BaseGNN):
             x_signed = x_signed.to(torch.float32)
         if x_unsigned is not None:
             x_unsigned = x_unsigned.to(torch.float32)
-        
-        print(f"enter forward")
+
         for block in self.blocks:
             x_signed, x_unsigned = block(
                 x_signed=x_signed,
@@ -151,7 +150,6 @@ class EIGN(BaseGNN):
             if x_unsigned is not None:
                 x_unsigned = self.unsigned_activation_fn(x_unsigned)
                 x_unsigned = self.dropout(x_unsigned)
-        print(f"out of forward")
 
         if self.out_channels_signed:
             x_signed = self.signed_head(x_signed)
@@ -243,33 +241,37 @@ class EIGN(BaseGNN):
                         # Ensure inputs to model are float32
                         x_signed = data.x_signed.to(torch.float32)
                         x_unsigned = data.x.to(torch.float32)
-                        
-                        print(f"epoch: {epoch}")
-                        print(f"eign x_signed: {x_signed.shape}")
-                        print(f"eign x_unsigned: {x_unsigned.shape}\n")
-                        
+
+                        # print(f"epoch: {epoch}")
+                        # print(f"eign x_signed: {x_signed.shape}")
+                        # print(f"eign x_unsigned: {x_unsigned.shape}\n")
+
                         eign_output = self(
                             x_signed=x_signed,
                             x_unsigned=x_unsigned,
                             edge_index=data.edge_index,
                             is_directed=data.edge_is_directed,
                         )
-                        predicted_signed, predicted_unsigned = eign_output.signed, eign_output.unsigned
-                        
+                        predicted_signed, predicted_unsigned = (
+                            eign_output.signed,
+                            eign_output.unsigned,
+                        )
+
                         # Ensure predictions and targets are float32
                         predicted_signed = predicted_signed.to(torch.float32)
                         predicted_unsigned = predicted_unsigned.to(torch.float32)
-                        
-                        train_loss = (
-                            loss_fct(
-                                predicted_signed,
-                                targets_node_predictions_signed,
-                            )
-                            + loss_fct(
-                                predicted_unsigned,
-                                targets_node_predictions_unsigned,
-                            )
+
+                        loss_signed = loss_fct(
+                            predicted_signed,
+                            targets_node_predictions_signed,
                         )
+
+                        loss_unsigned = loss_fct(
+                            predicted_unsigned,
+                            targets_node_predictions_unsigned,
+                        )
+
+                        train_loss = loss_signed + loss_unsigned
 
                 # Backward pass
                 train_loss = train_loss.to(dtype=torch.float32)
@@ -296,12 +298,19 @@ class EIGN(BaseGNN):
                         #         "epoch": epoch,
                         #         "train_loss_node_predictions_signed": train_loss_node_predictions_signed.item(),
                         #         "train_loss_node_predictions_unsigned": train_loss_node_predictions_signed.item(),
-                                
+
                         #         "train_loss_mode_stats": train_loss_mode_stats.item(),
                         #     }
                         # )
                     else:
-                        wandb.log({"train_loss": train_loss.item(), "epoch": epoch})
+                        wandb.log(
+                            {
+                                "train_loss": train_loss.item(),
+                                "train_loss_signed": loss_signed.item(),
+                                "train_loss_unsigned": loss_unsigned.item(),
+                                "epoch": epoch,
+                            }
+                        )
 
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
@@ -399,7 +408,7 @@ class EIGN(BaseGNN):
         print("Best validation loss: ", best_val_loss)
         wandb.summary["best_val_loss"] = best_val_loss
         wandb.finish()
-        return val_loss, epoch    
+        return val_loss, epoch
 
     def define_layers(self):
         pass
