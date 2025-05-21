@@ -102,7 +102,7 @@ class TransConv(BaseGNN):
 
         for i in range(len(self.hidden_channels)):
 
-            if self.use_residuals and i > 0:
+            if self.use_residuals and i > 0 and self.hidden_channels[i] == self.hidden_channels[i - 1]:
                 x_0 = x
 
             if self.use_graph_norm:
@@ -113,7 +113,7 @@ class TransConv(BaseGNN):
             x = conv(x, edge_index)
 
             # Makes sense?
-            if self.use_residuals and i > 0:
+            if self.use_residuals and i > 0 and self.hidden_channels[i] == self.hidden_channels[i - 1]:
                 x = x + x_0
 
             x = nn.functional.relu(x)
