@@ -118,7 +118,22 @@ class BaseGNN(nn.Module, ABC):
         from training.help_functions import setup_wandb_metrics
         setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
 
-        for epoch in range(config.num_epochs):
+        if config.continue_training:
+
+            # Load checkpoint
+            checkpoint = torch.load(config.base_checkpoint_path)
+            
+            self.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scaler_state_dict' in checkpoint:
+                scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            
+            best_val_loss = checkpoint['best_val_loss']
+            start_epoch = checkpoint['epoch'] + 1
+            
+            print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
+
+        for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
             super().train()
             optimizer.zero_grad()
 
@@ -241,6 +256,7 @@ class BaseGNN(nn.Module, ABC):
                     'epoch': epoch,
                     'model_state_dict': self.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
+                    'scaler_state_dict': scaler.state_dict(),
                     'best_val_loss': best_val_loss,
                     'val_loss': val_loss,
                 }, checkpoint_path)
