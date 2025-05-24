@@ -437,14 +437,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     elif gnn_arch == "eign":
         return Eign(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "xgb":
-        return XGBoostModel(
-            in_channels=5,
-            use_pos=True,
-            max_depth=6,
-            learning_rate=0.1,
-            n_estimators=100
-        ).to(device)
+    elif gnn_arch == "xgboost":
+        return XGBoostModel(**common_kwargs, **model_kwargs)
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")
 

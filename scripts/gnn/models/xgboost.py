@@ -21,18 +21,20 @@ class XGBoostModel(BaseGNN):
                 num_nodes: int = 31635,
                 use_pos: bool = False,
                 max_depth: int = 6,
-                learning_rate: float = 0.1,
+                lr: float = 0.1,
                 n_estimators: int = 100,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_to_wandb: bool = False):
+                log_to_wandb: bool = False,
+                dropout: float = 0.3, # Unused, but kept for compatibility
+                use_dropout: bool = False): # Unused, but kept for compatibility
     
         # Call parent class constructor
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
-            dropout=0.0,  # XGBoost doesn't use dropout
-            use_dropout=False,
+            dropout=dropout,
+            use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
             log_to_wandb=log_to_wandb)
@@ -41,7 +43,7 @@ class XGBoostModel(BaseGNN):
         self.use_pos = use_pos
         self.num_nodes = num_nodes
         self.max_depth = max_depth
-        self.learning_rate = learning_rate
+        self.lr = lr
         self.n_estimators = n_estimators
 
         # Might give it some sense of Graph structure
@@ -51,18 +53,23 @@ class XGBoostModel(BaseGNN):
         if self.log_to_wandb:
             wandb.config.update({
                 'max_depth': max_depth,
-                'learning_rate': learning_rate,
+                'lr': lr,
                 'n_estimators': n_estimators,
                 'use_pos': use_pos,
                 'in_channels': self.in_channels,
                 'num_nodes': num_nodes
             }, allow_val_change=True)
+
+        # Define XGBoost model
+        self.define_layers()
+
+    def define_layers(self):
         
         # Initialize XGBoost model with multi-output support
         self.model = xgb.XGBRegressor(
-            max_depth=max_depth,
-            learning_rate=learning_rate,
-            n_estimators=n_estimators,
+            max_depth=self.max_depth,
+            learning_rate=self.lr,
+            n_estimators=self.n_estimators,
             objective='reg:squarederror',
             tree_method='hist',  # Use histogram-based algorithm for better performance
             multi_strategy='multi_output_tree'  # Enable multi-precision training
@@ -100,21 +107,19 @@ class XGBoostModel(BaseGNN):
         return torch.tensor(predictions, dtype=self.dtype)
 
     def train_model(self, 
-            config: object = None, 
-            loss_fct: object = None, 
-            optimizer: object = None, 
+            config: object = None, # Unused, but kept for compatibility
+            loss_fct: object = None, # Unused, but kept for compatibility
+            optimizer: object = None, # Unused, but kept for compatibility
             train_dl: object = None, 
             valid_dl: object = None, 
-            device: torch.device = None, 
-            early_stopping: object = None, 
+            device: torch.device = None, # Unused, but kept for compatibility
+            early_stopping: object = None, # Unused, but kept for compatibility
             model_save_path: str = None,
-            scalers_train: dict = None,
-            scalers_validation: dict = None) -> tuple:
+            scalers_train: dict = None, # Unused, but kept for compatibility
+            scalers_validation: dict = None) -> tuple: # Unused, but kept for compatibility
         """
         Custom training method for XGBoost that converts PyTorch data to XGBoost format.
         """
-        if config is None:
-            raise ValueError("Config cannot be None")
 
         # Prepare training data
         X_train = []
@@ -169,9 +174,7 @@ class XGBoostModel(BaseGNN):
         self.model.fit(
             X_train, y_train,
             eval_set=[(X_valid, y_valid)],
-            early_stopping_rounds=config.early_stopping_patience,
-            verbose=True
-        )
+            verbose=True)
 
         # Save the model
         if model_save_path:
