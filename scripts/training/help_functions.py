@@ -27,6 +27,7 @@ from gnn.models.pnc import PNC
 from gnn.models.fc_nn import FC_NN
 from gnn.models.eign import Eign
 from gnn.models.graphSAGE import GraphSAGE
+from gnn.models.xgboost import XGBoostModel
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
 
 def get_available_gpus():
@@ -435,6 +436,15 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
 
     elif gnn_arch == "eign":
         return Eign(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "xgb":
+        return XGBoostModel(
+            in_channels=5,
+            use_pos=True,
+            max_depth=6,
+            learning_rate=0.1,
+            n_estimators=100
+        ).to(device)
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")
 

@@ -58,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="point_net_transf_gat",
                         help="The GNN architecture to use.",
-                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign"])  # Add more as you implement them
+                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
     parser.add_argument("--project_name", type=str, default="TR-C_Benchmarks",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features",
@@ -84,6 +84,9 @@ def main():
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
+    parser.add_argument("--max_depth", type=int, default=6, help="Maximum depth of XGBoost trees.") # xgboost specific
+    parser.add_argument("--learning_rate", type=float, default=0.1, help="Learning rate for XGBoost.") # xgboost specific
+    parser.add_argument("--n_estimators", type=int, default=100, help="Number of trees in XGBoost.") # xgboost specific
 
     args = vars(parser.parse_args())
     set_random_seeds()
