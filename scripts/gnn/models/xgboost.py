@@ -72,7 +72,8 @@ class XGBoostModel(BaseGNN):
             n_estimators=self.n_estimators,
             objective='reg:squarederror',
             tree_method='hist',  # Use histogram-based algorithm for better performance
-            multi_strategy='multi_output_tree'  # Enable multi-precision training
+            multi_strategy='multi_output_tree',  # Enable multi-precision training
+            verbosity=3,  # Set verbosity level
         )
 
     def forward(self, data):
@@ -134,6 +135,9 @@ class XGBoostModel(BaseGNN):
                 
             x = [d.x.flatten() for d in datalist]
             x = torch.stack(x)
+
+            y = [d.y.flatten() for d in datalist]
+            y = torch.stack(y)
             
             if self.use_pos:
                 flattened_pos = [d.pos[:,2,:].flatten() for d in datalist]
@@ -141,7 +145,7 @@ class XGBoostModel(BaseGNN):
                 x = torch.cat((x, flattened_pos), dim=1)
             
             X_train.append(x.cpu().numpy())
-            y_train.append(data.y.cpu().numpy())
+            y_train.append(y.cpu().numpy())
 
         X_train = np.vstack(X_train)
         y_train = np.vstack(y_train)
@@ -158,6 +162,9 @@ class XGBoostModel(BaseGNN):
                 
             x = [d.x.flatten() for d in datalist]
             x = torch.stack(x)
+
+            y = [d.y.flatten() for d in datalist]
+            y = torch.stack(y)
             
             if self.use_pos:
                 flattened_pos = [d.pos[:,2,:].flatten() for d in datalist]
@@ -165,7 +172,7 @@ class XGBoostModel(BaseGNN):
                 x = torch.cat((x, flattened_pos), dim=1)
             
             X_valid.append(x.cpu().numpy())
-            y_valid.append(data.y.cpu().numpy())
+            y_valid.append(y.cpu().numpy())
 
         X_valid = np.vstack(X_valid)
         y_valid = np.vstack(y_valid)
