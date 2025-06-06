@@ -6,6 +6,7 @@ import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+from matplotlib.legend import Legend
 from matplotlib.colors import TwoSlopeNorm, Normalize
 from shapely.geometry import box, Polygon
 from shapely.ops import unary_union
@@ -498,7 +499,6 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
             - 'id': identifier in metrics_by_type
             - 'label': display label
             - 'transform': function to transform the value (or None to use directly)
-            - 'y_pos': y-position of the label
     """
     # Default metrics if none specified
     if selected_metrics is None:
@@ -506,33 +506,33 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
             {
                 'id': 'r_squared',
                 'label': 'R²',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
-            {
-                'id': 'l1_ratio',
-                'label': '1 - MAE/Naive MAE',
-                'transform': lambda x, max_ratio: (1 - x/max_ratio),
-                'y_pos': -0.1
-            },
+            # {
+            #     'id': 'l1_ratio',
+            #     'label': '1 - MAE/Naive MAE',
+            #     'transform': lambda x, max_ratio: (1 - x/max_ratio)
+            # },
+            # {
+            #     'id': 'l1_scaled',
+            #     'label': 'Normalized MAE',
+            #     'transform': lambda x: 1 - x
+            # },
             {
                 'id': 'pearson',
                 'label': 'Pearson\nCorrelation',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
             {
                 'id': 'spearman',
                 'label': 'Spearman\nCorrelation',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
-            {
-                'id': 'error_distribution',
-                'label': 'Error\nDistribution',
-                'transform': lambda x: max(0, (x - 68) / (100 - 68)),
-                'y_pos': -0.05
-            }
+            # {
+            #     'id': 'error_distribution',
+            #     'label': 'Error\nDistribution',
+            #     'transform': lambda x: max(0, (x - 68) / (100 - 68))
+            # }
         ]
     
     # Select specific road types
@@ -550,18 +550,16 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
                        key=lambda x: filtered_metrics[x]['r_squared'],
                        reverse=True)
     
-    # Calculate maximum ratios for normalization if needed
+    # Calculate maximum ratios for normalization
     max_ratios = {}
-    for metric in selected_metrics:
-        if 'ratio' in metric['id']:
-            if metric['id'] == 'mse_ratio':
-                max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
-                                      metrics_by_type[rt]['naive_mse'] 
-                                      for rt in road_types)
-            elif metric['id'] == 'l1_ratio':
-                max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
-                                     metrics_by_type[rt]['naive_l1'] 
-                                     for rt in road_types)
+    
+    max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
+                            metrics_by_type[rt]['naive_mse'] 
+                            for rt in road_types)
+    
+    max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
+                           metrics_by_type[rt]['naive_l1'] 
+                           for rt in road_types)
     
     # Setup plot
     num_vars = len(selected_metrics)
@@ -582,6 +580,14 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
                 elif metric['id'] == 'l1_ratio':
                     ratio = filtered_metrics[road_type]['l1'] / filtered_metrics[road_type]['naive_l1']
                     values.append(metric['transform'](ratio, max_ratios['l1']))
+            if 'scaled' in metric['id']:
+                if metric['id'] == 'l1_scaled':
+                    val = filtered_metrics[road_type]['l1']/metrics_by_type[road_type]['mean_car_vol']
+                    values.append(metric['transform'](val))
+                elif metric['id'] == 'mse_scaled':
+                    val = filtered_metrics[road_type]['mse']/metrics_by_type[road_type]['mean_car_vol']
+                    values.append(metric['transform'](val))
+                
             elif metric['id'] == 'error_distribution':
                 val = filtered_metrics[road_type].get('error_distribution', 68)  # Default to 68 if not found
                 values.append(metric['transform'](val))
@@ -650,6 +656,7 @@ def create_error_vs_variability_scatterplots(metrics_by_type, manual_label_offse
     # Get data
     mse_values = [metrics_by_type[rt]['mse'] for rt in selected_types]
     variance_values = [metrics_by_type[rt]['variance'] for rt in selected_types]
+    n_obs = [metrics_by_type[rt]['number_of_observations'] for rt in selected_types]
     
     # Create plot
     plt.figure(figsize=(12, 8))
@@ -664,28 +671,23 @@ def create_error_vs_variability_scatterplots(metrics_by_type, manual_label_offse
     p = np.poly1d(z)
     x_line = np.linspace(min(variance_values), max(variance_values), 100)
     
-    # ax.plot(x_line, p(x_line), '--', color='#0277bd', alpha=0.8, linewidth=2, 
-    #         label=r'Best fit line for $\sigma^2_{t,b}$ vs. MSE')  # Added label with math formatting
     ax.plot(x_line, p(x_line), '--', color='#0277bd', alpha=0.8, linewidth=2, 
             label=r'Best fit line for variance in the base case vs. MSE')
     
-    # ax.plot(x_line, x_line, '--', color='gray', alpha=0.9, linewidth=2, 
-    #         label=r'$\sigma^2_{t,b}$ (lower bound for MSE)')  # Updated label for clarity
     ax.plot(x_line, x_line, '--', color='gray', alpha=0.9, linewidth=2, 
-        label='Estimation of impact of stochasticity on MSE')  # Updated label for clarity
+            label='Estimation of impact of stochasticity on MSE')
     
     # Plot points
     for i, rt in enumerate(selected_types):
-        ax.scatter(variance_values[i], mse_values[i], color=colors[rt], s=150, label='_nolegend_')
+        size = n_obs[i]/min(n_obs) * 50
+        ax.scatter(variance_values[i], mse_values[i], color=colors[rt], s=size, label='_nolegend_')
         # Manually adjust label locations for each road type if needed
         offset = manual_label_offsets.get(rt, (10, 10))
         ax.annotate(rt, (variance_values[i], mse_values[i]),
-                    xytext=offset, textcoords='offset points', fontsize=16)
+                    xytext=offset, textcoords='offset points', fontsize=15)
     
-    # Labels with larger font size
-    # ax.set_xlabel(r'$\sigma^2_{t,b}$', fontsize=16)
-    ax.set_xlabel('Variance in the Base Case', fontsize=16)
-    ax.set_ylabel('MSE', fontsize=16)
+    ax.set_xlabel('Variance in the Base Case', fontsize=15)
+    ax.set_ylabel('MSE', fontsize=15)
     
     # Set axis limits
     ax.set_ylim(bottom=0, top=max(mse_values) * 1.1)
@@ -696,22 +698,30 @@ def create_error_vs_variability_scatterplots(metrics_by_type, manual_label_offse
     ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True, prune='lower'))
     ax.tick_params(axis='both', which='major', labelsize=14)
     
-    # Add correlation coefficient - moved to lower left corner
-    # pearson_mse_var = stats.pearsonr(variance_values, mse_values)[0]
-    # ax.text(0.02, 0.02, f'Pearson r = {pearson_mse_var:.2f}', 
-    #         transform=ax.transAxes, 
-    #         verticalalignment='bottom',  # Changed from 'top' to 'bottom'
-    #         fontsize=16)
-    
     # Add legend
-    ax.legend(fontsize=14, frameon=True)
+    ax.legend(fontsize=15, frameon=True, loc='upper left')
+
+    # Add a legend for number of observations (dot size scaling)
+    min_obs = min(n_obs)
+    max_obs = max(n_obs)
+
+    argmin_obs = np.argmin(n_obs)
+    argmax_obs = np.argmax(n_obs)
+
+    handles = [
+        Line2D([0], [0], marker='o', linestyle='', color=colors[selected_types[argmin_obs]], label=f"{selected_types[argmin_obs]}: {min_obs:,}", markersize=(50)**0.5),
+        Line2D([0], [0], marker='o', linestyle='', color=colors[selected_types[argmax_obs]], label=f"{selected_types[argmax_obs]}: {max_obs:,}", markersize=((max_obs/min_obs)*50)**0.5)
+    ]
+
+    # Use a broader frame for the legend
+    obs_legend = Legend(ax, handles, [h.get_label() for h in handles],
+                        title=r"Dot Size $\propto$ #observations", loc='lower right', fontsize=15, title_fontsize=15,
+                        frameon=True, framealpha=0.95, borderpad=1.05, labelspacing=1.05, bbox_to_anchor=(1, 0))
     
-    # # Add legend - explicitly positioned in upper right
-    # ax.legend(fontsize=14, frameon=True, 
-    #          loc='upper right',
-    #          bbox_to_anchor=(0.98, 0.98))
+    ax.add_artist(obs_legend)
     
     plt.tight_layout()
     if save_it:
         plt.savefig(result_path + "error_vs_variability_scatterplot_with_line.png", bbox_inches='tight', dpi=300)
+    
     plt.show()
