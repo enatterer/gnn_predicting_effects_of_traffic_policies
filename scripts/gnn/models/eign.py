@@ -15,7 +15,6 @@ from tqdm import tqdm
 import wandb
 import numpy as np
 from .base_gnn import BaseGNN
-from abc import abstractmethod
 from typing import NamedTuple
 
 import torch
@@ -25,7 +24,11 @@ import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 
-from .block import EIGNBlock, EIGNBlockMagneticEdgeLaplacianConv
+from .block import (
+    EIGNBlock,
+    EIGNBlockMagneticEdgeLaplacianConv,
+    EIGNBlockMagneticEdgeLaplacianWithNodeTransformationConv,
+)
 
 from gnn.help_functions import (
     validate_model_during_training_eign,
@@ -172,6 +175,7 @@ class EIGN(BaseGNN):
         model_save_path: str = None,
         scalers_train: dict = None,
         scalers_validation: dict = None,
+        use_signed: bool = False,
     ) -> tuple:
         """
         Overriding train_model method from base_gnn
@@ -206,9 +210,12 @@ class EIGN(BaseGNN):
                 targets_node_predictions_signed = data.y_signed.to(torch.float32)
                 targets_node_predictions_unsigned = data.y.to(torch.float32)
 
-                # x_unscaled = scalers_train["x_scaler"].inverse_transform(
-                #     data.x.detach().clone().cpu().numpy()
-                # )
+                x_unscaled = scalers_train["x_scaler"].inverse_transform(
+                    data.x.detach().clone().cpu().numpy()
+                )
+                x_unscaled_signed = scalers_train["x_signed_scaler"].inverse_transform(
+                    data.x_signed.detach().clone().cpu().numpy()
+                )
 
                 if config.predict_mode_stats:
                     raise NotImplementedError(
@@ -240,10 +247,6 @@ class EIGN(BaseGNN):
                         x_signed = data.x_signed.to(torch.float32)
                         x_unsigned = data.x.to(torch.float32)
 
-                        # print(f"epoch: {epoch}")
-                        # print(f"eign x_signed: {x_signed.shape}")
-                        # print(f"eign x_unsigned: {x_unsigned.shape}\n")
-
                         eign_output = self(
                             x_signed=x_signed,
                             x_unsigned=x_unsigned,
@@ -262,25 +265,16 @@ class EIGN(BaseGNN):
                         loss_signed = loss_fct(
                             predicted_signed,
                             targets_node_predictions_signed,
+                            x_unscaled_signed,
                         )
 
                         loss_unsigned = loss_fct(
                             predicted_unsigned,
                             targets_node_predictions_unsigned,
+                            x_unscaled,
                         )
 
-                        print("predicted_signed: ", predicted_signed.shape)
-                        print(
-                            "targets_node_predictions_signed: ",
-                            targets_node_predictions_signed.shape,
-                        )
-                        print("predicted_unsigned: ", predicted_unsigned.shape)
-                        print(
-                            "targets_node_predictions_unsigned: ",
-                            targets_node_predictions_unsigned.shape,
-                        )
-
-                        train_loss = loss_signed + loss_unsigned
+                        train_loss = loss_signed if use_signed else loss_unsigned
 
                 # Backward pass
                 train_loss = train_loss.to(dtype=torch.float32)
@@ -367,6 +361,7 @@ class EIGN(BaseGNN):
                         loss_func=loss_fct,
                         device=device,
                         scalers_validation=scalers_validation,
+                        use_signed=use_signed,
                     )
                 )
                 wandb.log(

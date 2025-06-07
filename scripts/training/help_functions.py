@@ -232,30 +232,30 @@ def prepare_data_with_graph_features(
             scalers_train["x_scaler"],
             os.path.join(path_to_save_dataloader, "train_x_scaler.pkl"),
         )
-        joblib.dump(
-            scalers_train["pos_scaler"],
-            os.path.join(path_to_save_dataloader, "train_pos_scaler.pkl"),
-        )
+        # joblib.dump(
+        #     scalers_train["pos_scaler"],
+        #     os.path.join(path_to_save_dataloader, "train_pos_scaler.pkl"),
+        # )
         # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
 
         joblib.dump(
             scalers_validation["x_scaler"],
             os.path.join(path_to_save_dataloader, "validation_x_scaler.pkl"),
         )
-        joblib.dump(
-            scalers_validation["pos_scaler"],
-            os.path.join(path_to_save_dataloader, "validation_pos_scaler.pkl"),
-        )
+        # joblib.dump(
+        #     scalers_validation["pos_scaler"],
+        #     os.path.join(path_to_save_dataloader, "validation_pos_scaler.pkl"),
+        # )
         # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
 
         joblib.dump(
             scalers_test["x_scaler"],
             os.path.join(path_to_save_dataloader, "test_x_scaler.pkl"),
         )
-        joblib.dump(
-            scalers_test["pos_scaler"],
-            os.path.join(path_to_save_dataloader, "test_pos_scaler.pkl"),
-        )
+        # joblib.dump(
+        #     scalers_test["pos_scaler"],
+        #     os.path.join(path_to_save_dataloader, "test_pos_scaler.pkl"),
+        # )
         # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))
 
         save_dataloader(test_loader, path_to_save_dataloader + "test_dl.pt")
@@ -286,11 +286,15 @@ def normalize_dataset(dataset_input, node_features):
     )
     print("x features normalized")
 
-    print("Fitting and normalizing pos features...")
-    normalized_data_list, pos_scaler = normalize_pos_features_batched(
+    normalized_data_list, x_signed_scaler = normalize_x_signed_features_batched(
         normalized_data_list
     )
-    print("Pos features normalized")
+
+    print("Fitting and normalizing pos features...")
+    # normalized_data_list, pos_scaler = normalize_pos_features_batched(
+    #     normalized_data_list
+    # )
+    # print("Pos features normalized")
 
     # print("Fitting and normalizing modestats features...")
     # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
@@ -298,7 +302,8 @@ def normalize_dataset(dataset_input, node_features):
 
     scalers_dict = {
         "x_scaler": x_scaler,
-        "pos_scaler": pos_scaler,
+        # "pos_scaler": pos_scaler,
+        "x_signed_scaler": x_signed_scaler,
         # "modestats_scaler": modestats_scaler
     }
     return normalized_data_list, scalers_dict
@@ -450,6 +455,90 @@ def normalize_x_features_with_scaler(
     # One-hot encode highway
     if "HIGHWAY" in node_features:
         one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+
+    return data_list
+
+
+def normalize_x_signed_features_batched(data_list, batch_size=1000):
+    """
+    Normalize the x_signed features (0 mean and unit variance).
+    x_signed typically has shape (num_nodes, 1) for EIGN models.
+    """
+    scaler = StandardScaler()
+
+    # Get number of nodes in the graph
+    num_nodes = (
+        data_list[0].x_signed.shape[0]
+        if hasattr(data_list[0], "x_signed") and data_list[0].x_signed is not None
+        else 0
+    )
+
+    # Skip if no x_signed features
+    if num_nodes == 0:
+        return data_list, None
+
+    # First pass: Fit the scaler
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting x_signed scaler"):
+        batch = data_list[i : i + batch_size]
+        batch_x_signed = np.vstack(
+            [
+                data.x_signed.numpy().reshape(-1, 1)
+                for data in batch
+                if hasattr(data, "x_signed") and data.x_signed is not None
+            ]
+        )
+        if batch_x_signed.size > 0:
+            scaler.partial_fit(batch_x_signed)
+
+    # Second pass: Transform the data
+    for i in tqdm(
+        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
+    ):
+        batch = data_list[i : i + batch_size]
+        for data in batch:
+            if hasattr(data, "x_signed") and data.x_signed is not None:
+                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
+                x_signed_normalized = scaler.transform(x_signed_reshaped)
+                data.x_signed = torch.tensor(
+                    x_signed_normalized.reshape(data.x_signed.shape),
+                    dtype=data.x_signed.dtype,
+                )
+
+    return data_list, scaler
+
+
+def normalize_x_signed_features_with_scaler(
+    data_list, x_signed_scaler, batch_size=1000
+):
+    """
+    Normalize the x_signed features with a given scaler.
+    x_signed typically has shape (num_nodes, 1) for EIGN models.
+    """
+    # Skip if no scaler provided or no x_signed features
+    if x_signed_scaler is None:
+        return data_list
+
+    # Check if any data has x_signed features
+    has_x_signed = any(
+        hasattr(data, "x_signed") and data.x_signed is not None for data in data_list
+    )
+
+    if not has_x_signed:
+        return data_list
+
+    # Transform the data using the provided scaler
+    for i in tqdm(
+        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
+    ):
+        batch = data_list[i : i + batch_size]
+        for data in batch:
+            if hasattr(data, "x_signed") and data.x_signed is not None:
+                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
+                x_signed_normalized = x_signed_scaler.transform(x_signed_reshaped)
+                data.x_signed = torch.tensor(
+                    x_signed_normalized.reshape(data.x_signed.shape),
+                    dtype=data.x_signed.dtype,
+                )
 
     return data_list
 

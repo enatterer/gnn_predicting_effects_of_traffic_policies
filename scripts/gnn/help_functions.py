@@ -61,6 +61,7 @@ class GNN_Loss:
                 )
 
             weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+
             return torch.mean(loss * weights.unsqueeze(1))
 
         else:
@@ -69,11 +70,11 @@ class GNN_Loss:
 
 class EIGN_Loss:
     """
-    Custom loss function for GNN that supports weighted loss computation.
+    Custom loss function for EIGN that supports weighted loss computation.
     The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
     """
 
-    def __init__(self, loss_fct, num_nodes, device):
+    def __init__(self, loss_fct, num_nodes, device, weighted=False):
 
         if loss_fct == "mse":
             self.loss_fct = (
@@ -88,9 +89,35 @@ class EIGN_Loss:
 
         self.num_nodes = num_nodes
         self.device = device
+        self.weighted = weighted
 
-    def __call__(self, y_pred: Tensor, y_true: Tensor) -> Tensor:
-        return self.loss_fct(y_pred, y_true)
+    def __call__(self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None) -> Tensor:
+        if self.weighted:
+            loss = self.loss_fct(y_pred, y_true)
+            weights = x[:, EdgeFeatures.VOL_BASE_CASE]
+
+            for i in range(weights.shape[0] // self.num_nodes):
+                start = i * self.num_nodes
+                end = (i + 1) * self.num_nodes
+                segment = weights[start:end]
+
+                if isinstance(segment, np.ndarray):
+                    max_val = np.max(segment)
+                    if max_val != 0:
+                        weights[start:end] /= max_val
+                elif isinstance(segment, torch.Tensor):
+                    max_val = segment.max()
+                    if max_val != 0:
+                        weights[start:end] /= max_val
+
+            if not isinstance(weights, torch.Tensor):
+                weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
+            else:
+                weights = weights.clone().detach().to(torch.float32).to(self.device)
+
+            return torch.mean(loss * weights.unsqueeze(1))
+        else:
+            return self.loss_fct(y_pred, y_true)
 
 
 class LinearWarmupCosineDecayScheduler:
@@ -162,7 +189,7 @@ def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     target_tensor = mean_y_normalized_tensor.expand_as(y_values_normalized_tensor)
 
     # Compute the MSE
-    loss = loss_fct(y_values_normalized_tensor, target_tensor)
+    loss = loss_fct(y_values_normalized_tensor, target_tensor, x)
     return loss.item()
 
 
@@ -195,7 +222,7 @@ def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     ).to(device)
 
     # Compute the loss
-    loss = loss_fct(actual_difference_vol_car, target_tensor)
+    loss = loss_fct(actual_difference_vol_car, target_tensor, x)
     return loss.item()
 
 
@@ -307,6 +334,7 @@ def validate_model_during_training_eign(
     loss_func: nn.Module,
     device: torch.device,
     scalers_validation: dict,
+    use_signed: bool = False,
 ) -> tuple:
     """
     Validate the model during training, with support for mode stats predictions.
@@ -338,9 +366,13 @@ def validate_model_during_training_eign(
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
-            targets_node_predictions = data.y
+            targets_node_predictions_signed = data.y_signed
+            targets_node_predictions_unsigned = data.y
             x_unscaled = scalers_validation["x_scaler"].inverse_transform(
                 data.x.detach().clone().cpu().numpy()
+            )
+            x_signed_unscaled = scalers_validation["x_signed_scaler"].inverse_transform(
+                data.x_signed.detach().clone().cpu().numpy()
             )
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
@@ -389,14 +421,29 @@ def validate_model_during_training_eign(
                 # mode_stats_targets.append(targets_mode_stats)
                 # mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += (
-                    loss_func(predicted_unsigned, targets_node_predictions).item()
-                    + loss_func(predicted_signed, targets_node_predictions).item()
+                batch_loss = (
+                    loss_func(
+                        predicted_signed,
+                        targets_node_predictions_signed,
+                        x_signed_unscaled,
+                    ).item()
+                    if use_signed
+                    else loss_func(
+                        predicted_unsigned,
+                        targets_node_predictions_unsigned,
+                        x_unscaled,
+                    ).item()
                 )
 
+                val_loss += batch_loss
+
             # Collect predictions and targets
-            actual_node_targets.append(targets_node_predictions)
-            node_predictions.append(predicted_unsigned)
+            if use_signed:
+                actual_node_targets.append(targets_node_predictions_signed)
+                node_predictions.append(predicted_signed)
+            else:
+                actual_node_targets.append(targets_node_predictions_unsigned)
+                node_predictions.append(predicted_unsigned)
             num_batches += 1
 
     # Compute overall metrics

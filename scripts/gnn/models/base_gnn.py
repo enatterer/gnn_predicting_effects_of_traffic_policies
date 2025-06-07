@@ -173,7 +173,6 @@ class BaseGNN(nn.Module, ABC):
                         train_loss = loss_fct(
                             predicted, targets_node_predictions, x_unscaled
                         )
-                        print(predicted.shape, targets_node_predictions.shape)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
