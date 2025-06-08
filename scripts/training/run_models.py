@@ -58,7 +58,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="point_net_transf_gat",
                         help="The GNN architecture to use.",
-                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign"])  # Add more as you implement them
+                        choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
     parser.add_argument("--project_name", type=str, default="TR-C_Benchmarks",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features",
@@ -73,15 +73,17 @@ def main():
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
-    parser.add_argument("--num_epochs", type=int, default=3000, help="Number of epochs to train for.")
+    parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
-    parser.add_argument("--early_stopping_patience", type=int, default=100, help="The early stopping patience.")
+    parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
+    parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
+    parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
 
     args = vars(parser.parse_args())
     set_random_seeds()
@@ -121,23 +123,24 @@ def main():
         gnn_instance = gnn_instance.to(device)  
         loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
         
-        baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
-        baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
-        print("baseline loss mean " + str(baseline_loss_mean_target))
-        print("baseline loss no  " + str(baseline_loss) )
+        ## Not needed now, Naive MSE doesn't tell anything!
+        # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
+        # baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
+        # print("baseline loss mean " + str(baseline_loss_mean_target))
+        # print("baseline loss no  " + str(baseline_loss) )
 
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
-        best_val_loss, best_epoch = gnn_instance.train_model(  
-                    config=config, 
-                    loss_fct=loss_fct,
-                    optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4),
-                    train_dl=train_dl, 
-                    valid_dl=valid_dl,
-                    device=device, 
-                    early_stopping=early_stopping,
-                    model_save_path=model_save_path,
-                    scalers_train=scalers_train,
-                    scalers_validation=scalers_validation)
+        best_val_loss, best_epoch = gnn_instance.train_model(config=config,
+                                                             loss_fct=loss_fct,
+                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                             train_dl=train_dl,
+                                                             valid_dl=valid_dl,
+                                                             device=device,
+                                                             early_stopping=early_stopping,
+                                                             model_save_path=model_save_path,
+                                                             scalers_train=scalers_train,
+                                                             scalers_validation=scalers_validation)
+        
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         
     except Exception as e:

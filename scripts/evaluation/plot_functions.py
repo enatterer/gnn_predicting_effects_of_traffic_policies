@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from matplotlib.lines import Line2D
+from matplotlib.legend import Legend
 from matplotlib.colors import TwoSlopeNorm, Normalize
 from shapely.geometry import box, Polygon
 from shapely.ops import unary_union
@@ -16,15 +18,14 @@ districts = gpd.read_file(os.path.join(project_root, "data", "visualisation", "d
 
 def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font: str = 'Times New Roman', 
                          save_it: bool = False, number_to_plot: int = 0,
-                         zone_to_plot:str= "this_zone",
-                         is_predicted: bool = False, alpha:int=100, 
+                         is_predicted: bool = False,
                          use_fixed_norm:bool=True, 
                          fixed_norm_max: int= 10, known_districts:bool=False, buffer: float = 0.0005, 
                          districts_of_interest: list =[1, 2, 3, 4],
                          plot_contour_lines:bool=False, 
                          plot_policy_roads:bool=False,
                          is_absolute:bool=False,
-                         cmap:str='RdBu',  # Changed default from 'coolwarm' to 'RdBu'
+                         cmap:str='coolwarm',
                          result_path:str=None,
                          scale_type:str="continuous",
                          discrete_thresholds: list = None,
@@ -88,7 +89,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
                                         label="Capacity was decreased on these roads" if with_legend else None,  # Only add label if legend is wanted
                                         zorder=3)
 
-    relevant_area_to_plot = get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf)
+    relevant_area_to_plot = get_relevant_area_to_plot(known_districts, buffer, districts_of_interest, gdf)
     if plot_contour_lines:
         if isinstance(relevant_area_to_plot, set):
             for area in relevant_area_to_plot:
@@ -116,7 +117,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         
         cbar.ax.set_yticklabels(labels)
     else:
-        cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads, with_legend)
+        cbar = plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, cmap, plot_contour_lines, plot_policy_roads, with_legend)
     
     if is_absolute:
         cbar.set_label('Car volume', fontname=font, fontsize=15)
@@ -128,7 +129,7 @@ def plot_combined_output(gdf_input: gpd.GeoDataFrame, column_to_plot: str, font:
         plt.savefig(result_path + identifier + "_" + p, bbox_inches='tight')
     plt.show()
 
-def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines, cmap, plot_policy_roads=False, with_legend=False):
+def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, cmap, plot_contour_lines, plot_policy_roads, with_legend=False):
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
     
@@ -139,7 +140,17 @@ def plotting(font, x_min, y_min, x_max, y_max, fig, ax, norm, plot_contour_lines
         for label in (ax.get_xticklabels() + ax.get_yticklabels()):
             label.set_fontname(font)
             label.set_fontsize(15)
-        ax.legend(prop={'family': font, 'size': 15})
+        
+        # Create custom legend
+        custom_lines = [Line2D([0], [0], color='grey', lw=4, label='Street network')] # Add more lines for other labels as needed
+        
+        if plot_contour_lines:
+            custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased in this section'))
+
+        if plot_policy_roads:
+            custom_lines.append(Line2D([0], [0], color='black', lw=2, label='Capacity was decreased on these roads'))
+        
+        ax.legend(handles=custom_lines,prop={'family': font, 'size': 15})
         ax.set_position([0.1, 0.1, 0.75, 0.75])
     else:
         # Remove absolutely everything from the axes
@@ -183,8 +194,7 @@ def plot_average_prediction_differences(gdf_inputs: list,
                                      result_path: str = None,
                                      loss_fct: str = "l1",
                                      scale_type: str = "continuous",
-                                     discrete_thresholds: list = None, 
-                                     error_threshold: float = 100,
+                                     discrete_thresholds: list = None,
                                      cmap: str = 'RdYlGn_r'):  # Changed default to RdYlGn_r
     """
     Plot the average prediction error across multiple models.
@@ -436,7 +446,7 @@ def get_norm(column_to_plot, use_fixed_norm, fixed_norm_max, gdf):
         norm = TwoSlopeNorm(vmin=gdf[column_to_plot].min(), vcenter=gdf[column_to_plot].median(), vmax=gdf[column_to_plot].max())
     return norm
     
-def get_relevant_area_to_plot(alpha, known_districts, buffer, districts_of_interest, gdf):
+def get_relevant_area_to_plot(known_districts, buffer, districts_of_interest, gdf):
     if known_districts:
         target_districts = districts[districts['c_ar'].isin(districts_of_interest)]
         gdf['intersects_target_districts'] = gdf.apply(lambda row: target_districts.intersects(row.geometry).any(), axis=1)
@@ -489,7 +499,6 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
             - 'id': identifier in metrics_by_type
             - 'label': display label
             - 'transform': function to transform the value (or None to use directly)
-            - 'y_pos': y-position of the label
     """
     # Default metrics if none specified
     if selected_metrics is None:
@@ -497,33 +506,33 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
             {
                 'id': 'r_squared',
                 'label': 'R²',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
-            {
-                'id': 'l1_ratio',
-                'label': '1 - MAE/Naive MAE',
-                'transform': lambda x, max_ratio: (1 - x/max_ratio),
-                'y_pos': -0.1
-            },
+            # {
+            #     'id': 'l1_ratio',
+            #     'label': '1 - MAE/Naive MAE',
+            #     'transform': lambda x, max_ratio: (1 - x/max_ratio)
+            # },
+            # {
+            #     'id': 'l1_scaled',
+            #     'label': 'Normalized MAE',
+            #     'transform': lambda x: 1 - x
+            # },
             {
                 'id': 'pearson',
                 'label': 'Pearson\nCorrelation',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
             {
                 'id': 'spearman',
                 'label': 'Spearman\nCorrelation',
-                'transform': lambda x: max(0, x),
-                'y_pos': -0.05
+                'transform': lambda x: max(0, x)
             },
-            {
-                'id': 'error_distribution',
-                'label': 'Error\nDistribution',
-                'transform': lambda x: max(0, (x - 68) / (100 - 68)),
-                'y_pos': -0.05
-            }
+            # {
+            #     'id': 'error_distribution',
+            #     'label': 'Error\nDistribution',
+            #     'transform': lambda x: max(0, (x - 68) / (100 - 68))
+            # }
         ]
     
     # Select specific road types
@@ -541,18 +550,16 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
                        key=lambda x: filtered_metrics[x]['r_squared'],
                        reverse=True)
     
-    # Calculate maximum ratios for normalization if needed
+    # Calculate maximum ratios for normalization
     max_ratios = {}
-    for metric in selected_metrics:
-        if 'ratio' in metric['id']:
-            if metric['id'] == 'mse_ratio':
-                max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
-                                      metrics_by_type[rt]['naive_mse'] 
-                                      for rt in road_types)
-            elif metric['id'] == 'l1_ratio':
-                max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
-                                     metrics_by_type[rt]['naive_l1'] 
-                                     for rt in road_types)
+    
+    max_ratios['mse'] = max(metrics_by_type[rt]['mse'] / 
+                            metrics_by_type[rt]['naive_mse'] 
+                            for rt in road_types)
+    
+    max_ratios['l1'] = max(metrics_by_type[rt]['l1'] / 
+                           metrics_by_type[rt]['naive_l1'] 
+                           for rt in road_types)
     
     # Setup plot
     num_vars = len(selected_metrics)
@@ -573,6 +580,14 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
                 elif metric['id'] == 'l1_ratio':
                     ratio = filtered_metrics[road_type]['l1'] / filtered_metrics[road_type]['naive_l1']
                     values.append(metric['transform'](ratio, max_ratios['l1']))
+            if 'scaled' in metric['id']:
+                if metric['id'] == 'l1_scaled':
+                    val = filtered_metrics[road_type]['l1']/metrics_by_type[road_type]['mean_car_vol']
+                    values.append(metric['transform'](val))
+                elif metric['id'] == 'mse_scaled':
+                    val = filtered_metrics[road_type]['mse']/metrics_by_type[road_type]['mean_car_vol']
+                    values.append(metric['transform'](val))
+                
             elif metric['id'] == 'error_distribution':
                 val = filtered_metrics[road_type].get('error_distribution', 68)  # Default to 68 if not found
                 values.append(metric['transform'](val))
@@ -609,7 +624,7 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
     
     # Legend
     ax.legend(loc='center left', 
-            bbox_to_anchor=(1.1, 0.5),
+            bbox_to_anchor=(1.11, 0.5),
             fontsize=15,
             markerscale=2,
             frameon=True,
@@ -624,7 +639,7 @@ def create_correlation_radar_plot_sort_by_r2(metrics_by_type, selected_metrics=N
         
     plt.show()
 
-def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, save_it=False, selected_types=None, colors=None):
+def create_error_vs_variability_scatterplots(metrics_by_type, manual_label_offsets = dict(), result_path=None, save_it=False, selected_types=None, colors=None):
     """
     Create scatter plot for MSE vs Variance with blue best-fit line and larger labels
     """
@@ -641,6 +656,7 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
     # Get data
     mse_values = [metrics_by_type[rt]['mse'] for rt in selected_types]
     variance_values = [metrics_by_type[rt]['variance'] for rt in selected_types]
+    n_obs = [metrics_by_type[rt]['number_of_observations'] for rt in selected_types]
     
     # Create plot
     plt.figure(figsize=(12, 8))
@@ -655,49 +671,57 @@ def create_error_vs_variability_scatterplots(metrics_by_type, result_path=None, 
     p = np.poly1d(z)
     x_line = np.linspace(min(variance_values), max(variance_values), 100)
     
-    # ax.plot(x_line, p(x_line), '--', color='#0277bd', alpha=0.8, linewidth=2, 
-    #         label=r'Best fit line for $\sigma^2_{t,b}$ vs. MSE')  # Added label with math formatting
     ax.plot(x_line, p(x_line), '--', color='#0277bd', alpha=0.8, linewidth=2, 
             label=r'Best fit line for variance in the base case vs. MSE')
     
-    # ax.plot(x_line, x_line, '--', color='gray', alpha=0.9, linewidth=2, 
-    #         label=r'$\sigma^2_{t,b}$ (lower bound for MSE)')  # Updated label for clarity
     ax.plot(x_line, x_line, '--', color='gray', alpha=0.9, linewidth=2, 
-        label='Estimation of impact of stochasticity on MSE')  # Updated label for clarity
+            label='Estimation of impact of stochasticity on MSE')
     
     # Plot points
     for i, rt in enumerate(selected_types):
-        ax.scatter(variance_values[i], mse_values[i], color=colors[rt], s=150, label='_nolegend_')
-        ax.annotate(rt, (variance_values[i], mse_values[i]), 
-                   xytext=(10, 10), textcoords='offset points', fontsize=16)
+        size = n_obs[i]/min(n_obs) * 50
+        ax.scatter(variance_values[i], mse_values[i], color=colors[rt], s=size, label='_nolegend_')
+        # Manually adjust label locations for each road type if needed
+        offset = manual_label_offsets.get(rt, (10, 10))
+        ax.annotate(rt, (variance_values[i], mse_values[i]),
+                    xytext=offset, textcoords='offset points', fontsize=15)
     
-    # Labels with larger font size
-    # ax.set_xlabel(r'$\sigma^2_{t,b}$', fontsize=16)
-    ax.set_xlabel('Variance in the Base Case', fontsize=16)
-    ax.set_ylabel('MSE', fontsize=16)
+    ax.set_xlabel('Variance in the Base Case', fontsize=15)
+    ax.set_ylabel('MSE', fontsize=15)
     
-    # Set y-axis to start at 0
-    ax.set_ylim(bottom=0)
+    # Set axis limits
+    ax.set_ylim(bottom=0, top=max(mse_values) * 1.1)
+    ax.set_xlim(left=0, right=max(variance_values) * 1.1)
     
     # Tick labels
+    ax.xaxis.set_major_locator(plt.MaxNLocator(integer=True))
+    ax.yaxis.set_major_locator(plt.MaxNLocator(integer=True, prune='lower'))
     ax.tick_params(axis='both', which='major', labelsize=14)
     
-    # Add correlation coefficient - moved to lower left corner
-    # pearson_mse_var = stats.pearsonr(variance_values, mse_values)[0]
-    # ax.text(0.02, 0.02, f'Pearson r = {pearson_mse_var:.2f}', 
-    #         transform=ax.transAxes, 
-    #         verticalalignment='bottom',  # Changed from 'top' to 'bottom'
-    #         fontsize=16)
-    
     # Add legend
-    ax.legend(fontsize=14, frameon=True)
+    ax.legend(fontsize=15, frameon=True, loc='upper left')
+
+    # Add a legend for number of observations (dot size scaling)
+    min_obs = min(n_obs)
+    max_obs = max(n_obs)
+
+    argmin_obs = np.argmin(n_obs)
+    argmax_obs = np.argmax(n_obs)
+
+    handles = [
+        Line2D([0], [0], marker='o', linestyle='', color=colors[selected_types[argmin_obs]], label=f"{selected_types[argmin_obs]}: {min_obs:,}", markersize=(50)**0.5),
+        Line2D([0], [0], marker='o', linestyle='', color=colors[selected_types[argmax_obs]], label=f"{selected_types[argmax_obs]}: {max_obs:,}", markersize=((max_obs/min_obs)*50)**0.5)
+    ]
+
+    # Use a broader frame for the legend
+    obs_legend = Legend(ax, handles, [h.get_label() for h in handles],
+                        title=r"Dot Size $\propto$ #observations", loc='lower right', fontsize=15, title_fontsize=15,
+                        frameon=True, framealpha=0.95, borderpad=1.05, labelspacing=1.05, bbox_to_anchor=(1, 0))
     
-    # # Add legend - explicitly positioned in upper right
-    # ax.legend(fontsize=14, frameon=True, 
-    #          loc='upper right',
-    #          bbox_to_anchor=(0.98, 0.98))
+    ax.add_artist(obs_legend)
     
     plt.tight_layout()
     if save_it:
         plt.savefig(result_path + "error_vs_variability_scatterplot_with_line.png", bbox_inches='tight', dpi=300)
+    
     plt.show()

@@ -126,6 +126,8 @@ def get_road_type_indices(gdf, tolerance=1e-3):
     tolerance = 1e-3
     
     indices = {
+        "All Roads": gdf.index,
+
         # Static conditions (road types)
         "Trunk Roads": gdf[gdf['highway'].isin([0])].index,
         "Primary Roads": gdf[gdf['highway'].isin([1])].index,
