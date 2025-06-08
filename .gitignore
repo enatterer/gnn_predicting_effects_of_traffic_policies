@@ -4,4 +4,3 @@ logs/
 **/.ipynb_checkpoints/
 **/__pycache__/
 scripts/evaluation/results/
-data2/eign

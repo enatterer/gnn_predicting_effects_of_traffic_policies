@@ -145,7 +145,7 @@ def main():
     parser.add_argument(
         "--end-range",
         type=int,
-        default=5000,
+        default=10000,
         help="Ending range for source directories (default: 5000)",
     )
     parser.add_argument(
