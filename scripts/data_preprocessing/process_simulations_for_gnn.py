@@ -1,53 +1,57 @@
 """
 Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various district combinations),
-convert them to dual line graphs, and compute specified edge features. Save as PyTorch tensor batches for efficient loading and training.
+convert them to dual line graphs, and compute specified edge features. Save as PyTorch Geometric data batches for efficient loading and training.
 
 Here we specify all features, then run_models can be called with a reduced set. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
 """
 
 import os
 import sys
-import glob
-import math
-import random
-import pickle
-import argparse
 from enum import IntEnum
-from collections import defaultdict
 
 import numpy as np
 import pandas as pd
 import geopandas as gpd
-import matplotlib.pyplot as plt
 from tqdm import tqdm
 
 import torch
 from torch_geometric.transforms import LineGraph
-from torch_geometric.data import Data, Batch
+from torch_geometric.data import Data
 
-import fiona
-import alphashape
-import shapely.wkt as wkt
-from shapely.geometry import Polygon, Point
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
-from .processing_io import *
+from data_preprocessing.help_functions import *
+
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Paths to raw simulation data
-sim_input_paths = ["../../data/raw_data/cap_reduction_in_single_roads/"]
+sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_1000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_2000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_3000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_4000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_5000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_1000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_2000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_3000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_4000'),
+                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_5000')]
 
 # Path to save the processed simulation data
-result_path = '../../data/test_data/cap_reduction_in_single_roads'
+result_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
 
 # Path to the basecase links and stats
-basecase_links_path = '../../data/links_and_stats/pop_1pct_basecase_average_output_links.geojson'
-basecase_stats_path = '../../data/links_and_stats/pop_1pct_basecase_average_mode_stats.csv'
+basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_output_links.geojson')
+basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_mode_stats.csv')
 
-# Path to the districts gdf
-discricts_gdf_path = "../../data/visualisation/districts_paris.geojson"
+# Flag to use line graph transformation
+use_linegraph = True
 
 # Flag to use allowed modes or not
 use_allowed_modes = False
-
 
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0
@@ -65,36 +69,33 @@ class EdgeFeatures(IntEnum):
 
 
 # Read all network data into a dictionary of GeoDataFrames
-def compute_result_dic(basecase_links, subdirs):
+def compute_result_dic(basecase_links, networks):
     
     result_dic_output_links = {}
     result_dic_eqasim_trips = {}
     result_dic_output_links["base_network_no_policies"] = basecase_links
     
-    for subdir in tqdm(subdirs, desc="Processing subdirs", unit="subdir"):
+    for network in tqdm(networks, desc="Processing Networks", unit="network"):
         
-        networks = [network for network in os.listdir(subdir) if not network.endswith(".DS_Store")]
-        for network in networks:
-            file_path = os.path.join(subdir, network)
-            policy_key = create_policy_key_1pm(network)
-            df_output_links = read_output_links(file_path)
-            df_eqasim_trips = read_eqasim_trips(file_path)
-            if (df_output_links is not None and df_eqasim_trips is not None):
-                df_output_links.drop(columns=['geometry'], inplace=True)
-                gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
-                gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
-                result_dic_output_links[policy_key] = gdf_extended
-                df_eqasim_trips_list = [df_eqasim_trips]
-                mode_stats = calculate_avg_mode_stats(df_eqasim_trips_list)
-                result_dic_eqasim_trips[policy_key] = mode_stats
+        policy_key = create_policy_key(network)
+        df_output_links = read_output_links(network)
+        df_eqasim_trips = read_eqasim_trips(network)
+        if (df_output_links is not None and df_eqasim_trips is not None):
+            df_output_links.drop(columns=['geometry'], inplace=True)
+            gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
+            gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
+            result_dic_output_links[policy_key] = gdf_extended
+            df_eqasim_trips_list = [df_eqasim_trips]
+            mode_stats = calculate_avg_mode_stats(df_eqasim_trips_list)
+            result_dic_eqasim_trips[policy_key] = mode_stats
     
     return result_dic_output_links, result_dic_eqasim_trips
 
 
-def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
+def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
 
     # PROCESS LINK GEOMETRIES
-    edge_start_point_tensor, stacked_edge_geometries_tensor, district_centroids_tensor_padded, edges_base, nodes = get_link_geometries(links_base_case, districts)
+    _, stacked_edge_geometries_tensor, edges_base, nodes = get_link_geometries(links_base_case)
     
     os.makedirs(save_path, exist_ok=True)
     datalist = []
@@ -106,14 +107,12 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
     freespeed = links_base_case['freespeed'].values
     allowed_modes = encode_modes(links_base_case)
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
-    x = torch.zeros((len(nodes), 1), dtype=torch.float)
-    data = Data(edge_index=edge_index, x=x)
     
     batch_counter = 0
     for key, df in tqdm(result_dic.items(), desc="Processing result_dic", unit="dataframe"):   
         if isinstance(df, pd.DataFrame) and key != "base_network_no_policies":
             gdf = prepare_gdf(df, links_base_case)
-            capacities_new, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
+            _, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
 
             edge_feature_dict = {
                 EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
@@ -139,10 +138,14 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
             # Stack the tensors
             edge_tensor = torch.stack(edge_tensor, dim=1)
             
-            linegraph_data = linegraph_transformation(data)
-            linegraph_data.x = edge_tensor
-            linegraph_data.pos = stacked_edge_geometries_tensor
-            linegraph_data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf)
+            data = Data(edge_index=edge_index)
+            data.num_nodes = edge_index.shape[1] if use_linegraph else len(nodes)
+            if use_linegraph:
+                data = linegraph_transformation(data)
+            
+            data.x = edge_tensor
+            data.pos = stacked_edge_geometries_tensor
+            data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf)
                         
             df_mode_stats = result_dic_mode_stats.get(key)
             if df_mode_stats is not None:
@@ -151,12 +154,12 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
                 numeric_cols = df_mode_stats.select_dtypes(include=[np.number]).columns
                 mode_stats_diff = df_mode_stats[numeric_cols].values - gdf_basecase_mean_mode_stats[numeric_cols_base_case].values 
                 mode_stats_tensor = torch.tensor(mode_stats_diff, dtype=torch.float)
-                linegraph_data.mode_stats_diff = mode_stats_tensor
+                data.mode_stats_diff = mode_stats_tensor
                 mode_stats_diff_perc = mode_stats_tensor / gdf_basecase_mean_mode_stats[numeric_cols_base_case].values *100
-                linegraph_data.mode_stats_diff_perc = mode_stats_diff_perc
+                data.mode_stats_diff_perc = mode_stats_diff_perc
 
-            if linegraph_data.validate(raise_on_error=True):
-                datalist.append(linegraph_data)
+            if data.validate(raise_on_error=True):
+                datalist.append(data)
                 batch_counter += 1
 
                 # Save intermediate result every batch_size data points
@@ -175,49 +178,23 @@ def process_result_dic(result_dic, result_dic_mode_stats, districts, save_path=N
 
 def main():
 
-    subdirs = list()
+    networks = list()
 
     for path in sim_input_paths:
-
-        subdirs_pattern = os.path.join(path, 'output_networks_*')
-        subdirs += list(set(glob.glob(subdirs_pattern)))
+        networks += [os.path.join(path, network) for network in os.listdir(path)]
     
-    subdirs.sort()
+    networks = [network for network in networks if os.path.isdir(network) and not network.endswith(".DS_Store")]
+    networks.sort()
 
     gdf_basecase_links = gpd.read_file(basecase_links_path)
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
     gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
-    
-    districts = gpd.read_file(discricts_gdf_path)
 
-    result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, subdirs=subdirs)
+    result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks)
     base_gdf = result_dic_output_links["base_network_no_policies"]
-    districts['district_centroid'] = districts['geometry'].centroid
-    links_gdf_with_districts = gpd.sjoin(base_gdf, districts, how='left', op='intersects')
-
-    # Group by edge and aggregate the district names
-    links_gdf_with_districts = links_gdf_with_districts.groupby('link').agg({
-        'from_node': 'first',
-        'to_node': 'first',
-        'length': 'first',
-        'freespeed': 'first',
-        'capacity': 'first',
-        'lanes': 'first',
-        'modes': 'first',
-        'vol_car': 'first',
-        'highway': 'first',
-        'geometry': 'first',
-        'c_ar': lambda x: list(x.dropna()),
-        'district_centroid': lambda x: list(x.dropna()),
-        'perimetre': lambda x: list(x.dropna()),
-        'surface': lambda x: list(x.dropna()),
-    }).reset_index()
-
-    # # Analyze results
-    # analyze_geodataframes(result_dic=result_dic_output_links, consider_only_highway_edges=True)
 
     gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
-    process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, districts=districts, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
+    process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
 
 
 if __name__ == '__main__':
