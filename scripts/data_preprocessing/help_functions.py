@@ -122,6 +122,57 @@ def compute_target_tensor_only_edge_features(vol_base_case, gdf):
     edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
     return torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
 
+def compute_signed_target_tensor_only_edge_features(
+    net_flow_base_case, gdf, edges_base
+):
+    # Use auto-optimized computation for much better performance
+    net_flow = compute_net_flow_vectorized(
+        gdf, edges_base, "from_node", "to_node", "vol_car"
+    )
+    difference = net_flow - net_flow_base_case
+    return torch.tensor(difference, dtype=torch.float).unsqueeze(1)
+
+
+def compute_net_flow_vectorized(
+    df, edges_base, from_col="from_idx", to_col="to_idx", vol_col="vol_car"
+):
+    """
+    Highly optimized vectorized computation of net flow using numpy operations.
+    Parameters:
+    -----------
+    df : DataFrame
+        DataFrame with from/to node indices and volume data
+    edges_base : array
+        Array of edge pairs (from_idx, to_idx)
+    from_col, to_col, vol_col : str
+        Column names for from node, to node, and volume
+    Returns:
+    --------
+    net_flow : numpy array
+        Net flow for each edge in edges_base
+    """
+    # Convert to numpy arrays for faster operations
+    from_nodes = df[from_col].values
+    to_nodes = df[to_col].values
+    volumes = df[vol_col].values
+
+    # Create a dictionary mapping (from, to) -> volume for faster lookup
+    # Use a more efficient approach with numpy arrays
+    edge_dict = {}
+    for i in range(len(from_nodes)):
+        edge_dict[(from_nodes[i], to_nodes[i])] = volumes[i]
+
+    # Vectorized computation
+    edges_array = np.array(edges_base)
+    forward_flows = np.array(
+        [edge_dict.get((edge[0], edge[1]), 0.0) for edge in edges_array]
+    )
+    backward_flows = np.array(
+        [edge_dict.get((edge[1], edge[0]), 0.0) for edge in edges_array]
+    )
+
+    return forward_flows - backward_flows
+
 def get_basic_edge_attributes(capacity_base_case, gdf):
     capacities_new = np.where(gdf['modes'].str.contains('car'), gdf['capacity'], 0)
     capacity_reduction = capacities_new - capacity_base_case
