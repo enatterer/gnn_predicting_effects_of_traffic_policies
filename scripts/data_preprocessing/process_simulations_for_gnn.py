@@ -25,33 +25,13 @@ if scripts_path not in sys.path:
 
 from data_preprocessing.help_functions import *
 
-# Get the absolute path to the project root
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-
-# Paths to raw simulation data
-sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_1000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_2000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_3000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_4000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'exp_dist_not_connected_5k', 'output_networks_5000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_1000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_2000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_3000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_4000'),
-                   os.path.join(project_root, 'data', 'raw_data', 'norm_dist_not_connected_5k', 'output_networks_5000')]
-
-# Path to save the processed simulation data
-result_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
-
-# Path to the basecase links and stats
-basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_output_links.geojson')
-basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_mode_stats.csv')
-
-# Flag to use line graph transformation
-use_linegraph = True
-
-# Flag to use allowed modes or not
-use_allowed_modes = False
+#control center
+seed = 1 # Seed for the simulation
+hex_sizes = [500, 1000, 2000] # Hexagon sizes to process
+required_modes_on_links = ['car', 'car_passenger'] # Capacity will be reduced on links that have at least one of these modes
+use_linegraph = True # Flag to use line graph transformation
+use_allowed_modes = False # Flag to use allowed modes or not
+required_batch_size = 1 # Batch size for saving the data
 
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0
@@ -91,6 +71,13 @@ def compute_result_dic(basecase_links, networks):
     
     return result_dic_output_links, result_dic_eqasim_trips
 
+def get_capacity_base_case(links_base_case, required_modes_on_links):
+    mode_masks = [links_base_case['modes'].str.contains(mode) for mode in required_modes_on_links]
+    combined_mask = mode_masks[0]
+    for mask in mode_masks[1:]:
+        combined_mask = combined_mask | mask
+    capacity_base_case = np.where(combined_mask, links_base_case['capacity'], 0)
+    return capacity_base_case
 
 def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
 
@@ -102,7 +89,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_
     linegraph_transformation = LineGraph()
     
     vol_base_case = links_base_case['vol_car'].values
-    capacity_base_case = np.where(links_base_case['modes'].str.contains('car'), links_base_case['capacity'], 0)
+    capacity_base_case = get_capacity_base_case(links_base_case, required_modes_on_links)
     length = links_base_case['length'].values
     freespeed = links_base_case['freespeed'].values
     allowed_modes = encode_modes(links_base_case)
@@ -112,7 +99,7 @@ def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_
     for key, df in tqdm(result_dic.items(), desc="Processing result_dic", unit="dataframe"):   
         if isinstance(df, pd.DataFrame) and key != "base_network_no_policies":
             gdf = prepare_gdf(df, links_base_case)
-            _, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf)
+            _, capacity_reduction, highway, freespeed =  get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
 
             edge_feature_dict = {
                 EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
@@ -177,24 +164,37 @@ def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_
 
 
 def main():
-
-    networks = list()
-
-    for path in sim_input_paths:
-        networks += [os.path.join(path, network) for network in os.listdir(path)]
     
-    networks = [network for network in networks if os.path.isdir(network) and not network.endswith(".DS_Store")]
-    networks.sort()
+    cities = ['rosenheim']
+    for city in cities:
+        # Get the absolute path to the project root
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+        # Paths to raw simulation data
+        sim_input_paths = [os.path.join(project_root, 'inductive_gnn_data', 'raw_data', city, f'{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes]
+        # Path to save the processed simulation data
+        result_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', city)
 
-    gdf_basecase_links = gpd.read_file(basecase_links_path)
-    gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:4326", allow_override=True)
-    gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
+        # Path to the basecase links and stats
+        basecase_links_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_output_links.geojson')
+        basecase_stats_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_trips.csv')
+        
+        networks = list()
+    
+        for path in sim_input_paths:
+            networks += [os.path.join(path, network) for network in os.listdir(path)]
+        
+        networks = [network for network in networks if os.path.isdir(network) and not network.endswith(".DS_Store")]
+        networks.sort()
 
-    result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks)
-    base_gdf = result_dic_output_links["base_network_no_policies"]
+        gdf_basecase_links = gpd.read_file(basecase_links_path)
+        gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True)
+        gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
 
-    gdf_basecase_mean_mode_stats.rename(columns={'avg_total_travel_time': 'total_travel_time', 'avg_total_routed_distance': 'total_routed_distance', 'avg_trip_count': 'trip_count'}, inplace=True)
-    process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, save_path=result_path, batch_size=50, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
+        result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks)
+        base_gdf = result_dic_output_links["base_network_no_policies"]
+
+        gdf_basecase_mean_mode_stats.rename(columns={'avg_travel_time_seconds': 'total_travel_time_seconds', 'avg_routed_distance(routed)': 'total_routed_distance_meters', 'average_trip_count': 'trip_count'}, inplace=True)
+        process_result_dic(result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, save_path=result_path, batch_size=required_batch_size, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats)
 
 
 if __name__ == '__main__':

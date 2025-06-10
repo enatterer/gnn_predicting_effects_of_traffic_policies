@@ -7,9 +7,9 @@ import geopandas as gpd
 import torch
 
 # Get the absolute path to the project root
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
-districts_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
-districts = gpd.read_file(districts_path)
+#project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+#districts_path = os.path.join(project_root, 'data', 'visualisation', 'districts_paris.geojson')
+#districts = gpd.read_file(districts_path)
 
 # Custom mapping for highway types
 highway_mapping = {
@@ -26,10 +26,11 @@ highway_mapping = {
 def create_policy_key(folder_name):
     # Extract the relevant part of the folder name
     base_name = os.path.basename(folder_name)  # Get the base name of the file or folder
-    parts = base_name.split('_')[1:]  # Ignore the first part ('network')
-    district_info = '_'.join(parts)
-    districts = district_info.split('_')
-    return f"Policy introduced in Arrondissement(s) {', '.join(districts)}"
+    parts = base_name.split('_')[-1]  # Ignore the first part ('network')
+    hex_size_name = os.path.basename(os.path.dirname(folder_name)) # Get the hexagon size name
+    hex_size_name = hex_size_name.split('_')[2]
+    print(f"Policy introduced in Hexagon,scenario {parts}, hexagon size {hex_size_name}")   
+    return (hex_size_name, parts)
     
 # Function to read and convert CSV.GZ to GeoDataFrame
 def read_output_links(folder):
@@ -37,7 +38,7 @@ def read_output_links(folder):
     if os.path.exists(file_path):
         try:
             # Read the CSV file with the correct delimiter
-            df = pd.read_csv(file_path, delimiter=';')
+            df = pd.read_csv(file_path, delimiter=';',low_memory=False)
             return df
         except Exception:
             print("empty data error" + file_path)
@@ -110,7 +111,7 @@ def read_eqasim_trips(folder):
     file_path = os.path.join(folder, 'eqasim_trips.csv')
     if os.path.exists(file_path):
         try:
-            df = pd.read_csv(file_path, delimiter=';')
+            df = pd.read_csv(file_path, delimiter=';',low_memory=False)
             return df
         except Exception:
             print("empty data error" + file_path)
@@ -122,12 +123,18 @@ def compute_target_tensor_only_edge_features(vol_base_case, gdf):
     edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
     return torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
 
-def get_basic_edge_attributes(capacity_base_case, gdf):
-    capacities_new = np.where(gdf['modes'].str.contains('car'), gdf['capacity'], 0)
+def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
+    # Create a mask for each required mode and combine with OR logic
+    mode_masks = [gdf['modes'].str.contains(mode) for mode in required_modes_on_links]
+    combined_mask = mode_masks[0]
+    for mask in mode_masks[1:]:
+        combined_mask = combined_mask | mask
+    
+    capacities_new = np.where(combined_mask, gdf['capacity'], 0)
     capacity_reduction = capacities_new - capacity_base_case
     highway = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
-    freespeed = np.where(gdf['modes'].str.contains('car'), gdf['freespeed'], 0)
-    return capacities_new,capacity_reduction,highway,freespeed
+    freespeed = np.where(combined_mask, gdf['freespeed'], 0)
+    return capacities_new, capacity_reduction, highway, freespeed
 
 def prepare_gdf(df, gdf_input):
     gdf = gdf_input[['link', 'geometry']].merge(df, on='link', how='left')
