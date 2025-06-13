@@ -13,14 +13,15 @@ import torch
 
 # Custom mapping for highway types
 highway_mapping = {
-    'trunk': 0, 'trunk_link': 0, 'motorway_link': 0,
+    'trunk': 0, 'trunk_link': 0, 'motorway_link': 0,'motorway': 0,
     'primary': 1, 'primary_link': 1,
     'secondary': 2, 'secondary_link': 2,
     'tertiary': 3, 'tertiary_link': 3,
     'residential': 4, 'living_street': 5,
     'pedestrian': 6, 'service': 7,
     'construction': 8, 'unclassified': 9,
-    'pt': -1, 
+    'busway': -1, 'platform': -1, 'track': -1, 'bus_stop': -1,
+    'path': -1
 }
     
 def create_policy_key(folder_name):
@@ -97,11 +98,14 @@ def encode_modes(gdf):
     """Encode the 'modes' attribute based on specific strings."""
     modes_conditions = {
         'car': gdf['modes'].str.contains('car', case=False, na=False).astype(int),
+        'car_passenger': gdf['modes'].str.contains('car_passenger', case=False, na=False).astype(int),
         'bus': gdf['modes'].str.contains('bus', case=False, na=False).astype(int),
         'pt': gdf['modes'].str.contains('pt', case=False, na=False).astype(int),
         'train': gdf['modes'].str.contains('train', case=False, na=False).astype(int),
+        'tram': gdf['modes'].str.contains('tram', case=False, na=False).astype(int),
         'rail': gdf['modes'].str.contains('rail', case=False, na=False).astype(int),
-        'subway': gdf['modes'].str.contains('subway', case=False, na=False).astype(int)
+        'subway': gdf['modes'].str.contains('subway', case=False, na=False).astype(int),
+        'funicular': gdf['modes'].str.contains('funicular', case=False, na=False).astype(int)
     }
     modes_encoded = pd.DataFrame(modes_conditions)
     tensor_list = [torch.tensor(modes_encoded[col].values, dtype=torch.float) for col in modes_encoded.columns]
@@ -130,10 +134,10 @@ def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
     for mask in mode_masks[1:]:
         combined_mask = combined_mask | mask
     
-    capacities_new = np.where(combined_mask, gdf['capacity'], 0)
+    capacities_new = np.where(combined_mask, gdf['capacity'], 0) # capacity is 0 for links that are not used by the required modes
     capacity_reduction = capacities_new - capacity_base_case
     highway = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
-    freespeed = np.where(combined_mask, gdf['freespeed'], 0)
+    freespeed = np.where(combined_mask, gdf['freespeed'], 0) # freespeed is 0 for links that are not used by the required modes
     return capacities_new, capacity_reduction, highway, freespeed
 
 def prepare_gdf(df, gdf_input):

@@ -178,7 +178,7 @@ def main():
         basecase_links_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_output_links.geojson')
         basecase_stats_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_trips.csv')
         
-        networks = list()
+        networks = list() # list of paths to the simulation data
     
         for path in sim_input_paths:
             networks += [os.path.join(path, network) for network in os.listdir(path)]
