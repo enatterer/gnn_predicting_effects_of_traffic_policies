@@ -309,8 +309,6 @@ class EIGN(BaseGNN):
                         wandb.log(
                             {
                                 "train_loss": train_loss.item(),
-                                "train_loss_signed": loss_signed.item(),
-                                "train_loss_unsigned": loss_unsigned.item(),
                                 "epoch": epoch,
                             }
                         )

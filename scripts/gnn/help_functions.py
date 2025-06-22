@@ -65,7 +65,7 @@ class EIGN_Loss:
             self.loss_fct = (
                 torch.nn.MSELoss(reduction="mean").to(dtype=torch.float32).to(device)
             )
-        elif self.config.loss_fct == "l1":
+        elif loss_fct == "l1":
             self.loss_fct = (
                 torch.nn.L1Loss(reduction="mean").to(dtype=torch.float32).to(device)
             )
