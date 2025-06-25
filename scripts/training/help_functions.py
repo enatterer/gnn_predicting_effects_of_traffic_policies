@@ -410,16 +410,6 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dtype": torch.float32,
         "log_to_wandb": True} # During training, yes
 
-    egnn_kwargs = {
-        "in_channels_signed": config.in_channels_signed,
-        "out_channels_signed": config.out_channels_signed,
-        "in_channels_unsigned": config.in_channels_unsigned,
-        "out_channels_unsigned": config.out_channels_unsigned,
-        "hidden_channels_signed": config.hidden_channels_signed,
-        "hidden_channels_unsigned": config.hidden_channels_unsigned,
-        "num_blocks": config.num_blocks
-    }
-
     if gnn_arch == "point_net_transf_gat":
         return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
     
@@ -445,7 +435,7 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         return FC_NN(**common_kwargs, **model_kwargs).to(device)
 
     elif gnn_arch == "eign":
-        return EIGNLaplacianConv(**egnn_kwargs, **model_kwargs).to(device)
+        return EIGNLaplacianConv(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "xgboost":
         return XGBoostModel(**common_kwargs, **model_kwargs)

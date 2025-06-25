@@ -21,7 +21,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from training.help_functions import *
-from gnn.help_functions import GNN_Loss, EIGN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
+from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -84,13 +84,6 @@ def main():
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
-    parser.add_argument("--in_channels_signed", type=int, default=1, help="Number of input channels for signed features (EIGN).")
-    parser.add_argument("--out_channels_signed", type=int, default=1, help="Number of output channels for signed features (EIGN).")
-    parser.add_argument("--in_channels_unsigned", type=int, default=5, help="Number of input channels for unsigned features (EIGN).")
-    parser.add_argument("--out_channels_unsigned", type=int, default=1, help="Number of output channels for unsigned features (EIGN).")
-    parser.add_argument("--hidden_channels_signed", type=int, default=64, help="Number of hidden channels for signed features (EIGN).")
-    parser.add_argument("--hidden_channels_unsigned", type=int, default=64, help="Number of hidden channels for unsigned features (EIGN).")
-    parser.add_argument("--num_blocks", type=int, default=4, help="Number of blocks (EIGN).")
 
     args = vars(parser.parse_args())
     set_random_seeds()
@@ -128,22 +121,7 @@ def main():
                                         device=device)
         
         gnn_instance = gnn_instance.to(device)  
-        loss_fct = loss_fct = (
-            EIGN_Loss(
-                config.loss_fct,
-                datalist[0].x.shape[0],
-                device,
-                config.use_weighted_loss,
-            )
-            if config.gnn_arch == "eign"
-            else GNN_Loss(
-                config.loss_fct,
-                datalist[0].x.shape[0],
-                device,
-                config.use_weighted_loss,
-            )
-        )
-
+        loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
 
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)

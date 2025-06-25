@@ -27,7 +27,7 @@ class GNN_Loss:
 
         if loss_fct == 'mse':
             self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
-        elif self.config.loss_fct == 'l1':
+        elif loss_fct == 'l1':
             self.loss_fct = torch.nn.L1Loss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
         else:
             raise ValueError(f"Loss function {loss_fct} not supported.")
@@ -45,66 +45,15 @@ class GNN_Loss:
 
             # Normalize by the maximum value in each sample
             for i in range(weights.shape[0] // self.num_nodes):
-                weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+                max_val = np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+                if max_val != 0:
+                    weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= max_val
 
             weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
             return torch.mean(loss * weights.unsqueeze(1))
 
         else:
             return self.loss_fct(y_pred, y_true)
-
-class EIGN_Loss:
-    """
-    Custom loss function for EIGN that supports weighted loss computation.
-    The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
-    """
-
-    def __init__(self, loss_fct, num_nodes, device, weighted=False):
-
-        if loss_fct == "mse":
-            self.loss_fct = (
-                torch.nn.MSELoss(reduction="mean").to(dtype=torch.float32).to(device)
-            )
-        elif loss_fct == "l1":
-            self.loss_fct = (
-                torch.nn.L1Loss(reduction="mean").to(dtype=torch.float32).to(device)
-            )
-        else:
-            raise ValueError(f"Loss function {loss_fct} not supported.")
-
-        self.num_nodes = num_nodes
-        self.device = device
-        self.weighted = weighted
-
-    def __call__(self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None) -> Tensor:
-        if self.weighted:
-            loss = self.loss_fct(y_pred, y_true)
-            weights = x[:, EdgeFeatures.VOL_BASE_CASE]
-
-            for i in range(weights.shape[0] // self.num_nodes):
-                start = i * self.num_nodes
-                end = (i + 1) * self.num_nodes
-                segment = weights[start:end]
-
-                if isinstance(segment, np.ndarray):
-                    max_val = np.max(segment)
-                    if max_val != 0:
-                        weights[start:end] /= max_val
-                elif isinstance(segment, torch.Tensor):
-                    max_val = segment.max()
-                    if max_val != 0:
-                        weights[start:end] /= max_val
-
-            if not isinstance(weights, torch.Tensor):
-                weights = torch.tensor(weights, dtype=torch.float32, device=self.device)
-            else:
-                weights = weights.clone().detach().to(torch.float32).to(self.device)
-
-            return torch.mean(loss * weights.unsqueeze(1))
-        else:
-            return self.loss_fct(y_pred, y_true)
-
-
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
                  initial_lr: float, 

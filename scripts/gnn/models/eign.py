@@ -10,6 +10,18 @@ The parameters UseMonteCarloDropout and PredictModeStats may be implemented in t
 import torch
 from gnn.models.base_gnn import BaseGNN
 
+
+## Add these here, in the init method
+## With default values. If needed to be changed, they can be passed as kwargs to training.help_functions.create_gnn_model
+
+# parser.add_argument("--in_channels_signed", type=int, default=1, help="Number of input channels for signed features (EIGN).")
+# parser.add_argument("--out_channels_signed", type=int, default=1, help="Number of output channels for signed features (EIGN).")
+# parser.add_argument("--in_channels_unsigned", type=int, default=5, help="Number of input channels for unsigned features (EIGN).")
+# parser.add_argument("--out_channels_unsigned", type=int, default=1, help="Number of output channels for unsigned features (EIGN).")
+# parser.add_argument("--hidden_channels_signed", type=int, default=64, help="Number of hidden channels for signed features (EIGN).")
+# parser.add_argument("--hidden_channels_unsigned", type=int, default=64, help="Number of hidden channels for unsigned features (EIGN).")
+# parser.add_argument("--num_blocks", type=int, default=4, help="Number of blocks (EIGN).")
+
 class Eign(BaseGNN):
     def __init__(self, 
                 in_channels: int = 5, 
