@@ -103,7 +103,8 @@ def main():
                                                                                                   batch_size=args['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
                                                                                                   use_all_features=args['use_all_features'],
-                                                                                                  use_bootstrapping=args['use_bootstrapping'])
+                                                                                                  use_bootstrapping=args['use_bootstrapping'],
+                                                                                                  is_eign=args['gnn_arch'] == "eign")
         
         # Create WandB config
         config = setup_wandb(args)

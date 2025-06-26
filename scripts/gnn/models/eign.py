@@ -1,41 +1,66 @@
-'''
+"""
 This file implements the architecture from the paper:
 "EIGN: Efficient and Interpretable Graph Neural Networks" (https://arxiv.org/abs/2410.16935)
 The implementation can be found here: https://github.com/dfuchsgruber/eign/tree/main
 As all models in this repository, this model is a Graph Neural Network (GNN) that predicts the effects of traffic policies.
 
 The parameters UseMonteCarloDropout and PredictModeStats may be implemented in the future.
-'''
+"""
+
+import os
+import sys
+from abc import ABC, abstractmethod
+
+from tqdm import tqdm
+import wandb
+import numpy as np
+from .base_gnn import BaseGNN
+from typing import NamedTuple
 
 import torch
-from gnn.models.base_gnn import BaseGNN
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.optim as optim
+from torch.cuda.amp import GradScaler, autocast
+from torch.utils.data import DataLoader
+
+from gnn.models.block import (
+    EIGNBlock,
+    EIGNBlockMagneticEdgeLaplacianConv,
+)
+
+from gnn.help_functions import (
+    validate_model_during_training_eign,
+    LinearWarmupCosineDecayScheduler,
+)
 
 
-## Add these here, in the init method
-## With default values. If needed to be changed, they can be passed as kwargs to training.help_functions.create_gnn_model
+class EIGNOutput(NamedTuple):
+    signed: torch.Tensor | None
+    unsigned: torch.Tensor | None
 
-# parser.add_argument("--in_channels_signed", type=int, default=1, help="Number of input channels for signed features (EIGN).")
-# parser.add_argument("--out_channels_signed", type=int, default=1, help="Number of output channels for signed features (EIGN).")
-# parser.add_argument("--in_channels_unsigned", type=int, default=5, help="Number of input channels for unsigned features (EIGN).")
-# parser.add_argument("--out_channels_unsigned", type=int, default=1, help="Number of output channels for unsigned features (EIGN).")
-# parser.add_argument("--hidden_channels_signed", type=int, default=64, help="Number of hidden channels for signed features (EIGN).")
-# parser.add_argument("--hidden_channels_unsigned", type=int, default=64, help="Number of hidden channels for unsigned features (EIGN).")
-# parser.add_argument("--num_blocks", type=int, default=4, help="Number of blocks (EIGN).")
 
-class Eign(BaseGNN):
-    def __init__(self, 
-                in_channels: int = 5, 
-                out_channels: int = 1, 
-                dropout: float = 0.3, 
-                use_dropout: bool = False,
-                predict_mode_stats: bool = False,
-                dtype: torch.dtype = torch.float32,
-                log_to_wandb: bool = False):
-        
-        # Call parent class constructor
+class EIGN(BaseGNN):
+    def __init__(
+        self,
+        in_channels_signed: int = 1,
+        out_channels_signed: int = 1,
+        hidden_channels_signed: int = 64,
+        in_channels_unsigned: int = 5,
+        out_channels_unsigned: int = 1,
+        hidden_channels_unsigned: int = 64,
+        num_blocks: int = 4,
+        dropout: float = 0.1,
+        use_dropout: bool = False,
+        predict_mode_stats: bool = False,
+        dtype: torch.dtype = torch.float32,
+        signed_activation_fn=F.tanh,
+        unsigned_activation_fn=F.relu,
+        **kwargs_block,
+    ):
         super().__init__(
-            in_channels=in_channels,
-            out_channels=out_channels,
+            in_channels=1,
+            out_channels=1,
             dropout=dropout,
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
@@ -283,6 +308,8 @@ class Eign(BaseGNN):
                         wandb.log(
                             {
                                 "train_loss": train_loss.item(),
+                                "train_loss_signed": loss_signed.item(),
+                                "train_loss_unsigned": loss_unsigned.item(),
                                 "epoch": epoch,
                             }
                         )
@@ -388,6 +415,31 @@ class Eign(BaseGNN):
 
     def define_layers(self):
         pass
-    
+
     def initialize_weights(self):
         pass
+
+
+class EIGNLaplacianConv(EIGN):
+    def initialize_block(
+        self,
+        in_channels_signed: int,
+        out_channels_signed: int,
+        in_channels_unsigned: int,
+        out_channels_unsigned: int,
+        signed_activation_fn=F.tanh,
+        unsigned_activation_fn=F.relu,
+        *args,
+        **kwargs,
+    ) -> EIGNBlock:
+        # Remove conflicting keys if present
+        filtered_kwargs = {k: v for k, v in kwargs.items() if k not in ['log_to_wandb','in_channels', 'out_channels']}
+        return EIGNBlockMagneticEdgeLaplacianConv(
+            in_channels_signed=in_channels_signed,
+            out_channels_signed=out_channels_signed,
+            in_channels_unsigned=in_channels_unsigned,
+            out_channels_unsigned=out_channels_unsigned,
+            signed_activation_fn=signed_activation_fn,
+            unsigned_activation_fn=unsigned_activation_fn,
+            **filtered_kwargs,
+        )
