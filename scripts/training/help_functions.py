@@ -25,7 +25,7 @@ from gnn.models.gat import GAT
 from gnn.models.trans_conv import TransConv
 from gnn.models.pnc import PNC
 from gnn.models.fc_nn import FC_NN
-from gnn.models.eign import Eign
+from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.xgboost import XGBoostModel
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
@@ -110,7 +110,7 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping):
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping, is_eign=False):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
@@ -137,15 +137,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
                              "LENGTH"]
         
         print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features)
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
         print("Train set normalized")      
         
         print("Normalizing validation set...")
-        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features)
+        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, is_eign=is_eign)
         print("Validation set normalized")
         
         print("Normalizing test set...")
-        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features)
+        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, is_eign=is_eign)
         print("Test set normalized")
         
         print("Creating train loader...")
@@ -161,15 +161,18 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         print("Test loader created")
         
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-        joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
+        if not is_eign:
+            joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
         # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
 
         joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
-        joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
+        if not is_eign:
+            joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
         # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
 
         joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
-        joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
+        if not is_eign:
+            joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
         # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
         
         save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
@@ -184,22 +187,32 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         traceback.print_exc()
         raise
         
-def normalize_dataset(dataset_input, node_features):
+def normalize_dataset(dataset_input, node_features, is_eign=False):
     data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
 
     print("Fitting and normalizing x features...")
     normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features)
     print("x features normalized")
     
-    print("Fitting and normalizing pos features...")
-    normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
-    print("Pos features normalized")
-    
+    if is_eign:
+        print("Fitting and normalizing x_signed features...")
+        normalized_data_list, x_signed_scaler = normalize_x_signed_features_batched(
+            normalized_data_list
+        )
+        print("x_signed features normalized")
+    else:
+        print("Fitting and normalizing pos features...")
+        normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
+        print("Pos features normalized")
+        
     # print("Fitting and normalizing modestats features...")
     # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
     # print("Modestats features normalized")
     
     scalers_dict = {
+        "x_scaler": x_scaler,
+        "x_signed_scaler": x_signed_scaler,
+    } if is_eign else {
         "x_scaler": x_scaler,
         "pos_scaler": pos_scaler,
         # "modestats_scaler": modestats_scaler
@@ -330,6 +343,87 @@ def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_s
     
     return data_list
 
+def normalize_x_signed_features_batched(data_list, batch_size=1000):
+    """
+    Normalize the x_signed features (0 mean and unit variance).
+    x_signed typically has shape (num_nodes, 1) for EIGN models.
+    """
+    scaler = StandardScaler()
+
+    # Get number of nodes in the graph
+    num_nodes = (
+        data_list[0].x_signed.shape[0]
+        if hasattr(data_list[0], "x_signed") and data_list[0].x_signed is not None
+        else 0
+    )
+
+    # Skip if no x_signed features
+    if num_nodes == 0:
+        return data_list, None
+
+    # First pass: Fit the scaler
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting x_signed scaler"):
+        batch = data_list[i : i + batch_size]
+        batch_x_signed = np.vstack(
+            [
+                data.x_signed.numpy().reshape(-1, 1)
+                for data in batch
+                if hasattr(data, "x_signed") and data.x_signed is not None
+            ]
+        )
+        if batch_x_signed.size > 0:
+            scaler.partial_fit(batch_x_signed)
+
+    # Second pass: Transform the data
+    for i in tqdm(
+        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
+    ):
+        batch = data_list[i : i + batch_size]
+        for data in batch:
+            if hasattr(data, "x_signed") and data.x_signed is not None:
+                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
+                x_signed_normalized = scaler.transform(x_signed_reshaped)
+                data.x_signed = torch.tensor(
+                    x_signed_normalized.reshape(data.x_signed.shape),
+                    dtype=data.x_signed.dtype,
+                )
+
+    return data_list, scaler
+
+def normalize_x_signed_features_with_scaler(
+    data_list, x_signed_scaler, batch_size=1000
+):
+    """
+    Normalize the x_signed features with a given scaler.
+    x_signed typically has shape (num_nodes, 1) for EIGN models.
+    """
+    # Skip if no scaler provided or no x_signed features
+    if x_signed_scaler is None:
+        return data_list
+
+    # Check if any data has x_signed features
+    has_x_signed = any(
+        hasattr(data, "x_signed") and data.x_signed is not None for data in data_list
+    )
+
+    if not has_x_signed:
+        return data_list
+
+    # Transform the data using the provided scaler
+    for i in tqdm(
+        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
+    ):
+        batch = data_list[i : i + batch_size]
+        for data in batch:
+            if hasattr(data, "x_signed") and data.x_signed is not None:
+                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
+                x_signed_normalized = x_signed_scaler.transform(x_signed_reshaped)
+                data.x_signed = torch.tensor(
+                    x_signed_normalized.reshape(data.x_signed.shape),
+                    dtype=data.x_signed.dtype,
+                )
+    return data_list
+
 def one_hot_highway(datalist, idx):
 
     """
@@ -435,7 +529,7 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         return FC_NN(**common_kwargs, **model_kwargs).to(device)
 
     elif gnn_arch == "eign":
-        return Eign(**common_kwargs, **model_kwargs).to(device)
+        return EIGNLaplacianConv(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "xgboost":
         return XGBoostModel(**common_kwargs, **model_kwargs)

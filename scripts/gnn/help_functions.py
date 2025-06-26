@@ -27,7 +27,7 @@ class GNN_Loss:
 
         if loss_fct == 'mse':
             self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
-        elif self.config.loss_fct == 'l1':
+        elif loss_fct == 'l1':
             self.loss_fct = torch.nn.L1Loss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
         else:
             raise ValueError(f"Loss function {loss_fct} not supported.")
@@ -45,14 +45,15 @@ class GNN_Loss:
 
             # Normalize by the maximum value in each sample
             for i in range(weights.shape[0] // self.num_nodes):
-                weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+                max_val = np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
+                if max_val != 0:
+                    weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= max_val
 
             weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
             return torch.mean(loss * weights.unsqueeze(1))
 
         else:
             return self.loss_fct(y_pred, y_true)
-        
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
                  initial_lr: float, 
@@ -233,7 +234,106 @@ def validate_model_during_training(config: object,
         )
     else:
         return total_validation_loss, r_squared, spearman_corr, pearson_corr
+
+def validate_model_during_training_eign(
+        config: object,
+        model: nn.Module,
+        dataset: DataLoader,
+        loss_func: nn.Module,
+        device: torch.device,
+        scalers_validation: dict,
+        use_signed: bool = False) -> tuple:
     
+    model.eval()
+    val_loss = 0
+    num_batches = 0
+    actual_node_targets = []
+    node_predictions = []
+
+    # Choose the appropriate inference mode
+    with torch.inference_mode():
+        for idx, data in enumerate(dataset):
+            data = data.to(device)
+            targets_node_predictions_signed = data.y_signed
+            targets_node_predictions_unsigned = data.y
+            
+            x_unscaled = scalers_validation["x_scaler"].inverse_transform(
+                data.x.detach().clone().cpu().numpy())
+            
+            x_signed_unscaled = scalers_validation["x_signed_scaler"].inverse_transform(
+                data.x_signed.detach().clone().cpu().numpy())
+
+            # Standard Forward Pass
+            if config.predict_mode_stats:
+                raise NotImplementedError(
+                    "EIGN model does not support mode stats prediction."
+                )
+            
+            else:
+                eign_output = model(
+                    x_unsigned=(
+                        data.x if hasattr(data, "x") and data.x is not None else None
+                    ),
+                    x_signed=(
+                        data.x_signed
+                        if hasattr(data, "x_signed") and data.x_signed is not None
+                        else None
+                    ),
+                    edge_index=data.edge_index,
+                    is_directed=data.edge_is_directed,
+                )
+
+                predicted_signed, predicted_unsigned = (
+                    eign_output.signed,
+                    eign_output.unsigned,
+                )
+
+            # Compute validation losses
+            if config.predict_mode_stats:
+                raise NotImplementedError(
+                    "EIGN model does not support mode stats prediction."
+                )
+            else:
+                batch_loss = (
+                    loss_func(
+                        predicted_signed,
+                        targets_node_predictions_signed,
+                        x_signed_unscaled,
+                    ).item()
+                    if use_signed
+                    else loss_func(
+                        predicted_unsigned,
+                        targets_node_predictions_unsigned,
+                        x_unscaled,
+                    ).item()
+                )
+
+                val_loss += batch_loss
+
+            # Collect predictions and targets
+            if use_signed:
+                actual_node_targets.append(targets_node_predictions_signed)
+                node_predictions.append(predicted_signed)
+            else:
+                actual_node_targets.append(targets_node_predictions_unsigned)
+                node_predictions.append(predicted_unsigned)
+            num_batches += 1
+
+    # Compute overall metrics
+    total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
+    actual_node_targets = torch.cat(actual_node_targets)
+    node_predictions = torch.cat(node_predictions)
+    r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
+    spearman_corr, pearson_corr = compute_spearman_pearson(
+        node_predictions, actual_node_targets
+    )
+
+    # Handle mode stats results if enabled
+    if config.predict_mode_stats:
+        raise NotImplementedError("EIGN model does not support mode stats prediction.")
+    else:
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr
+
 def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     """
     Compute Spearman and Pearson correlation coefficients.

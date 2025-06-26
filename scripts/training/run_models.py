@@ -103,7 +103,8 @@ def main():
                                                                                                   batch_size=args['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
                                                                                                   use_all_features=args['use_all_features'],
-                                                                                                  use_bootstrapping=args['use_bootstrapping'])
+                                                                                                  use_bootstrapping=args['use_bootstrapping'],
+                                                                                                  is_eign=(args['gnn_arch'] == "eign"))
         
         # Create WandB config
         config = setup_wandb(args)
@@ -122,7 +123,7 @@ def main():
         
         gnn_instance = gnn_instance.to(device)  
         loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
-        
+
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
         # baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
