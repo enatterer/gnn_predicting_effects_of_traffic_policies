@@ -1,10 +1,17 @@
+import os
+import sys
 from abc import abstractmethod
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ..conv import (
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+from gnn.models.conv import (
     FusionLayer,
     ResidualWrapper,
 )

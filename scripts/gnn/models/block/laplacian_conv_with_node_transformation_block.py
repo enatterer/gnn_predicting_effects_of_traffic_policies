@@ -1,11 +1,17 @@
 """Block that uses the Mangnetic Edge Laplacian as graph shift operator."""
 
+import os
+import sys
+
 import torch.nn as nn
 
-from ..conv import MagneticEdgeLaplacianWithNodeTransformationConv
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
 
-from .block import EIGNBlock
-
+from gnn.models.conv import MagneticEdgeLaplacianWithNodeTransformationConv
+from gnn.models.block import EIGNBlock
 
 class EIGNBlockMagneticEdgeLaplacianWithNodeTransformationConv(EIGNBlock):
     r"""Block within the EIGN architecture that models signed (orientation signedvariant) and unsigned (orientation unsignedariant) modalities using the Magnetic Edge Laplacian as graph shift operator."""

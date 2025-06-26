@@ -15,7 +15,6 @@ import geopandas as gpd
 from tqdm import tqdm
 
 import torch
-from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
 
 # Add the 'scripts' directory to Python Path
@@ -24,6 +23,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from data_preprocessing.help_functions import *
+from data_preprocessing.process_simulations_for_gnn import compute_result_dic
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -49,9 +49,6 @@ result_path = os.path.join(
 basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_output_links.geojson')
 basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'pop_1pct_basecase_average_mode_stats.csv')
 
-# Flag to use line graph transformation
-use_linegraph = True
-
 # Flag to use allowed modes or not
 use_allowed_modes = False
 
@@ -69,30 +66,6 @@ class EdgeFeatures(IntEnum):
     ALLOWED_MODE_RAIL = 10
     ALLOWED_MODE_SUBWAY = 11
     NET_FLOW = 12
-
-
-# Read all network data into a dictionary of GeoDataFrames
-def compute_result_dic(basecase_links, networks):
-    
-    result_dic_output_links = {}
-    result_dic_eqasim_trips = {}
-    result_dic_output_links["base_network_no_policies"] = basecase_links
-    
-    for network in tqdm(networks, desc="Processing Networks", unit="network"):
-        
-        policy_key = create_policy_key(network)
-        df_output_links = read_output_links(network)
-        df_eqasim_trips = read_eqasim_trips(network)
-        if (df_output_links is not None and df_eqasim_trips is not None):
-            df_output_links.drop(columns=['geometry'], inplace=True)
-            gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
-            gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
-            result_dic_output_links[policy_key] = gdf_extended
-            df_eqasim_trips_list = [df_eqasim_trips]
-            mode_stats = calculate_avg_mode_stats(df_eqasim_trips_list)
-            result_dic_eqasim_trips[policy_key] = mode_stats
-    
-    return result_dic_output_links, result_dic_eqasim_trips
 
 
 def create_aggregated_edges_for_eign(links_gdf):

@@ -1,11 +1,18 @@
 """Convolution operator that uses the Laplacian as graph shift operator."""
 
+import os
+import sys
 from typing import Protocol
 
 import torch
 import torch.nn as nn
 
-from ..laplacian import degree_normalization, magnetic_edge_laplacian
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+from gnn.models.conv.laplacian import degree_normalization, magnetic_edge_laplacian
 
 
 class NodeFeatureTransformation(Protocol):

@@ -9,13 +9,11 @@ The parameters UseMonteCarloDropout and PredictModeStats may be implemented in t
 
 import os
 import sys
-from abc import ABC, abstractmethod
-
-from tqdm import tqdm
-import wandb
-import numpy as np
-from .base_gnn import BaseGNN
+from abc import abstractmethod
 from typing import NamedTuple
+
+import wandb
+from tqdm import tqdm
 
 import torch
 import torch.nn as nn
@@ -23,6 +21,13 @@ import torch.nn.functional as F
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
+
+# Add the 'scripts' directory to Python Path
+scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+if scripts_path not in sys.path:
+    sys.path.append(scripts_path)
+
+from gnn.models.base_gnn import BaseGNN
 
 from gnn.models.block import (
     EIGNBlock,
@@ -43,6 +48,13 @@ class EIGNOutput(NamedTuple):
 class EIGN(BaseGNN):
     def __init__(
         self,
+        in_channels: int, # Kept for compatibility
+        out_channels: int, # Kept for compatibility
+        dropout: float = 0.3,
+        use_dropout: bool = False,
+        predict_mode_stats: bool = False,
+        dtype: torch.dtype = torch.float32,
+        log_to_wandb: bool = False,
         in_channels_signed: int = 1,
         out_channels_signed: int = 1,
         hidden_channels_signed: int = 64,
@@ -50,21 +62,18 @@ class EIGN(BaseGNN):
         out_channels_unsigned: int = 1,
         hidden_channels_unsigned: int = 64,
         num_blocks: int = 4,
-        dropout: float = 0.1,
-        use_dropout: bool = False,
-        predict_mode_stats: bool = False,
-        dtype: torch.dtype = torch.float32,
         signed_activation_fn=F.tanh,
         unsigned_activation_fn=F.relu,
         **kwargs_block,
     ):
         super().__init__(
-            in_channels=1,
-            out_channels=1,
+            in_channels=in_channels,
+            out_channels=out_channels,
             dropout=dropout,
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
+            log_to_wandb=log_to_wandb
         )
 
         self.out_channels_signed = out_channels_signed
@@ -72,7 +81,17 @@ class EIGN(BaseGNN):
         self.signed_activation_fn = signed_activation_fn
         self.unsigned_activation_fn = unsigned_activation_fn
 
-        self.dropout = nn.Dropout(p=dropout)
+        if self.log_to_wandb:
+            wandb.config.update({'in_channels_signed': in_channels_signed,
+                                 'out_channels_signed': out_channels_signed,
+                                 'hidden_channels_signed': hidden_channels_signed,
+                                 'in_channels_unsigned': in_channels_unsigned,
+                                 'out_channels_unsigned': out_channels_unsigned,
+                                 'hidden_channels_unsigned': hidden_channels_unsigned,
+                                 'num_blocks': num_blocks,
+                                 'signed_activation_fn': signed_activation_fn.__name__,
+                                 'unsigned_activation_fn': unsigned_activation_fn.__name__},
+                                allow_val_change=True)
 
         self.blocks = nn.ModuleList()
         _in_channels_signed = in_channels_signed
@@ -220,7 +239,6 @@ class EIGN(BaseGNN):
                     raise NotImplementedError(
                         "Predicting mode stats is not implemented yet."
                     )
-                    # targets_mode_stats = data.mode_stats
 
                 with autocast():
                     # Forward pass
@@ -228,19 +246,6 @@ class EIGN(BaseGNN):
                         raise NotImplementedError(
                             "Predicting mode stats is not implemented yet."
                         )
-                        # predicted, mode_stats_pred = self(
-                        #     x_signed=data.x_signed,
-                        #     x_unsigned=data.x,
-                        #     edge_index=data.edge_index,
-                        #     is_directed=data.edge_is_directed,
-                        # )
-                        # train_loss_node_predictions = loss_fct(
-                        #     predicted, targets_node_predictions, x_unscaled
-                        # )
-                        # train_loss_mode_stats = loss_fct(
-                        #     mode_stats_pred, targets_mode_stats
-                        # )  # add weight here also later!
-                        # train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         # Ensure inputs to model are float32
                         x_signed = data.x_signed.to(torch.float32)
@@ -294,16 +299,6 @@ class EIGN(BaseGNN):
                         raise NotImplementedError(
                             "Predicting mode stats is not implemented yet."
                         )
-                        # wandb.log(
-                        #     {
-                        #         "train_loss": train_loss.item(),
-                        #         "epoch": epoch,
-                        #         "train_loss_node_predictions_signed": train_loss_node_predictions_signed.item(),
-                        #         "train_loss_node_predictions_unsigned": train_loss_node_predictions_signed.item(),
-
-                        #         "train_loss_mode_stats": train_loss_mode_stats.item(),
-                        #     }
-                        # )
                     else:
                         wandb.log(
                             {
@@ -324,33 +319,6 @@ class EIGN(BaseGNN):
                 raise NotImplementedError(
                     "Predicting mode stats is not implemented yet."
                 )
-                # (
-                #     val_loss,
-                #     r_squared,
-                #     spearman_corr,
-                #     pearson_corr,
-                #     val_loss_node_predictions,
-                #     val_loss_mode_stats,
-                # ) = validate_model_during_training_eign(
-                #     config=config,
-                #     model=self,
-                #     dataset=valid_dl,
-                #     loss_func=loss_fct,
-                #     device=device,
-                #     scalers_validation=scalers_validation,
-                # )
-                # wandb.log(
-                #     {
-                #         "val_loss": val_loss,
-                #         "epoch": epoch,
-                #         "lr": lr,
-                #         "r^2": r_squared,
-                #         "spearman": spearman_corr,
-                #         "pearson": pearson_corr,
-                #         "val_loss_node_predictions": val_loss_node_predictions,
-                #         "val_loss_mode_stats": val_loss_mode_stats,
-                #     }
-                # )
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = (
                     validate_model_during_training_eign(
