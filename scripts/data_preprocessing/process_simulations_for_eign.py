@@ -352,7 +352,7 @@ def process_result_dic_eign(
         if isinstance(df, pd.DataFrame) and key != "base_network_no_policies":
             # Create aggregated edges for the current simulation data
             sim_aggregated_data = create_aggregated_edges_for_eign(df)
-            sim_edge_index, sim_features, _, _ = sim_aggregated_data
+            sim_edge_index, sim_features, _ = sim_aggregated_data
 
             # Ensure consistent edge ordering between base case and simulation
             if not torch.equal(edge_index, sim_edge_index):
