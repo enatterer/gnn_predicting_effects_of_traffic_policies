@@ -159,12 +159,12 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     if config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
-                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         predicted = self(data)
-                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
@@ -207,7 +207,7 @@ class BaseGNN(nn.Module, ABC):
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_validation=scalers_validation
+                    scalers_train=scalers_train
                 )
                 # Epoch level logging
                 wandb.log({
@@ -229,7 +229,7 @@ class BaseGNN(nn.Module, ABC):
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_validation=scalers_validation
+                    scalers_train=scalers_train
                 )
                 # Epoch level logging
                 wandb.log({

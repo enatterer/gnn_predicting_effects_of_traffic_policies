@@ -26,8 +26,8 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
-dataset_path = os.path.join(project_root, 'data', 'train_data', 'dist_not_connected_10k_1pct')
-base_dir = os.path.join(project_root, 'data')
+dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data','rosenheim')
+base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'rosenheim')
 
 def main():
     try:
@@ -56,19 +56,19 @@ def main():
         print(f"An error occurred: {str(e)}")
     
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--gnn_arch", type=str, default="point_net_transf_gat",
+    parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
                         choices=["point_net_transf_gat", "gat", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
-    parser.add_argument("--project_name", type=str, default="TR-C_Benchmarks",
+    parser.add_argument("--project_name", type=str, default="Inductive GNN_16 Bavarian cities",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
-    parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features",
+    parser.add_argument("--unique_model_description", type=str, default="point_net_transf_gat_5_features_16_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=False, help="Whether to use all features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
-                        'If not provided, defaults params will be used.')
+                        'If not provided, defaults params will be used.') 
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
@@ -99,7 +99,7 @@ def main():
         os.makedirs(unique_run_dir, exist_ok=True)
         
         model_save_path, path_to_save_dataloader = get_paths(base_dir=os.path.join(base_dir, args['project_name']), unique_model_description=args['unique_model_description'], model_save_path='trained_model/model.pth')
-        train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(datalist=datalist,
+        train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(datalist=datalist,
                                                                                                   batch_size=args['batch_size'],
                                                                                                   path_to_save_dataloader=path_to_save_dataloader,
                                                                                                   use_all_features=args['use_all_features'],
@@ -122,8 +122,8 @@ def main():
                                         device=device)
         
         gnn_instance = gnn_instance.to(device)  
-        loss_fct = GNN_Loss(config.loss_fct, datalist[0].x.shape[0], device, config.use_weighted_loss)
-
+        loss_fct = GNN_Loss(loss_fct=config.loss_fct, num_nodes=datalist[0].x.shape[0], device=device, weighted=config.use_weighted_loss)
+        
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
         # baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
@@ -139,8 +139,8 @@ def main():
                                                              device=device,
                                                              early_stopping=early_stopping,
                                                              model_save_path=model_save_path,
-                                                             scalers_train=scalers_train,
-                                                             scalers_validation=scalers_validation)
+                                                             scalers_train=scalers_train
+                                                            )
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         

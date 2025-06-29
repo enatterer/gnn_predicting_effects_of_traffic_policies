@@ -136,16 +136,16 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
                              "FREESPEED",
                              "LENGTH"]
         
-        print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
+        print("Normalizing train set and fitting global scalers...")
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features)
         print("Train set normalized")      
         
-        print("Normalizing validation set...")
-        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, is_eign=is_eign)
+        print("Applying global scalers to validation set...")
+        valid_set_normalized= apply_global_scaler(data_list=valid_set, scaler=scalers_train['x_scaler'], node_features=node_features)
         print("Validation set normalized")
         
-        print("Normalizing test set...")
-        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, is_eign=is_eign)
+        print("Applying global scalers to test set...")
+        test_set_normalized = apply_global_scaler(data_list=test_set, scaler=scalers_train['x_scaler'], node_features=node_features)
         print("Test set normalized")
         
         print("Creating train loader...")
@@ -179,7 +179,7 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         print("Dataloaders and scalers saved")
         
-        return train_loader, val_loader, scalers_train, scalers_validation
+        return train_loader, val_loader, scalers_train
     
     except Exception as e:
         print(f"Error in prepare_data_with_graph_features: {str(e)}")
@@ -191,7 +191,7 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
     data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
 
     print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features)
+    normalized_data_list, x_scaler = normalize_x_features_global_inductive(data_list, node_features)
     print("x features normalized")
     
     if is_eign:
@@ -214,55 +214,11 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
         "x_signed_scaler": x_signed_scaler,
     } if is_eign else {
         "x_scaler": x_scaler,
-        "pos_scaler": pos_scaler,
+        #"pos_scaler": pos_scaler,
         # "modestats_scaler": modestats_scaler
     }
     return normalized_data_list, scalers_dict
 
-def normalize_x_features_batched(data_list, node_features, batch_size=100):
-    """
-    Normalize the continuous node features (0 mean and unit variance).
-    Categorical features (Allowed Modes) are left as booleans (0 or 1).
-    'HIGHWAY' feature is one-hot encoded.
-
-    Finally, features are filtered to only include the ones specified in node_features. 
-    """
-    scaler = StandardScaler()
-
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
-    
-    # Get number of nodes in the graph
-    num_nodes = data_list[0].x.shape[0]
-    
-    # First pass: Fit the scaler
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
-        batch = data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        scaler.partial_fit(batch_x)
-    
-    # Second pass: Transform the data
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
-        batch = data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        batch_x_normalized = scaler.transform(batch_x)
-        for j, data in enumerate(batch):
-            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*num_nodes:(j+1)*num_nodes], dtype=data.x.dtype)
-
-    # Filter features
-    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-    for data in data_list:
-        data.x = data.x[:, node_feature_filter]
-
-    # One-hot encode highway
-    if "HIGHWAY" in node_features:
-        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
-    
-    return data_list, scaler
 
 def normalize_pos_features_batched(data_list, batch_size=1000):
     scaler = StandardScaler()
@@ -556,3 +512,142 @@ class EarlyStopping:
         else:
             self.best_loss = val_loss
             self.counter = 0
+
+def normalize_x_features_global_inductive(data_list, node_features, batch_size=100):
+    """
+    Global normalization across ALL cities for inductive learning with batching.
+    Model learns to handle the natural variation between cities.
+    """
+    scaler = StandardScaler()
+    
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       EdgeFeatures.CAPACITY_REDUCTION,
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
+    
+    # First pass: Fit the scaler on ALL cities using batching
+    print("Fitting global scaler across all cities...")
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
+        scaler.partial_fit(batch_x)
+    
+    print(f"Global scaler fitted on features from all cities")
+    print(f"Feature means: {scaler.mean_}")
+    print(f"Feature scales: {scaler.scale_}")
+    
+    # Second pass: Transform the data using batching
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
+        batch_x_normalized = scaler.transform(batch_x)
+        
+        # Put normalized features back with correct indexing for different graph sizes
+        start_idx = 0
+        for data in batch:
+            num_nodes = data.x.shape[0]  # Actual size of THIS graph
+            end_idx = start_idx + num_nodes
+            data.x[:,continuous_feat] = torch.tensor(
+                batch_x_normalized[start_idx:end_idx], dtype=data.x.dtype)
+            start_idx = end_idx  # Move to next graph's position
+    
+    # Filter features to keep only selected ones
+    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+    for data in data_list:
+        data.x = data.x[:, node_feature_filter]
+    
+    # One-hot encode highway if needed
+    if "HIGHWAY" in node_features:
+        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+    
+    return data_list, scaler
+
+def normalize_x_features_with_scaler_global_inductive(data_list, node_features, x_scaler, batch_size=100):
+    """
+    Normalize the continuous node features with a given scaler.
+    Categorical features (Allowed Modes) are left as booleans (0 or 1).
+    'HIGHWAY' feature is one-hot encoded.
+
+    Finally, features are filtered to only include the ones specified in node_features.
+    
+    FIXED: Properly handles graphs with different numbers of nodes.
+    """
+
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       EdgeFeatures.CAPACITY_REDUCTION,
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
+    
+    # Transform the data using batching with proper indexing
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
+        batch_x_normalized = x_scaler.transform(batch_x)
+        
+        # Put normalized features back with correct indexing for different graph sizes
+        start_idx = 0
+        for data in batch:
+            num_nodes = data.x.shape[0]  # Actual size of THIS graph
+            end_idx = start_idx + num_nodes
+            data.x[:,continuous_feat] = torch.tensor(
+                batch_x_normalized[start_idx:end_idx], dtype=data.x.dtype)
+            start_idx = end_idx  # Move to next graph's position
+
+    # Filter features to keep only selected ones
+    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+    for data in data_list:
+        data.x = data.x[:, node_feature_filter]
+
+    # One-hot encode highway if needed
+    if "HIGHWAY" in node_features:
+        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+    
+    return data_list
+
+def one_hot_highway(datalist, idx):
+
+    """
+    One-hot encodes the 'HIGHWAY' feature and removes the original one.
+    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
+    """
+    
+    n_types = 6
+    mapping = {
+        -1: 4, # pt
+        0: 5, # other
+        1: 0, # primary
+        2: 1, # secondary
+        3: 2, # tertiary
+        4: 3, # residential
+        5: 5,
+        6: 5,
+        7: 5,
+        8: 5,
+        9: 5
+    }
+
+    for data in datalist:
+        
+        highway = data.x[:, idx].numpy()
+        mapped_highway = np.vectorize(mapping.get)(highway)
+        one_hot = np.eye(n_types)[mapped_highway]
+
+        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
+
+def apply_global_scaler(data_list, scaler, node_features):
+    """
+    Apply the global scaler to the data list.
+    Uses the same logic as normalize_x_features_with_scaler_global_inductive.
+    Handles both regular lists and Subset objects.
+    """
+    # Convert Subset to list if needed
+    if hasattr(data_list, 'indices'):  # It's a Subset object
+        data_list_actual = [data_list[i] for i in range(len(data_list))]
+    else:
+        data_list_actual = data_list
+    
+    return normalize_x_features_with_scaler_global_inductive(data_list_actual, node_features, scaler)

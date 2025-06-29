@@ -81,8 +81,8 @@ def get_capacity_base_case(links_base_case, required_modes_on_links):
 
 def process_result_dic(result_dic, result_dic_mode_stats, save_path=None, batch_size=500, links_base_case=None, gdf_basecase_mean_mode_stats=None):
 
-    # PROCESS LINK GEOMETRIES
-    _, stacked_edge_geometries_tensor, edges_base, nodes = get_link_geometries(links_base_case)
+    # PROCESS LINK GEOMETRIES (with scaling and centering)
+    _, stacked_edge_geometries_tensor, edges_base, nodes, pos_scaling_params = get_link_geometries(links_base_case, apply_scaling=True)
     
     os.makedirs(save_path, exist_ok=True)
     datalist = []

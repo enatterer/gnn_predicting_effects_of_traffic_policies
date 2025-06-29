@@ -146,7 +146,21 @@ def prepare_gdf(df, gdf_input):
     gdf.crs = gdf_input.crs
     return gdf
 
-def get_link_geometries(links_gdf_input):
+def get_link_geometries(links_gdf_input, apply_scaling=True):
+    """
+    Extract link geometries and optionally apply centering and scaling.
+    
+    Args:
+        links_gdf_input: GeoDataFrame with link geometry information
+        apply_scaling: Whether to apply centering and scaling to coordinates
+        
+    Returns:
+        edge_start_point_tensor: Tensor of start points
+        stacked_edge_geometries_tensor: Stacked tensor of start, end, and midpoints
+        edges_base: Array of edge connections
+        nodes: Unique nodes
+        scaling_params: Dictionary with mean and std for scaling (if apply_scaling=True)
+    """
     edge_midpoints = np.array([((geom.coords[0][0] + geom.coords[-1][0]) / 2, 
                                     (geom.coords[0][1] + geom.coords[-1][1]) / 2) 
                                 for geom in links_gdf_input.geometry])
@@ -156,14 +170,40 @@ def get_link_geometries(links_gdf_input):
     links_gdf_input['from_idx'] = links_gdf_input['from_node'].map(node_to_idx)
     links_gdf_input['to_idx'] = links_gdf_input['to_node'].map(node_to_idx)
     edges_base = links_gdf_input[['from_idx', 'to_idx']].values
-    edge_midpoint_tensor = torch.tensor(edge_midpoints, dtype=torch.float)
 
     start_points = np.array([geom.coords[0] for geom in links_gdf_input.geometry])
     end_points = np.array([geom.coords[-1] for geom in links_gdf_input.geometry])
 
+    scaling_params = None
+    
+    if apply_scaling:
+        # Combine all coordinates for computing global scaling parameters
+        all_coords = np.vstack([start_points, end_points, edge_midpoints])
+        
+        # Calculate mean and std for centering and scaling
+        coord_mean = np.mean(all_coords, axis=0)  # Shape: [2] (x_mean, y_mean)
+        coord_std = np.std(all_coords, axis=0)    # Shape: [2] (x_std, y_std)
+        
+        # Avoid division by zero
+        coord_std = np.where(coord_std == 0, 1.0, coord_std)
+        
+        # Apply centering and scaling
+        start_points = (start_points - coord_mean) / coord_std
+        end_points = (end_points - coord_mean) / coord_std
+        edge_midpoints = (edge_midpoints - coord_mean) / coord_std
+        
+        scaling_params = {
+            'mean': coord_mean,
+            'std': coord_std
+        }
+
     edge_start_point_tensor = torch.tensor(start_points, dtype=torch.float)
     edge_end_point_tensor = torch.tensor(end_points, dtype=torch.float)
+    edge_midpoint_tensor = torch.tensor(edge_midpoints, dtype=torch.float)
 
     stacked_edge_geometries_tensor = torch.stack([edge_start_point_tensor, edge_end_point_tensor, edge_midpoint_tensor], dim=1)
 
-    return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes
+    if apply_scaling:
+        return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes, scaling_params
+    else:
+        return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes

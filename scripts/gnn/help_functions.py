@@ -36,22 +36,30 @@ class GNN_Loss:
         self.device = device
         self.weighted = weighted
 
-    def __call__(self, y_pred:Tensor, y_true:Tensor, x: np.ndarray = None) -> Tensor: # x is before normalization (unscaled)
-        
+    def __call__(self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None, batch: Tensor = None) -> Tensor:
         if self.weighted:
-
             loss = self.loss_fct(y_pred, y_true)
             weights = x[:, EdgeFeatures.VOL_BASE_CASE]
-
-            # Normalize by the maximum value in each sample
-            for i in range(weights.shape[0] // self.num_nodes):
-                max_val = np.max(weights[i * self.num_nodes:(i + 1) * self.num_nodes])
-                if max_val != 0:
-                    weights[i * self.num_nodes:(i + 1) * self.num_nodes] /= max_val
-
-            weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
-            return torch.mean(loss * weights.unsqueeze(1))
-
+            
+            if batch is not None:
+                # Use batch information to handle variable graph sizes
+                unique_batch_ids = torch.unique(batch)
+                normalized_weights = torch.zeros_like(weights)
+                
+                for batch_id in unique_batch_ids:
+                    mask = (batch == batch_id)
+                    batch_weights = weights[mask]
+                    max_weight = torch.max(batch_weights)
+                    normalized_weights[mask] = batch_weights / max_weight
+            else:
+                # Fallback to old method (assumes fixed graph size for all graphs in the batch)
+                for i in range(weights.shape[0] // self.num_nodes):
+                    start_idx = i * self.num_nodes
+                    end_idx = (i + 1) * self.num_nodes
+                    weights[start_idx:end_idx] /= np.max(weights[start_idx:end_idx])
+                normalized_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+            
+            return torch.mean(loss * normalized_weights.unsqueeze(1))
         else:
             return self.loss_fct(y_pred, y_true)
 class LinearWarmupCosineDecayScheduler:
@@ -152,7 +160,7 @@ def validate_model_during_training(config: object,
                                    dataset: DataLoader, 
                                    loss_func: nn.Module, 
                                    device: torch.device,
-                                   scalers_validation: dict) -> tuple:
+                                   scalers_train: dict) -> tuple:
     """
     Validate the model during training, with support for mode stats predictions.
 
@@ -167,6 +175,7 @@ def validate_model_during_training(config: object,
     Returns:
     - tuple: Validation metrics including loss, R^2, Spearman, and Pearson correlations.
     """
+    print("Starting validation...")
     model.eval()
     val_loss = 0
     num_batches = 0
@@ -178,20 +187,22 @@ def validate_model_during_training(config: object,
     # TODO: Maybe add as a parameter later?
     # Separate loss for mode stats
     mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
-
+    print('len dataset', len(dataset))
     # Choose the appropriate inference mode
     with torch.inference_mode():
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
-            x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+            x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Standard Forward Pass
             if config.predict_mode_stats:
                 node_predicted, mode_stats_pred = model(data)
             else:
+                print('debug')
                 node_predicted = model(data)
+                print('node_predicted', node_predicted.shape)
 
             # # Example MC Dropout Prediction, if to be used later. Use with torch.no_grad().
             # mean_prediction, uncertainty = mc_dropout_predict(model, data, num_samples=50, device=device)
@@ -200,26 +211,27 @@ def validate_model_during_training(config: object,
 
             # Compute validation losses
             if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
+                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled, data.batch).item()
                 val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled).item()
+                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled, data.batch).item()
+                print('val_loss', val_loss)
 
             # Collect predictions and targets
             actual_node_targets.append(targets_node_predictions)
             node_predictions.append(node_predicted)
             num_batches += 1
-
+    print("Validation done")
     # Compute overall metrics
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
     actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
-
+    print("Validation metrics computed")
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
         mode_stats_targets = torch.cat(mode_stats_targets)
