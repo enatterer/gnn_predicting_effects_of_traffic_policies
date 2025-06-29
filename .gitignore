@@ -8,3 +8,5 @@ inductive_gnn_data/
 Miniconda3-latest-Linux-x86_64.sh
 *.sh
 *.pt
+data2/
+*.pt
