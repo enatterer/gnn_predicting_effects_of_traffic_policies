@@ -24,37 +24,10 @@ from training.help_functions import *
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Note: base_dir will be set after args parsing to include learning_variant
 
-# Please adjust as needed
-dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data','rosenheim')
-base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'rosenheim')
-
-def main():
-    try:
-        datalist = []
-        batch_num = 1
-        while True: # Change this to "and batch_num < 10" for a faster run
-            print(f"Processing batch number: {batch_num}")
-            # total_memory, available_memory, used_memory = get_memory_info()
-            # print(f"Total Memory: {total_memory:.2f} GB")
-            # print(f"Available Memory: {available_memory:.2f} GB")
-            # print(f"Used Memory: {used_memory:.2f} GB")
-            batch_file = os.path.join(dataset_path, f'datalist_batch_{batch_num}.pt')
-            if not os.path.exists(batch_file):
-                break
-            batch_data = torch.load(batch_file, map_location='cpu')
-            if isinstance(batch_data, list):
-                datalist.extend(batch_data)
-            batch_num += 1
-        print(f"Loaded {len(datalist)} items into datalist")
-
-        # Temp fix, rerun data_preprocessing to solve.
-        for i, data in enumerate(datalist):
-            data.num_nodes = data.x.shape[0]
-
-    except Exception as e:
-        print(f"An error occurred: {str(e)}")
     
+def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
@@ -84,27 +57,123 @@ def main():
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
-
+    parser.add_argument("--learning_variant", type=str, default="transductive",
+                   choices=["transductive", "moderate_inductive", "complete_inductive"],
+                   help="Learning paradigm: transductive uses all data mixed, inductive separates seen/unseen cities")
+    
     args = vars(parser.parse_args())
     set_random_seeds()
     
+    # Set dataset paths based on learning variant
+    if args['learning_variant'] == 'transductive':
+        dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 'transductive')
+        unseen_dataset_path = None  # No separate unseen data
+    else:
+        # For inductive variants, load both seen and unseen
+        dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 
+                                   args['learning_variant'], 'seen')
+        unseen_dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 
+                                          args['learning_variant'], 'unseen')
+    
+    # Set base directory for results - organized by learning variant first
+    base_dir = os.path.join(project_root, 'inductive_gnn_data_results', args['learning_variant'])
+    
     try:
+        # Load data based on learning variant
+        if args['learning_variant'] == 'transductive':
+            # Load all data into single datalist
+            datalist = []
+            batch_num = 1
+            while True:
+                batch_file = os.path.join(dataset_path, f'datalist_batch_{batch_num}.pt')
+                if not os.path.exists(batch_file):
+                    break
+                batch_data = torch.load(batch_file, map_location='cpu')
+                if isinstance(batch_data, list):
+                    datalist.extend(batch_data)
+                batch_num += 1
+            print(f"Loaded {len(datalist)} items for transductive learning")
+            
+            unseen_datalist = None  # No separate unseen data
+            
+        else:  # inductive variants
+            # Load seen data (for training/validation)
+            seen_datalist = []
+            batch_num = 1
+            while True:
+                batch_file = os.path.join(dataset_path, f'datalist_batch_{batch_num}.pt')
+                if not os.path.exists(batch_file):
+                    break
+                batch_data = torch.load(batch_file, map_location='cpu')
+                if isinstance(batch_data, list):
+                    seen_datalist.extend(batch_data)
+                batch_num += 1
+            print(f"Loaded {len(seen_datalist)} items from seen cities")
+            
+            # Load unseen data (for testing)
+            unseen_datalist = []
+            batch_num = 1
+            while True:
+                batch_file = os.path.join(unseen_dataset_path, f'datalist_batch_{batch_num}.pt')
+                if not os.path.exists(batch_file):
+                    break
+                batch_data = torch.load(batch_file, map_location='cpu')
+                if isinstance(batch_data, list):
+                    unseen_datalist.extend(batch_data)
+                batch_num += 1
+            print(f"Loaded {len(unseen_datalist)} items from unseen cities")
+            
+            datalist = seen_datalist  # For compatibility with existing code
+
+        # data.num_nodes should be set correctly during preprocessing
+        
+        # Continue with GPU setup and model training
         gpus = get_available_gpus()
         best_gpu = select_best_gpu(gpus)
         set_cuda_visible_device(best_gpu)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        # Create directory for the run
-        unique_run_dir = os.path.join(base_dir, args['project_name'], args['unique_model_description'])
-        os.makedirs(unique_run_dir, exist_ok=True)
-        
         model_save_path, path_to_save_dataloader = get_paths(base_dir=os.path.join(base_dir, args['project_name']), unique_model_description=args['unique_model_description'], model_save_path='trained_model/model.pth')
-        train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(datalist=datalist,
-                                                                                                  batch_size=args['batch_size'],
-                                                                                                  path_to_save_dataloader=path_to_save_dataloader,
-                                                                                                  use_all_features=args['use_all_features'],
-                                                                                                  use_bootstrapping=args['use_bootstrapping'],
-                                                                                                  is_eign=(args['gnn_arch'] == "eign"))
+        
+        if args['learning_variant'] == 'transductive':
+            # Current behavior: train/val/test split from all data
+            train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(
+                datalist=datalist,
+                batch_size=args['batch_size'],
+                path_to_save_dataloader=path_to_save_dataloader,
+                use_all_features=args['use_all_features'],
+                use_bootstrapping=args['use_bootstrapping'],
+                is_eign=(args['gnn_arch'] == "eign"),
+                split_mode="full"  # NEW: indicates train/val/test split
+            )
+            test_dl = None  # Test is handled within prepare_data_with_graph_features
+            
+        else:  # inductive variants
+            # Train/val split on seen data only
+            train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(
+                datalist=datalist,  # seen data only
+                batch_size=args['batch_size'],
+                path_to_save_dataloader=path_to_save_dataloader,
+                use_all_features=args['use_all_features'],
+                use_bootstrapping=args['use_bootstrapping'],
+                is_eign=(args['gnn_arch'] == "eign"),
+                split_mode="train_val_only"  # NEW: indicates train/val split only
+            )
+            
+            # Create test dataloader from unseen data using same scalers
+            test_dl = prepare_test_dataloader_from_unseen(
+                unseen_datalist=unseen_datalist,
+                scalers_train=scalers_train,
+                batch_size=args['batch_size'],
+                use_all_features=args['use_all_features'],
+                path_to_save_dataloader=path_to_save_dataloader,
+                is_eign=(args['gnn_arch'] == "eign")
+            )
+            
+        verify_batch_distribution(train_dl)
+        verify_batch_distribution(valid_dl)
+        if args['learning_variant'] != 'transductive':
+            verify_batch_distribution(test_dl)
         
         # Create WandB config
         config = setup_wandb(args)
@@ -122,6 +191,12 @@ def main():
                                         device=device)
         
         gnn_instance = gnn_instance.to(device)  
+        # Check if all graphs have same size for safety
+        graph_sizes = [data.x.shape[0] for data in datalist[:10]]  # Check first 10
+        if len(set(graph_sizes)) > 1:
+            print(f"⚠️  WARNING: Variable graph sizes detected: {set(graph_sizes)}")
+            print("   Loss function relies on batch tensor being provided correctly")
+        
         loss_fct = GNN_Loss(loss_fct=config.loss_fct, num_nodes=datalist[0].x.shape[0], device=device, weighted=config.use_weighted_loss)
         
         ## Not needed now, Naive MSE doesn't tell anything!

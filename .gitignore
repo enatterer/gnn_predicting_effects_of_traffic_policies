@@ -10,5 +10,4 @@ Miniconda3-latest-Linux-x86_64.sh
 *.pt
 data2/
 *.pt
-inductive_gnn_data_results/ inductive_gnn_data_results/
 inductive_gnn_data_results/

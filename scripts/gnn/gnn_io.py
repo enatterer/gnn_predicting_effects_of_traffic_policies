@@ -63,6 +63,64 @@ def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_see
     
     return train_subset_bootstrap, val_subset_oob, test_subset
 
+def split_into_subsets_train_val_only(dataset, train_ratio=0.85, val_ratio=0.15, shuffle_seed=42):
+    """
+    Split dataset into train and validation only (no test set for inductive learning).
+    Uses 85/15 split to maximize training data when test set comes from separate unseen data.
+    """
+    assert train_ratio + val_ratio == 1.0, "Train and val ratios must sum to 1"
+    
+    dataset_length = len(dataset)
+    print(f"Total dataset length for train/val split: {dataset_length}")
+
+    # Randomly shuffle the dataset
+    random.Random(shuffle_seed).shuffle(dataset)
+    
+    # Calculate split index (only one split point needed)
+    train_split_idx = int(dataset_length * train_ratio)
+    
+    # Create indices for train and val only
+    train_indices = range(0, train_split_idx)
+    val_indices = range(train_split_idx, dataset_length)
+    
+    # Create subsets
+    train_subset = Subset(dataset, train_indices)
+    val_subset = Subset(dataset, val_indices)
+    
+    print(f"Training subset length: {len(train_subset)}")
+    print(f"Validation subset length: {len(val_subset)}")
+    print("No test subset created - using separate unseen data for testing")
+    
+    return train_subset, val_subset
+
+def split_into_subsets_with_bootstrapping_train_val_only(dataset, bootstrap_seed=0, shuffle_seed=42):
+    """
+    Bootstrap split for train/val only (no test set for inductive learning).
+    Uses all available data for train/val when test set comes from separate unseen data.
+    """
+    
+    dataset_length = len(dataset)
+    print(f"Total dataset length for bootstrap train/val split: {dataset_length}")
+
+    # No test split - use all data for train/val bootstrapping
+    all_indices = list(range(dataset_length))
+    
+    # Perform bootstrapping on all available data
+    rng = np.random.default_rng(seed=bootstrap_seed)
+    train_indices_bootstrap = rng.choice(all_indices, size=dataset_length, replace=True)
+    oob_indices = list(set(all_indices) - set(train_indices_bootstrap))
+    
+    # Create subsets
+    train_subset_bootstrap = Subset(dataset, train_indices_bootstrap)
+    val_subset_oob = Subset(dataset, oob_indices)
+    
+    print(f"Bootstrapping unique samples: {len(set(train_indices_bootstrap))}")
+    print(f"Training subset length: {len(train_subset_bootstrap)}")
+    print(f"OOB Validation subset length: {len(val_subset_oob)}")
+    print("No test subset created - using separate unseen data for testing")
+    
+    return train_subset_bootstrap, val_subset_oob
+
 def save_dataloader(dataloader, file_path):
     # Extract the dataset from the DataLoader
     dataset = dataloader.dataset

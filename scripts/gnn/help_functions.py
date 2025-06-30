@@ -23,7 +23,7 @@ class GNN_Loss:
     The road with highest vol_base_case gets a weight of 1, and the rest are scaled accordingly (sample-wise).
     """
     
-    def __init__(self, loss_fct, num_nodes, device, weighted=False):
+    def __init__(self, loss_fct, device, weighted=False, num_nodes=None):
 
         if loss_fct == 'mse':
             self.loss_fct = torch.nn.MSELoss(reduction='none' if weighted else 'mean').to(dtype=torch.float32).to(device)
@@ -52,12 +52,20 @@ class GNN_Loss:
                     max_weight = torch.max(batch_weights)
                     normalized_weights[mask] = batch_weights / max_weight
             else:
-                # Fallback to old method (assumes fixed graph size for all graphs in the batch)
+                # Fallback: No batch info available - treat as single graph or warn
+                if self.num_nodes is not None and weights.shape[0] % self.num_nodes == 0:
+                    # Old method: only works if weights divide evenly by num_nodes  
                 for i in range(weights.shape[0] // self.num_nodes):
                     start_idx = i * self.num_nodes
                     end_idx = (i + 1) * self.num_nodes
                     weights[start_idx:end_idx] /= np.max(weights[start_idx:end_idx])
                 normalized_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+                else:
+                    # Safe fallback: normalize entire batch as one graph
+                    print("⚠️  WARNING: No batch info and variable graph sizes detected")
+                    print("   Normalizing entire batch as single graph (weights may be suboptimal)")
+                    max_weight = np.max(weights)
+                    normalized_weights = torch.tensor(weights / max_weight, dtype=torch.float32).to(self.device)
             
             return torch.mean(loss * normalized_weights.unsqueeze(1))
         else:

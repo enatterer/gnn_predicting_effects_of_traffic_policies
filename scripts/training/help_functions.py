@@ -12,6 +12,9 @@ from sklearn.preprocessing import StandardScaler
 
 import torch
 from torch.utils.data import DataLoader
+from torch.utils.data import WeightedRandomSampler
+from collections import Counter
+
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -110,19 +113,58 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping, is_eign=False):
+def create_hex_size_balanced_sampler(dataset):
+    """
+    Create a sampler that ensures balanced hex_size distribution in batches.
+    """
+    # Extract hex_sizes from all data points
+    hex_sizes = [data.hex_size for data in dataset]
+    hex_size_counts = Counter(hex_sizes)
+    
+    print(f"Hex size distribution: {dict(hex_size_counts)}")
+    
+    # Calculate weights to balance hex_sizes
+    total_samples = len(dataset)
+    num_classes = len(hex_size_counts)
+    
+    # Weight calculation: inverse frequency
+    weights = []
+    for data in dataset:
+        hex_size = data.hex_size
+        weight = total_samples / (num_classes * hex_size_counts[hex_size])
+        weights.append(weight)
+    
+    # Create weighted random sampler
+    sampler = WeightedRandomSampler(
+        weights=weights,
+        num_samples=len(weights),
+        replacement=True
+    )
+    
+    return sampler
+
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping, is_eign=False, split_mode="full"):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
 
         print("Splitting into subsets...")
 
-        if use_bootstrapping:
-            train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
-        else:
-            train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-        
-        print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+        if split_mode == "full":
+            # Full train/val/test split for transductive learning
+            if use_bootstrapping:
+                train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
+            else:
+                train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+            print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+        else:  # split_mode == "train_val_only"
+            # Train/val split only for inductive learning
+            if use_bootstrapping:
+                train_set, valid_set = split_into_subsets_with_bootstrapping_train_val_only(dataset=datalist, bootstrap_seed=4)
+            else:
+                train_set, valid_set = split_into_subsets_train_val_only(dataset=datalist, train_ratio=0.85, val_ratio=0.15)
+            test_set = None
+            print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: None (using unseen data)")
 
         if use_all_features:
             node_features = [feat.name for feat in EdgeFeatures]
@@ -144,45 +186,108 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         valid_set_normalized= apply_global_scaler(data_list=valid_set, scaler=scalers_train['x_scaler'], node_features=node_features)
         print("Validation set normalized")
         
-        print("Applying global scalers to test set...")
-        test_set_normalized = apply_global_scaler(data_list=test_set, scaler=scalers_train['x_scaler'], node_features=node_features)
-        print("Test set normalized")
+        if split_mode == "full":
+            print("Applying global scalers to test set...")
+            test_set_normalized = apply_global_scaler(data_list=test_set, scaler=scalers_train['x_scaler'], node_features=node_features)
+            print("Test set normalized")
         
-        print("Creating train loader...")
-        train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
+        print("Creating train loader with balanced hex_size sampling...")
+        train_sampler = create_hex_size_balanced_sampler(train_set_normalized)
+        train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, sampler=train_sampler, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
         print("Train loader created")
         
         print("Creating validation loader...")
         val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
         print("Validation loader created")
         
-        print("Creating test loader...")
-        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn, worker_init_fn=seed_worker)
-        print("Test loader created")
+        if split_mode == "full":
+            print("Creating test loader...")
+            test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
+            print("Test loader created")
+            
+            save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+            save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
         if not is_eign:
             joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
         # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
 
-        joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
-        if not is_eign:
-            joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
+        #joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
+        #if not is_eign:
+            #joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
         # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
 
-        joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
-        if not is_eign:
-            joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
+        #joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
+        #if not is_eign:
+            #joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
         # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
         
-        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         print("Dataloaders and scalers saved")
         
         return train_loader, val_loader, scalers_train
     
     except Exception as e:
         print(f"Error in prepare_data_with_graph_features: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise
+
+def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_size, use_all_features, path_to_save_dataloader, is_eign=False):
+    """
+    Prepare test dataloader from unseen data using pre-fitted scalers from training data.
+    
+    Args:
+        unseen_datalist: List of data objects from unseen cities
+        scalers_train: Dictionary of scalers fitted on training data
+        batch_size: Batch size for DataLoader
+        use_all_features: Whether to use all features or subset
+        path_to_save_dataloader: Path to save dataloader and parameters
+        is_eign: Whether using EIGN model architecture
+    
+    Returns:
+        test_loader: DataLoader for unseen test data
+    """
+    print(f"Preparing test dataloader from {len(unseen_datalist)} unseen items")
+    
+    try:
+        if use_all_features:
+            node_features = [feat.name for feat in EdgeFeatures]
+            if not use_allowed_modes:
+                node_features = [feat for feat in node_features if "ALLOWED_MODE" not in feat]
+        else:
+            # Most important features (from ablation study)
+            node_features = ["VOL_BASE_CASE",
+                             "CAPACITY_BASE_CASE", 
+                             "CAPACITY_REDUCTION",
+                             "FREESPEED",
+                             "LENGTH"]
+        
+        print("Applying training scalers to unseen test data...")
+        test_set_normalized = apply_global_scaler(data_list=unseen_datalist, 
+                                                  scaler=scalers_train['x_scaler'], 
+                                                  node_features=node_features)
+        print("Unseen test data normalized")
+        
+        print("Creating test loader for unseen data...")
+        test_loader = DataLoader(dataset=test_set_normalized, 
+                                batch_size=batch_size, 
+                                shuffle=False,  # No shuffling for test evaluation
+                                num_workers=4, 
+                                pin_memory=True,
+                                collate_fn=collate_fn, 
+                                worker_init_fn=seed_worker)
+        print("Test loader for unseen data created")
+        
+        # Save test dataloader and parameters (consistent with transductive case)
+        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl_unseen.pt')
+        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_unseen_params.json')
+        print("Unseen test dataloader and parameters saved")
+        
+        return test_loader
+    
+    except Exception as e:
+        print(f"Error in prepare_test_dataloader_from_unseen: {str(e)}")
         import traceback
         traceback.print_exc()
         raise
@@ -214,7 +319,7 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
         "x_signed_scaler": x_signed_scaler,
     } if is_eign else {
         "x_scaler": x_scaler,
-        #"pos_scaler": pos_scaler,
+        "pos_scaler": pos_scaler,
         # "modestats_scaler": modestats_scaler
     }
     return normalized_data_list, scalers_dict
@@ -651,3 +756,26 @@ def apply_global_scaler(data_list, scaler, node_features):
         data_list_actual = data_list
     
     return normalize_x_features_with_scaler_global_inductive(data_list_actual, node_features, scaler)
+
+
+def verify_batch_distribution(dataloader, num_batches_to_check=3):
+    """
+    Verify that batches have balanced hex_size distribution.
+    """
+    print("\n=== Verifying Batch Distribution ===")
+    
+    for i, batch in enumerate(dataloader):
+        if i >= num_batches_to_check:
+            break
+            
+        hex_sizes = batch.hex_size.tolist()
+        hex_distribution = Counter(hex_sizes)
+        
+        print(f"Batch {i+1}: {dict(hex_distribution)}")
+        
+        # Calculate percentages
+        total = len(hex_sizes)
+        percentages = {k: f"{(v/total)*100:.1f}%" for k, v in hex_distribution.items()}
+        print(f"  Percentages: {percentages}")
+    
+    print("=" * 40)
