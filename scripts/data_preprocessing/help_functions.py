@@ -126,6 +126,30 @@ def read_eqasim_trips(folder):
     else:
         return None
 
+def add_destinations_to_gdf(gdf, df_eqasim_trips):
+    """
+    Add destination-related features to GeoDataFrame based on eqasim_trips data.
+    For each unique link, find what destination links are associated with it.
+    """
+    gdf_extended = gdf.copy()
+    
+    if df_eqasim_trips is not None and not df_eqasim_trips.empty:
+        # Check if required columns exist
+        required_cols = ['destination_link_id', 'following_purpose']
+        if all(col in df_eqasim_trips.columns for col in required_cols):
+            
+            # Create the pivot table directly
+            df_all_link = df_eqasim_trips.groupby(['destination_link_id'])['following_purpose'].value_counts().unstack(fill_value=0)
+            
+            # Convert link column to same type before merging
+            gdf_extended['link'] = gdf_extended['link'].astype(str)
+            df_all_link.index = df_all_link.index.astype(str)
+            
+            # Then merge this with the GeoDataFrame using the link column
+            gdf_extended = gdf_extended.merge(df_all_link, left_on='link', right_index=True, how='left').fillna(0)
+    
+    return gdf_extended
+
 def compute_target_tensor_only_edge_features(vol_base_case, gdf):
     edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
     return torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
@@ -138,7 +162,7 @@ def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
         combined_mask = combined_mask | mask
     
     capacities_new = np.where(combined_mask, gdf['capacity'], 0) # capacity is 0 for links that are not used by the required modes
-    capacity_reduction = capacities_new - capacity_base_case
+    capacity_reduction = capacities_new - capacity_base_case #check the sign of this
     highway = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
     freespeed = np.where(combined_mask, gdf['freespeed'], 0) # freespeed is 0 for links that are not used by the required modes
     return capacities_new, capacity_reduction, highway, freespeed
@@ -152,7 +176,7 @@ def prepare_gdf(df, gdf_input):
 def get_link_geometries(links_gdf_input, apply_scaling=True):
     """
     Extract link geometries and optionally apply centering and scaling.
-    
+    Apply scaling anc centering when using multiple cities
     Args:
         links_gdf_input: GeoDataFrame with link geometry information
         apply_scaling: Whether to apply centering and scaling to coordinates

@@ -25,6 +25,7 @@ from gnn.gnn_io import *
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
 from gnn.models.gcn import GCN, GCN2
 from gnn.models.gat import GAT
+from gnn.models.gatv2 import GATv2
 from gnn.models.trans_conv import TransConv
 from gnn.models.pnc import PNC
 from gnn.models.fc_nn import FC_NN
@@ -32,6 +33,7 @@ from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.xgboost import XGBoostModel
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
+from gnn.gnn_io import collate_fn
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -96,8 +98,8 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
         
-def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth'):
-    data_path = os.path.join(base_dir, unique_model_description)
+def get_paths(base_dir: str, unique_model_description: str, run_name: str, model_save_path: str = 'trained_model/model.pth'):
+    data_path = os.path.join(base_dir, unique_model_description, run_name)
     os.makedirs(data_path, exist_ok=True)
     model_save_to = os.path.join(data_path, model_save_path)
     path_to_save_dataloader = os.path.join(data_path, 'data_created_during_training/')
@@ -113,37 +115,142 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def create_hex_size_balanced_sampler(dataset):
-    """
-    Create a sampler that ensures balanced hex_size distribution in batches.
-    """
-    # Extract hex_sizes from all data points
-    hex_sizes = [data.hex_size for data in dataset]
-    hex_size_counts = Counter(hex_sizes)
-    
-    print(f"Hex size distribution: {dict(hex_size_counts)}")
-    
-    # Calculate weights to balance hex_sizes
-    total_samples = len(dataset)
-    num_classes = len(hex_size_counts)
-    
-    # Weight calculation: inverse frequency
-    weights = []
-    for data in dataset:
-        hex_size = data.hex_size
-        weight = total_samples / (num_classes * hex_size_counts[hex_size])
-        weights.append(weight)
-    
-    # Create weighted random sampler
-    sampler = WeightedRandomSampler(
-        weights=weights,
-        num_samples=len(weights),
-        replacement=True
-    )
-    
+def fixed_proportion_sampler(dataset):
+    city_counts = {}
+    for graph in dataset:
+        city = graph.city
+        city_counts[city] = city_counts.get(city, 0) + 1
+
+    global_weights = []
+    for graph in dataset:
+        city = graph.city
+        graph_weight = city_counts[city] / len(dataset)
+        global_weights.append(graph_weight)  
+
+    sampler = WeightedRandomSampler(weights=global_weights, num_samples=len(dataset), replacement=True)
     return sampler
 
-def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping, is_eign=False, split_mode="full"):
+def nested_fixed_proportion_sampler(dataset):
+    """
+    Create a sampler that ensures fixed proportion of cities and hex_sizes in batches with replacement.
+    Uses two-level sampling: first sample cities globally, then sample hex_sizes locally within each city.
+    """
+    def get_key(graph): return (graph.city, graph.hex_size)
+    
+    groups = {}
+    for graph in dataset:
+        key = get_key(graph)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(graph)
+    
+    # Calculate global city distribution
+    city_counts = {}
+    for (city, hex_size), graphs in groups.items():
+        if city not in city_counts:
+            city_counts[city] = 0
+        city_counts[city] += len(graphs)
+    
+    total_graphs = len(dataset)
+    global_weights = []
+    for (city, hex_size), graphs in groups.items():
+        # Global weight: probability of this city
+        global_weight = city_counts[city] / total_graphs
+        global_weights.append(global_weight)
+    
+    # Calculate local hex_size distribution within each city
+    city_hex_counts = {}
+    for (city, hex_size), graphs in groups.items():
+        if city not in city_hex_counts:
+            city_hex_counts[city] = {}
+        city_hex_counts[city][hex_size] = len(graphs)
+    
+    local_weights = []
+    for (city, hex_size), graphs in groups.items():
+        # Local weight: probability of this hex_size given this city
+        total_city_graphs = sum(city_hex_counts[city].values())
+        local_weight = len(graphs) / total_city_graphs
+        local_weights.append(local_weight)
+    
+    # Combine global and local weights (product of probabilities)
+    combined_weights = [global_w * local_w for global_w, local_w in zip(global_weights, local_weights)]
+    
+    # DEBUG: Print weight calculations
+    print("DEBUG SAMPLER: Weight calculations:")
+    for i, ((city, hex_size), graphs) in enumerate(groups.items()):
+        print(f"  {city}-{hex_size}: {len(graphs)} graphs, global_w={global_weights[i]:.3f}, local_w={local_weights[i]:.3f}, combined_w={combined_weights[i]:.3f}")
+    
+    # DEBUG: Check if weights sum to 1
+    total_weight = sum(combined_weights)
+    print(f"DEBUG SAMPLER: Total weight = {total_weight:.3f}")
+    
+    # DEBUG: Check if any weights are 0
+    zero_weights = [i for i, w in enumerate(combined_weights) if w == 0]
+    if zero_weights:
+        print(f"DEBUG SAMPLER: Zero weights found at indices: {zero_weights}")
+    
+    sampler = WeightedRandomSampler(weights=combined_weights, num_samples=len(dataset), replacement=True)
+    return sampler
+
+def test_sampler_distribution(dataset, sampler, num_samples=100):
+    """
+    Test the sampler to see if it produces the expected distribution.
+    """
+    print(f"\n=== Testing Sampler Distribution ({num_samples} samples) ===")
+    
+    # Create a larger dataset by duplicating the original dataset to test replacement
+    # This allows us to sample more than the original dataset size
+    from torch.utils.data import ConcatDataset
+    import copy
+    
+    # Create multiple copies of the dataset to allow sampling with replacement
+    num_copies = (num_samples // len(dataset)) + 2  # Extra copies to ensure we can sample enough
+    datasets = [copy.deepcopy(dataset) for _ in range(num_copies)]
+    large_dataset = ConcatDataset(datasets)
+    
+    # Create a new sampler for the large dataset
+    from torch.utils.data import WeightedRandomSampler
+    import torch
+    
+    # Get the original weights and repeat them for the large dataset
+    original_weights = sampler.weights
+    repeated_weights = []
+    for _ in range(num_copies):
+        repeated_weights.extend(original_weights)
+    
+    large_sampler = WeightedRandomSampler(weights=repeated_weights, num_samples=num_samples, replacement=True)
+    
+    # Create a temporary DataLoader to test the sampler
+    test_loader = DataLoader(dataset=large_dataset, batch_size=1, sampler=large_sampler, num_workers=0, collate_fn=collate_fn)
+    
+    # Sample from the DataLoader
+    sampled_graphs = []
+    for i, batch in enumerate(test_loader):
+        if i >= num_samples:
+            break
+        sampled_graphs.append(batch)
+    
+    # Count hex sizes
+    hex_counts = {}
+    for batch in sampled_graphs:
+        # Handle hex_size as list or tensor
+        if hasattr(batch.hex_size, 'tolist'):
+            hex_size = str(batch.hex_size.tolist()[0])
+        else:
+            hex_size = str(batch.hex_size[0])
+        hex_counts[hex_size] = hex_counts.get(hex_size, 0) + 1
+    
+    print(f"Sampled distribution: {hex_counts}")
+    
+    # Calculate percentages
+    total = sum(hex_counts.values())
+    percentages = {k: f"{(v/total)*100:.1f}%" for k, v in hex_counts.items()}
+    print(f"Percentages: {percentages}")
+    
+    print("=" * 50)
+    return hex_counts
+
+def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataloader, use_all_features, use_bootstrapping, is_eign=False, split_mode="full", split_variant="uniform", sampler_variant="fixed_proportion"):
     print(f"Starting prepare_data_with_graph_features with {len(datalist)} items")
     
     try:
@@ -155,14 +262,14 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
             if use_bootstrapping:
                 train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
             else:
-                train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+                train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05, split_variant=split_variant, split_mode=split_mode)
             print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
         else:  # split_mode == "train_val_only"
             # Train/val split only for inductive learning
             if use_bootstrapping:
                 train_set, valid_set = split_into_subsets_with_bootstrapping_train_val_only(dataset=datalist, bootstrap_seed=4)
             else:
-                train_set, valid_set = split_into_subsets_train_val_only(dataset=datalist, train_ratio=0.85, val_ratio=0.15)
+                train_set, valid_set = split_into_subsets(dataset=datalist, train_ratio=0.85, val_ratio=0.15, split_variant=split_variant, split_mode=split_mode)
             test_set = None
             print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: None (using unseen data)")
 
@@ -176,7 +283,15 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
                              "CAPACITY_BASE_CASE",
                              "CAPACITY_REDUCTION",
                              "FREESPEED",
-                             "LENGTH"]
+                             "LENGTH",
+                             #"DESTINATION_HOME",
+                             #"DESTINATION_WORK",
+                             #"DESTINATION_OTHER",
+                             #"DESTINATION_EDUCATION",
+                             #"DESTINATION_LEISURE",
+                             #"DESTINATION_SHOP",
+                             #"DESTINATION_OUTSIDE"
+                             ]
         
         print("Normalizing train set and fitting global scalers...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features)
@@ -191,10 +306,25 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
             test_set_normalized = apply_global_scaler(data_list=test_set, scaler=scalers_train['x_scaler'], node_features=node_features)
             print("Test set normalized")
         
-        print("Creating train loader with balanced hex_size sampling...")
-        train_sampler = create_hex_size_balanced_sampler(train_set_normalized)
+        print(f"Creating train loader with {sampler_variant} sampling...")
+        if sampler_variant == "fixed_proportion":
+            train_sampler = fixed_proportion_sampler(train_set_normalized)
+        elif sampler_variant == "nested_fixed_proportion":
+            train_sampler = nested_fixed_proportion_sampler(train_set_normalized)
+            #TODO: Uncomment this to test the sampler distribution for nested_fixed_proportion
+            #test_sampler_distribution(train_set_normalized, train_sampler, num_samples=100) 
+        else:
+            raise ValueError(f"Invalid sampler variant: {sampler_variant}. Please choose from fixed_proportion or nested_fixed_proportion.")
+        
+        # DEBUG: Print dataset and sampler information
+        print(f"DEBUG: Train set length: {len(train_set_normalized)}")
+        print(f"DEBUG: Batch size: {batch_size}")
+        print(f"DEBUG: Sampler num_samples: {train_sampler.num_samples}")
+        print(f"DEBUG: Expected batches: {train_sampler.num_samples // batch_size}")
+        
         train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, sampler=train_sampler, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
         print("Train loader created")
+        print(f"DEBUG: Actual train loader length: {len(train_loader)}")
         
         print("Creating validation loader...")
         val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
@@ -210,7 +340,8 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
         if not is_eign:
-            joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
+            #joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
+            pass
         # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
 
         #joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
@@ -261,7 +392,14 @@ def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_si
                              "CAPACITY_BASE_CASE", 
                              "CAPACITY_REDUCTION",
                              "FREESPEED",
-                             "LENGTH"]
+                             "LENGTH",
+                             "DESTINATION_HOME",
+                             "DESTINATION_WORK",
+                             "DESTINATION_OTHER",
+                             "DESTINATION_EDUCATION",
+                             "DESTINATION_LEISURE",
+                             "DESTINATION_SHOP",
+                             "DESTINATION_OUTSIDE"]
         
         print("Applying training scalers to unseen test data...")
         test_set_normalized = apply_global_scaler(data_list=unseen_datalist, 
@@ -293,8 +431,11 @@ def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_si
         raise
         
 def normalize_dataset(dataset_input, node_features, is_eign=False):
-    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
-
+    if hasattr(dataset_input, 'indices'):  # It's a Subset object
+        data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
+    else:  # It's already a list of Data objects
+        data_list = [copy.deepcopy(data) for data in dataset_input]
+        
     print("Fitting and normalizing x features...")
     normalized_data_list, x_scaler = normalize_x_features_global_inductive(data_list, node_features)
     print("x features normalized")
@@ -306,9 +447,10 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
         )
         print("x_signed features normalized")
     else:
-        print("Fitting and normalizing pos features...")
-        normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
-        print("Pos features normalized")
+        #print("Fitting and normalizing pos features...")
+        #normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
+        #print("Pos features normalized")
+        pass
         
     # print("Fitting and normalizing modestats features...")
     # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
@@ -319,7 +461,7 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
         "x_signed_scaler": x_signed_scaler,
     } if is_eign else {
         "x_scaler": x_scaler,
-        "pos_scaler": pos_scaler,
+        #"pos_scaler": pos_scaler,
         # "modestats_scaler": modestats_scaler
     }
     return normalized_data_list, scalers_dict
@@ -365,6 +507,36 @@ def normalize_modestats_features_batched(data_list, batch_size=1000):
             data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
     
     return data_list, scaler
+
+def one_hot_highway(datalist, idx):
+
+    """
+    One-hot encodes the 'HIGHWAY' feature and removes the original one.
+    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
+    """
+    
+    n_types = 6
+    mapping = {
+        -1: 4, # pt
+        0: 0, # primary
+        1: 0, # primary
+        2: 1, # secondary
+        3: 2, # tertiary
+        4: 3, # residential
+        5: 5, # other
+        6: 5,
+        7: 5,
+        8: 5,
+        9: 5
+    }
+
+    for data in datalist:
+        
+        highway = data.x[:, idx].numpy()
+        mapped_highway = np.vectorize(mapping.get)(highway)
+        one_hot = np.eye(n_types)[mapped_highway]
+
+        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
 
 def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_size=100):
     """
@@ -485,37 +657,6 @@ def normalize_x_signed_features_with_scaler(
                 )
     return data_list
 
-def one_hot_highway(datalist, idx):
-
-    """
-    One-hot encodes the 'HIGHWAY' feature and removes the original one.
-    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
-    """
-    
-    n_types = 6
-    mapping = {
-        -1: 4, # pt
-        0: 5, # other
-        1: 0, # primary
-        2: 1, # secondary
-        3: 2, # tertiary
-        4: 3, # residential
-        5: 5,
-        6: 5,
-        7: 5,
-        8: 5,
-        9: 5
-    }
-
-    for data in datalist:
-        
-        highway = data.x[:, idx].numpy()
-        mapped_highway = np.vectorize(mapping.get)(highway)
-        one_hot = np.eye(n_types)[mapped_highway]
-
-        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
-
-
 def setup_wandb(args):
     wandb.login()
     wandb.init(project=args['project_name'], name=args['unique_model_description'],
@@ -579,6 +720,9 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     
     elif gnn_arch == "gat":
         return GAT(**common_kwargs, **model_kwargs).to(device)
+
+    elif gnn_arch == "gatv2":
+        return GATv2(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "trans_conv":
         return TransConv(**common_kwargs, **model_kwargs).to(device)
@@ -625,12 +769,8 @@ def normalize_x_features_global_inductive(data_list, node_features, batch_size=1
     """
     scaler = StandardScaler()
     
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
+    # Continuous features to normalize - only the ones that will be used
+    continuous_feat = [EdgeFeatures[feature].value for feature in node_features]
     
     # First pass: Fit the scaler on ALL cities using batching
     print("Fitting global scaler across all cities...")
@@ -666,6 +806,8 @@ def normalize_x_features_global_inductive(data_list, node_features, batch_size=1
     # One-hot encode highway if needed
     if "HIGHWAY" in node_features:
         one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+
+    print(f'Shape of features: {data_list[0].x.shape}')
     
     return data_list, scaler
 
@@ -680,12 +822,8 @@ def normalize_x_features_with_scaler_global_inductive(data_list, node_features, 
     FIXED: Properly handles graphs with different numbers of nodes.
     """
 
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
+    # Continuous features to normalize - only the ones that will be used
+    continuous_feat = [EdgeFeatures[feature].value for feature in node_features]
     
     # Transform the data using batching with proper indexing
     for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
@@ -711,37 +849,10 @@ def normalize_x_features_with_scaler_global_inductive(data_list, node_features, 
     if "HIGHWAY" in node_features:
         one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
     
+    print(f'Shape of features: {data_list[0].x.shape}')
+    
     return data_list
 
-def one_hot_highway(datalist, idx):
-
-    """
-    One-hot encodes the 'HIGHWAY' feature and removes the original one.
-    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
-    """
-    
-    n_types = 6
-    mapping = {
-        -1: 4, # pt
-        0: 5, # other
-        1: 0, # primary
-        2: 1, # secondary
-        3: 2, # tertiary
-        4: 3, # residential
-        5: 5,
-        6: 5,
-        7: 5,
-        8: 5,
-        9: 5
-    }
-
-    for data in datalist:
-        
-        highway = data.x[:, idx].numpy()
-        mapped_highway = np.vectorize(mapping.get)(highway)
-        one_hot = np.eye(n_types)[mapped_highway]
-
-        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
 
 def apply_global_scaler(data_list, scaler, node_features):
     """
@@ -758,20 +869,72 @@ def apply_global_scaler(data_list, scaler, node_features):
     return normalize_x_features_with_scaler_global_inductive(data_list_actual, node_features, scaler)
 
 
-def verify_batch_distribution(dataloader, num_batches_to_check=3):
+def verify_batch_distribution(data_container, num_batches_to_check=None):
     """
-    Verify that batches have balanced hex_size distribution.
+    Verify that data has balanced hex_size distribution.
+    Handles DataLoader, Subset, or list of Data objects.
+    If num_batches_to_check is None, checks ALL batches.
     """
-    print("\n=== Verifying Batch Distribution ===")
+    print("\n=== Verifying Data Distribution ===")
     
-    for i, batch in enumerate(dataloader):
-        if i >= num_batches_to_check:
-            break
+    # Handle different input types
+    if hasattr(data_container, 'dataset'):  # DataLoader
+        # Check batches from DataLoader
+        for i, batch in enumerate(data_container):
+            if num_batches_to_check is not None and i >= num_batches_to_check:
+                break
+                
+            # Handle both tensor and list formats
+            if hasattr(batch.hex_size, 'tolist'):
+                hex_sizes = batch.hex_size.tolist()
+            else:
+                hex_sizes = batch.hex_size
+                
+            hex_distribution = Counter(hex_sizes)
+            print(f"Batch {i+1}: {dict(hex_distribution)}")
             
-        hex_sizes = batch.hex_size.tolist()
-        hex_distribution = Counter(hex_sizes)
+            # Calculate percentages
+            total = len(hex_sizes)
+            percentages = {k: f"{(v/total)*100:.1f}%" for k, v in hex_distribution.items()}
+            print(f"  Percentages: {percentages}")
+            print(f"  Total items in batch: {total}")
+    
+    elif hasattr(data_container, 'indices'):  # Subset
+        # Check all items from Subset
+        if num_batches_to_check is None:
+            sample_size = len(data_container)
+        else:
+            sample_size = min(num_batches_to_check * 10, len(data_container))
         
-        print(f"Batch {i+1}: {dict(hex_distribution)}")
+        sample_indices = random.sample(range(len(data_container)), sample_size)
+        
+        hex_sizes = []
+        for idx in sample_indices:
+            hex_sizes.append(data_container[idx].hex_size)
+        
+        hex_distribution = Counter(hex_sizes)
+        print(f"Subset sample ({sample_size} items): {dict(hex_distribution)}")
+        
+        # Calculate percentages
+        total = len(hex_sizes)
+        percentages = {k: f"{(v/total)*100:.1f}%" for k, v in hex_distribution.items()}
+        print(f"  Percentages: {percentages}")
+    
+    else:  # List of Data objects
+        # Check all items from list
+        if num_batches_to_check is None:
+            sample_size = len(data_container)
+        else:
+            sample_size = min(num_batches_to_check * 10, len(data_container))
+        
+        sample_indices = random.sample(range(len(data_container)), sample_size)
+        
+        hex_sizes = []
+        for idx in sample_indices:
+            hex_sizes.append(data_container[idx].hex_size)
+        
+        hex_distribution = Counter(hex_sizes)
+        print(f"List sample ({sample_size} items): {dict(hex_distribution)}")
         
         # Calculate percentages
         total = len(hex_sizes)

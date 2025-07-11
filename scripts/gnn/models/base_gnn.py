@@ -147,10 +147,26 @@ class BaseGNN(nn.Module, ABC):
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
+                
+                # Debug prints for data loading
+                print(f"DEBUG DATA: data.x.shape = {data.x.shape}")
+                print(f"DEBUG DATA: data.y.shape = {data.y.shape}")
+                print(f"DEBUG DATA: data.edge_index.shape = {data.edge_index.shape}")
+                if hasattr(data, 'batch'):
+                    print(f"DEBUG DATA: data.batch.shape = {data.batch.shape}")
+                print(f"DEBUG DATA: Moving data to device...")
                     
                 data = data.to(device)
+                print(f"DEBUG DATA: Data moved to device successfully")
                 targets_node_predictions = data.y
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+                print(f"DEBUG DATA: About to inverse transform scaler...")
+                # Only inverse transform the continuous features that were originally normalized
+                # The scaler was fitted on 5 features: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+                continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+                continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
+                x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
+                x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
+                print(f"DEBUG DATA: Scaler transformation completed")
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
@@ -159,11 +175,22 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     if config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
+                        # Debug prints for shape mismatch
+                        print(f"DEBUG TRAIN MODE: predicted.shape = {predicted.shape}")
+                        print(f"DEBUG TRAIN MODE: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                        print(f"DEBUG TRAIN MODE: x_unscaled.shape = {x_unscaled.shape}")
+                        print(f"DEBUG TRAIN MODE: data.batch.shape = {data.batch.shape}")
                         train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         predicted = self(data)
+                        # Debug prints for shape mismatch
+                        print(f"DEBUG TRAIN: predicted.shape = {predicted.shape}")
+                        print(f"DEBUG TRAIN: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                        print(f"DEBUG TRAIN: x_unscaled.shape = {x_unscaled.shape}")
+                        print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
+                        print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
                         train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
 
                 # Total loss

@@ -55,11 +55,11 @@ class GNN_Loss:
                 # Fallback: No batch info available - treat as single graph or warn
                 if self.num_nodes is not None and weights.shape[0] % self.num_nodes == 0:
                     # Old method: only works if weights divide evenly by num_nodes  
-                for i in range(weights.shape[0] // self.num_nodes):
-                    start_idx = i * self.num_nodes
-                    end_idx = (i + 1) * self.num_nodes
-                    weights[start_idx:end_idx] /= np.max(weights[start_idx:end_idx])
-                normalized_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
+                    for i in range(weights.shape[0] // self.num_nodes):
+                        start_idx = i * self.num_nodes
+                        end_idx = (i + 1) * self.num_nodes
+                        weights[start_idx:end_idx] /= np.max(weights[start_idx:end_idx])
+                    normalized_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
                 else:
                     # Safe fallback: normalize entire batch as one graph
                     print("⚠️  WARNING: No batch info and variable graph sizes detected")
@@ -123,8 +123,13 @@ def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     # Compute the mean of the normalized y values
     mean_y_normalized = np.mean(y_values_normalized)
 
-    # Original x values
-    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])  
+    # Original x values - only inverse transform the continuous features that were originally normalized
+    # When use_allowed_modes=False, we have: 5 basic features + 6 one-hot highway + 7 destination = 18 total
+    # The scaler was fitted on 12 continuous features (excluding highway which is one-hot encoded)
+    # Indices: 0,1,2,3,4,5 (basic) -> 0,1,2,3,5 (excluding highway at 4) + 6,7,8,9,10,11,12 (destination)
+    # After one-hot encoding: highway becomes indices 4-9 (6 features), so destination features shift by 5
+    continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x[:, continuous_feat]) for data in dataset])  
 
     # Convert numpy arrays to torch tensors
     y_values_normalized_tensor = torch.tensor(y_values_normalized, dtype=torch.float32).to(device)
@@ -153,8 +158,13 @@ def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
 
     target_tensor = np.zeros(actual_difference_vol_car.shape) # presume no difference in vol car due to policy
 
-    # Original x values
-    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x) for data in dataset])
+    # Original x values - only inverse transform the continuous features that were originally normalized
+    # When use_allowed_modes=False, we have: 5 basic features + 6 one-hot highway + 7 destination = 18 total
+    # The scaler was fitted on 12 continuous features (excluding highway which is one-hot encoded)
+    # Indices: 0,1,2,3,4,5 (basic) -> 0,1,2,3,5 (excluding highway at 4) + 6,7,8,9,10,11,12 (destination)
+    # After one-hot encoding: highway becomes indices 4-9 (6 features), so destination features shift by 5
+    continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+    x = np.concatenate([scalers["x_scaler"].inverse_transform(data.x[:, continuous_feat]) for data in dataset])
     
     target_tensor = torch.tensor(target_tensor, dtype=torch.float32).to(device)
     actual_difference_vol_car = torch.tensor(actual_difference_vol_car, dtype=torch.float32).to(device)
@@ -201,7 +211,15 @@ def validate_model_during_training(config: object,
         for idx, data in enumerate(dataset):
             data = data.to(device)
             targets_node_predictions = data.y
-            x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+            # Only inverse transform the continuous features that were originally normalized
+            # When use_allowed_modes=False, we have: 5 basic features + 6 one-hot highway + 7 destination = 18 total
+            # The scaler was fitted on 12 continuous features (excluding highway which is one-hot encoded)
+            # Indices: 0,1,2,3,4,5 (basic) -> 0,1,2,3,5 (excluding highway at 4) + 6,7,8,9,10,11,12 (destination)
+            # After one-hot encoding: highway becomes indices 4-9 (6 features), so destination features shift by 5
+            continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+            continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
+            x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
+            x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Standard Forward Pass
@@ -277,8 +295,15 @@ def validate_model_during_training_eign(
             targets_node_predictions_signed = data.y_signed
             targets_node_predictions_unsigned = data.y
             
-            x_unscaled = scalers_validation["x_scaler"].inverse_transform(
-                data.x.detach().clone().cpu().numpy())
+            # Only inverse transform the continuous features that were originally normalized
+            # When use_allowed_modes=False, we have: 5 basic features + 6 one-hot highway + 7 destination = 18 total
+            # The scaler was fitted on 12 continuous features (excluding highway which is one-hot encoded)
+            # Indices: 0,1,2,3,4,5 (basic) -> 0,1,2,3,5 (excluding highway at 4) + 6,7,8,9,10,11,12 (destination)
+            # After one-hot encoding: highway becomes indices 4-9 (6 features), so destination features shift by 5
+            continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+            continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
+            x_unscaled = scalers_validation["x_scaler"].inverse_transform(continuous_features)
+            x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
             
             x_signed_unscaled = scalers_validation["x_signed_scaler"].inverse_transform(
                 data.x_signed.detach().clone().cpu().numpy())

@@ -8,35 +8,79 @@ import torch
 from torch.utils.data import Subset
 from torch_geometric.data import Batch
 
-def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio, shuffle_seed=42):
-    # Ensure the ratios sum to 1
-    assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
-    
+def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio=None, split_variant="uniform", shuffle_seed=43, split_mode="full"):
+
+    if split_mode == "full":
+        # Ensure the ratios sum to 1
+        assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
+    elif split_mode == "train_val_only":
+        assert train_ratio + val_ratio == 1, "Ratios must sum to 1"
+    else:
+        raise ValueError(f"Invalid split mode: {split_mode}")
+
     dataset_length = len(dataset)
     print(f"Total dataset length: {dataset_length}")
-
-    # Randomly shuffle the dataset
-    random.Random(shuffle_seed).shuffle(dataset)
     
-    # Calculate split indices
-    train_split_idx = int(dataset_length * train_ratio)
-    val_split_idx = train_split_idx + int(dataset_length * val_ratio)
+    # Set random seed for reproducibility
+    random.seed(shuffle_seed)
     
-    # Create indices for each subset
-    train_indices = range(0, train_split_idx)
-    val_indices = range(train_split_idx, val_split_idx)
-    test_indices = range(val_split_idx, dataset_length)
+    # Define grouping key based on split variant
+    if split_variant == "non_uniform":
+        def get_key(graph): return graph.city
+    else:  # non_uniform
+        def get_key(graph): return (graph.city, graph.hex_size)
     
-    # Create subsets
-    train_subset = Subset(dataset, train_indices)
-    val_subset = Subset(dataset, val_indices)
-    test_subset = Subset(dataset, test_indices)
+    # Group graphs by key
+    groups = {}
+    for graph in dataset:
+        key = get_key(graph)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(graph)
+    
+    # Split each group
+    train_indices, val_indices, test_indices = [], [], []
+    
+    for graphs in groups.values():
+        random.shuffle(graphs)
+        n_graphs = len(graphs)
+        
+        if split_mode == "full":
+            train_end = int(n_graphs * train_ratio)
+            val_end = train_end + int(n_graphs * val_ratio)
+            train_indices.extend(graphs[:train_end])
+            val_indices.extend(graphs[train_end:val_end])
+            test_indices.extend(graphs[val_end:])
+        else:  # train_val_only
+            train_end = int(n_graphs * train_ratio)
+            val_end = train_end + int(n_graphs * val_ratio)
+            train_indices.extend(graphs[:train_end])
+            val_indices.extend(graphs[train_end:val_end])
+    
+    # Convert Data objects to indices
+    def get_indices(data_objects):
+        indices = []
+        for data_obj in data_objects:
+            # Find the index of this data object in the original dataset
+            for i, item in enumerate(dataset):
+                if item is data_obj:
+                    indices.append(i)
+                    break
+        return indices
+    
+    # Create subsets with integer indices
+    train_subset = Subset(dataset, get_indices(train_indices))
+    val_subset = Subset(dataset, get_indices(val_indices))
     
     print(f"Training subset length: {len(train_subset)}")
     print(f"Validation subset length: {len(val_subset)}")
-    print(f"Test subset length: {len(test_subset)}")
     
-    return train_subset, val_subset, test_subset
+    if split_mode == "full":
+        test_subset = Subset(dataset, get_indices(test_indices))
+        print(f"Test subset length: {len(test_subset)}")
+        return train_subset, val_subset, test_subset
+    else:
+        return train_subset, val_subset
 
 def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_seed=0, shuffle_seed=42):
     
@@ -62,36 +106,6 @@ def split_into_subsets_with_bootstrapping(dataset, test_ratio=0.1, bootstrap_see
     print(f"Test subset length: {len(test_subset)}")
     
     return train_subset_bootstrap, val_subset_oob, test_subset
-
-def split_into_subsets_train_val_only(dataset, train_ratio=0.85, val_ratio=0.15, shuffle_seed=42):
-    """
-    Split dataset into train and validation only (no test set for inductive learning).
-    Uses 85/15 split to maximize training data when test set comes from separate unseen data.
-    """
-    assert train_ratio + val_ratio == 1.0, "Train and val ratios must sum to 1"
-    
-    dataset_length = len(dataset)
-    print(f"Total dataset length for train/val split: {dataset_length}")
-
-    # Randomly shuffle the dataset
-    random.Random(shuffle_seed).shuffle(dataset)
-    
-    # Calculate split index (only one split point needed)
-    train_split_idx = int(dataset_length * train_ratio)
-    
-    # Create indices for train and val only
-    train_indices = range(0, train_split_idx)
-    val_indices = range(train_split_idx, dataset_length)
-    
-    # Create subsets
-    train_subset = Subset(dataset, train_indices)
-    val_subset = Subset(dataset, val_indices)
-    
-    print(f"Training subset length: {len(train_subset)}")
-    print(f"Validation subset length: {len(val_subset)}")
-    print("No test subset created - using separate unseen data for testing")
-    
-    return train_subset, val_subset
 
 def split_into_subsets_with_bootstrapping_train_val_only(dataset, bootstrap_seed=0, shuffle_seed=42):
     """
@@ -138,3 +152,14 @@ def save_dataloader_params(dataloader, file_path):
 
 def collate_fn(data_list):
     return Batch.from_data_list(data_list)
+
+def print_model_info(model):
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    
+    print(f"\n=== Model Information ===")
+    print(f"Model: {model.__class__.__name__}")
+    print(f"Total parameters: {total_params:,}")
+    print(f"Trainable parameters: {trainable_params:,}")
+    print(f"Model size: {total_params * 4 / 1024 / 1024:.2f} MB")
+    print("=" * 30)

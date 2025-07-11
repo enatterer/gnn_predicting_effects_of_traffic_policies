@@ -7,7 +7,7 @@ import wandb
 import torch
 from torch import nn
 
-from torch_geometric.nn import GATConv
+from torch_geometric.nn import GATv2Conv
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -16,7 +16,7 @@ if scripts_path not in sys.path:
 
 from gnn.models.base_gnn import BaseGNN
 
-class GAT(BaseGNN):
+class GATv2(BaseGNN):
     def __init__(self, 
                 in_channels: int = 5, 
                 use_pos: bool = False,
@@ -27,7 +27,12 @@ class GAT(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_to_wandb: bool = False):
+                log_to_wandb: bool = False,
+                #GATv2 specific parameters
+                share_weights: bool = False,
+                negative_slope: float = 0.2,
+                add_self_loops: bool = True
+                ):
     
         # Call parent class constructor
         super().__init__(
@@ -44,6 +49,11 @@ class GAT(BaseGNN):
         self.num_heads = num_heads
         self.use_pos = use_pos
 
+        # GATv2 specific parameters
+        self.share_weights = share_weights
+        self.negative_slope = negative_slope
+        self.add_self_loops = add_self_loops
+
         if self.use_pos:
             self.in_channels += 6 # x and y for start, middle and end points
 
@@ -51,7 +61,10 @@ class GAT(BaseGNN):
             wandb.config.update({'in_channels': self.in_channels,
                                  'hidden_channels': hidden_channels,
                                  'num_heads': num_heads,
-                                 'use_pos': use_pos},
+                                 'use_pos': use_pos,
+                                 'share_weights': share_weights,
+                                 'negative_slope': negative_slope,
+                                 'add_self_loops': add_self_loops},
                                  allow_val_change=True)
         
         # Define the layers of the model
@@ -69,7 +82,7 @@ class GAT(BaseGNN):
                 in_channels = self.hidden_channels[i - 1]
 
             # Define the convolutional layer
-            conv = GATConv(in_channels, int(self.hidden_channels[i]/self.num_heads), heads=self.num_heads)
+            conv = GATv2Conv(in_channels, int(self.hidden_channels[i]/self.num_heads), heads=self.num_heads, share_weights=self.share_weights, negative_slope=self.negative_slope, add_self_loops=self.add_self_loops)    
             setattr(self, f'conv{i + 1}', conv)
         
         if self.use_dropout:
