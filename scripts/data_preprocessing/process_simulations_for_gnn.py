@@ -36,11 +36,15 @@ if scripts_path not in sys.path:
 from data_preprocessing.help_functions import *
 
 #control center
-seed = 2 # Seed for the simulation
+seed = 2 # Seed for Bavarian simulation
 hex_sizes = [500, 1000, 2000] # Hexagon sizes to process
 required_modes_on_links = ['car', 'car_passenger'] # Capacity will be reduced on links that have at least one of these modes
 use_linegraph = True # Flag to use line graph transformation
 use_allowed_modes = False
+all_cities = ['rosenheim','schweinfurt']
+
+# Get the absolute path to the project root
+project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 class EdgeFeatures(IntEnum):
     VOL_BASE_CASE = 0
@@ -77,7 +81,7 @@ def compute_result_dic(basecase_links, networks, use_destination_activity):
     
     for network in tqdm(networks, desc="Processing Networks", unit="network"):
         
-        policy_key = create_policy_key(network)
+        policy_key = create_policy_key(network) #TODO: fix for paris
         df_output_links = read_output_links(network)
         df_eqasim_trips = read_eqasim_trips(network)
         if (df_output_links is not None and df_eqasim_trips is not None):
@@ -95,14 +99,13 @@ def compute_result_dic(basecase_links, networks, use_destination_activity):
     
     return result_dic_output_links, result_dic_eqasim_trips
 
-def generate_graph_data_with_hexagons(city,result_dic, result_dic_mode_stats, links_base_case, gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes):
+def generate_graph_data_with_hexagons(city, result_dic, result_dic_mode_stats, links_base_case, gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes):
     datalist = []
     linegraph_transformation = LineGraph()
 
     vol_base_case = links_base_case['vol_car'].values
     capacity_base_case = get_capacity_base_case(links_base_case, required_modes_on_links)
     length = links_base_case['length'].values
-    freespeed_base_case = links_base_case['freespeed'].values
     allowed_modes = encode_modes(links_base_case)
     
     # Get link geometries and edges_base FIRST
@@ -115,11 +118,10 @@ def generate_graph_data_with_hexagons(city,result_dic, result_dic_mode_stats, li
     graph_items = {k: v for k, v in result_dic.items() 
                    if isinstance(v, pd.DataFrame) and k != "base_network_no_policies"}
     
-    batch_counter = 0
     for key, df in tqdm(graph_items.items(), desc="Processing graphs"):
         gdf = prepare_gdf(df, links_base_case) 
         _, capacity_reduction, highway, freespeed_scenario = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
-        hex_size,scenario = key
+        policy_region, scenario = key
 
         edge_feature_dict = {
             EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case),
@@ -156,12 +158,13 @@ def generate_graph_data_with_hexagons(city,result_dic, result_dic_mode_stats, li
         edge_tensor = torch.stack([edge_feature_dict[feat] for feat in EdgeFeatures if feat in edge_feature_dict], dim=1)
         
         data = Data(edge_index=edge_index)
+        data.num_nodes = len(nodes)
         if use_linegraph:
             data = linegraph_transformation(data)
         data.x = edge_tensor
         data.pos = stacked_edge_geometries_tensor
         data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf)
-        data.hex_size = hex_size
+        data.policy_region = policy_region
         data.city = city
         data.scenario = scenario
         
@@ -239,14 +242,20 @@ def extract_and_get_networks(compressed_dirs):
     return networks, temp_dirs
 
 def process_single_city(city, project_root, use_destination_activity, use_allowed_modes):
+    
     """Process a single city and return its graph data."""
     print(f"Processing city: {city}")
     
     # Paths to compressed directories and basecase files
-    sim_input_paths = [os.path.join(project_root, 'inductive_gnn_data', 'raw_data', city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes]   
-    basecase_links_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_output_links.geojson')
-    basecase_stats_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_basecase_average_trips.csv')
-    basecase_eqasim_trips_path = os.path.join(project_root, 'inductive_gnn_data', 'links_and_stats', 'basecases_mean', city, f'{city}_eqasim_trips.csv')
+    if city != 'paris':
+        sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes] 
+    else:
+        sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes] # TODO: fix for paris
+    
+    
+    basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'basecase_average_output_links.geojson')
+    basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'basecase_average_trips.csv')
+    basecase_eqasim_trips_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'eqasim_trips.csv')
 
     try:
         # Extract all tar.gz files from compressed directories
@@ -259,16 +268,19 @@ def process_single_city(city, project_root, use_destination_activity, use_allowe
 
         # Load basecase data
         gdf_basecase_links = gpd.read_file(basecase_links_path)
-        gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True)
+        gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True) # TODO: fix for paris
+        
         if use_destination_activity:    
             gdf_basecase_links = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips)
+        
         gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
 
         # Process networks and generate graph data
         result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity)
         base_gdf = result_dic_output_links["base_network_no_policies"]
-        city_data = generate_graph_data_with_hexagons(city,result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
-                                        use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes)
+        
+        city_data = generate_graph_data_with_hexagons(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
+                                                        use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes)
         
         print(f"Processed {city} with {len(city_data)} graphs")
         return city_data
@@ -280,16 +292,25 @@ def process_single_city(city, project_root, use_destination_activity, use_allowe
             #print(f"Cleaned up: {temp_dir}")
         print(f"Cleaned up: left {len(temp_dirs)} temp directories")
 
-def process_cities(cities, project_root, use_destination_activity, use_allowed_modes, result_path, required_batch_size):
-    """Process multiple cities and save data in balanced batches."""
-    total_batch_counter = 0
-    current_batch = []
+def process_cities(cities, project_root, use_destination_activity, use_allowed_modes, required_batch_size):
+    
+    result_base_path = os.path.join(project_root, 'data', 'training_data')
+    os.makedirs(result_base_path, exist_ok=True)
     
     for city in cities:
+        
+        """Process the city and save data in balanced batches."""
+        total_batch_counter = 0
+        current_batch = []
+        
+        result_path = os.path.join(result_base_path, city)
+        os.makedirs(result_path, exist_ok=True)
+        
         city_data = process_single_city(city, project_root, use_destination_activity, use_allowed_modes)
         
         # Add city graphs to current batch
         for graph in city_data:
+            
             current_batch.append(graph)
             
             # When we have enough graphs for a full batch, save it
@@ -302,62 +323,35 @@ def process_cities(cities, project_root, use_destination_activity, use_allowed_m
         # Clear city_data from memory
         del city_data
     
-    # Save any remaining graphs in the final batch
-    if current_batch:
-        total_batch_counter += 1
-        torch.save(current_batch, os.path.join(result_path, f'datalist_batch_{total_batch_counter}.pt'))
-        print(f"Saved final batch {total_batch_counter} with {len(current_batch)} graphs")
+        # Save any remaining graphs in the final batch
+        if current_batch:
+            total_batch_counter += 1
+            torch.save(current_batch, os.path.join(result_path, f'datalist_batch_{total_batch_counter}.pt'))
+            print(f"Saved final batch {total_batch_counter} with {len(current_batch)} graphs")
     
-    print(f"Total batches saved: {total_batch_counter}")
-    return total_batch_counter
+        print(f"Total batches saved for {city}: {total_batch_counter}")
 
 def main():
-    # Get the absolute path to the project root
-    project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
     
     # Parse command line arguments
     parser = argparse.ArgumentParser(description="Process GNN data for different generalization scenarios.")
-    parser.add_argument('--case_variant', type=str, choices=['transductive', 'moderate_inductive', 'complete_inductive'], required=True,
-                        help='Choose the batch-processing variant: transductive / moderate_inductive / complete_inductive')
+    
     parser.add_argument('--use_destination_activity', type=bool, default=True,
                         help='Choose whether to use destination activity as feature for each link or not')
+    
     parser.add_argument('--use_allowed_modes', type=bool, default=False,
                         help='Choose whether to use allowed modes as feature for each link or not')
-    parser.add_argument('--run_number', type=int, default=1,
-                help='which run number is this for the case variant')
-    parser.add_argument('--required_batch_size', type=int, default=2,
+    
+    parser.add_argument('--required_batch_size', type=int, default=50,
                         help='how many graphs to save in each storage batch')
     
     args = parser.parse_args()
-    case_variant = args.case_variant
+    
     use_destination_activity = args.use_destination_activity
     use_allowed_modes = args.use_allowed_modes
-    run_number = args.run_number
     required_batch_size = args.required_batch_size
-
-    all_cities = ['rosenheim']
-    seen_cities = []
-    unseen_cities = []
     
-    # Determine cities and paths based on case variant
-    if case_variant == 'transductive':
-        selected_cities = all_cities
-        result_path_for_seen_cities = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 'transductive', f'run_{run_number}')
-    else:   #this block would be modified as per the case variant
-        selected_cities = seen_cities
-        result_path_for_seen_cities = os.path.join(project_root, 'inductive_gnn_data', 'training_data', args.case_variant, 'seen', f'run_{run_number}')
-        result_path_for_unseen_cities = os.path.join(project_root, 'inductive_gnn_data', 'training_data', args.case_variant, 'unseen', f'run_{run_number}')
-    
-    # Process seen cities
-    print(f"Processing {case_variant} case - seen cities: {selected_cities}")
-    os.makedirs(result_path_for_seen_cities, exist_ok=True)
-    process_cities(selected_cities, project_root, use_destination_activity, use_allowed_modes, result_path_for_seen_cities, required_batch_size)
-    
-    # Process unseen cities (for inductive cases only)
-    if case_variant in ['moderate_inductive', 'complete_inductive']:
-        print(f"Processing unseen cities: {unseen_cities}")
-        os.makedirs(result_path_for_unseen_cities, exist_ok=True)
-        process_cities(unseen_cities, project_root, use_destination_activity, use_allowed_modes, result_path_for_unseen_cities, required_batch_size)
+    process_cities(all_cities, project_root, use_destination_activity, use_allowed_modes, required_batch_size)
 
 if __name__ == '__main__':
     main()
