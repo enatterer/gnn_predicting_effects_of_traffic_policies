@@ -32,8 +32,7 @@ def create_policy_key(folder_name):
     base_name = os.path.basename(folder_name)  # Get the base name of the file or folder
     parts = base_name.split('_')[-1]  # Ignore the first part ('network')
     hex_size_name = os.path.basename(os.path.dirname(folder_name)) # Get the hexagon size name
-    hex_size_name = hex_size_name.split('_')[3]
-    print(f"Policy introduced in Hexagon,scenario {parts}, hexagon size {hex_size_name}")   
+    hex_size_name = hex_size_name.split('_')[3]  
     return (hex_size_name, parts)
     
 # Function to read and convert CSV.GZ to GeoDataFrame

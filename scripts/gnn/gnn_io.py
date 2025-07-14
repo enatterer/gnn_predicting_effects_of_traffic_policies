@@ -1,12 +1,116 @@
 import json
 import random
+import os
 
 import numpy as np
 from sklearn.model_selection import train_test_split
 
 import torch
-from torch.utils.data import Subset
+from torch.utils.data import Dataset, Subset
 from torch_geometric.data import Batch
+
+class LazyGraphDataset(Dataset):
+    """
+    Dataset that loads graph files on-demand instead of keeping them in memory.
+    Perfect for large datasets with 120k+ graphs.
+    """
+    def __init__(self, filepaths):
+        self.filepaths = filepaths
+        self._cache = {}  # Optional: cache recently used files
+        
+    def __len__(self):
+        return len(self.filepaths)
+    
+    def __getitem__(self, idx):
+        filepath = self.filepaths[idx]
+        
+        # Optional caching (remove if memory is still tight)
+        if filepath in self._cache:
+            return self._cache[filepath]
+        
+        # Load the batch file
+        batch_data = torch.load(filepath, map_location='cpu')
+        
+        # If it's a batch of graphs, randomly select one
+        if isinstance(batch_data, list):
+            import random
+            graph = random.choice(batch_data)
+        else:
+            graph = batch_data
+            
+        # Optional caching (limit cache size)
+        if len(self._cache) < 100:  # Cache max 100 files
+            self._cache[filepath] = graph
+            
+        return graph
+
+def parse_filepath_metadata(filepath):
+    """
+    Parse city and hex_size from filepath string.
+    Example: 'augsburg/datalist_batch_1.pt' -> city='augsburg'
+    For hex_size, we'd need to load one graph from the batch to get this info.
+    """
+    city = os.path.basename(os.path.dirname(filepath))
+    hex_size = os.path.basename(filepath).split('_')[2]
+    return city,hex_size
+
+def split_into_subsets_from_filepaths(filepaths, train_ratio, val_ratio, test_ratio=None, split_variant="uniform", shuffle_seed=43, split_mode="full"):
+    """
+    Split dataset when it contains filepaths instead of loaded graph objects.
+    """
+    if split_mode == "full":
+        assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
+    elif split_mode == "train_val_only":
+        assert train_ratio + val_ratio == 1, "Ratios must sum to 1"
+    else:
+        raise ValueError(f"Invalid split mode: {split_mode}")
+
+    dataset_length = len(filepaths)
+    print(f"Total dataset length: {dataset_length}")
+    
+    # Set random seed for reproducibility
+    random.seed(shuffle_seed)
+    
+    if split_variant == "non_uniform":
+        def get_key(filepath): return parse_filepath_metadata(filepath)[0]
+    else:
+        def get_key(filepath): return parse_filepath_metadata(filepath)
+    
+    # Group filepaths by city
+    groups = {}
+    for filepath in filepaths:
+        key = get_key(filepath)
+        if key not in groups:
+            groups[key] = []
+        groups[key].append(filepath)
+    
+    # Split each group
+    train_paths, val_paths, test_paths = [], [], []
+    
+    for paths in groups.values():
+        random.shuffle(paths)
+        n_paths = len(paths)
+        
+        if split_mode == "full":
+            train_end = int(n_paths * train_ratio)
+            val_end = train_end + int(n_paths * val_ratio)
+            train_paths.extend(paths[:train_end])
+            val_paths.extend(paths[train_end:val_end])
+            test_paths.extend(paths[val_end:])
+        else:  # train_val_only
+            train_end = int(n_paths * train_ratio)
+            val_end = train_end + int(n_paths * val_ratio)
+            train_paths.extend(paths[:train_end])
+            val_paths.extend(paths[train_end:val_end])
+    
+    print(f"Training filepaths: {len(train_paths)}")
+    print(f"Validation filepaths: {len(val_paths)}")
+    
+    if split_mode == "full":
+        print(f"Test filepaths: {len(test_paths)}")
+        return train_paths, val_paths, test_paths
+    else:
+        return train_paths, val_paths
 
 def split_into_subsets(dataset, train_ratio, val_ratio, test_ratio=None, split_variant="uniform", shuffle_seed=43, split_mode="full"):
 

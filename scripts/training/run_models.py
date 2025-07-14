@@ -30,6 +30,9 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 # Note: base_dir will be set after args parsing to include learning_variant
 
+all_cities=['rosenheim','schweinfurt','wuerzburg','aschaffenburg','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','landshut','regensburg']
+seen_cities= []
+unseen_cities=[]
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -74,62 +77,46 @@ def main():
     
     # Set dataset paths based on learning variant
     if args['learning_variant'] == 'transductive':
-        dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 'transductive', f'run_{args["run_name"]}')
+        dataset_path = os.path.join(project_root, 'data', 'training_data')
         unseen_dataset_path = None  # No separate unseen data
     else:
         # For inductive variants, load both seen and unseen
-        dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 
-                                   args['learning_variant'], 'seen', f'run_{args["run_name"]}')
-        unseen_dataset_path = os.path.join(project_root, 'inductive_gnn_data', 'training_data', 
-                                          args['learning_variant'], 'unseen', f'run_{args["run_name"]}')
+        dataset_path = os.path.join(project_root, 'data', 'training_data')
+        unseen_dataset_path = None
     
     # Set base directory for results - organized by learning variant first
     base_dir = os.path.join(project_root, 'inductive_gnn_data_results', args['learning_variant'])
     
     try:
-        # Load data based on learning variant
+        # Load datapaths for transductive learning
         if args['learning_variant'] == 'transductive':
-            # Load all data into single datalist
             datalist = []
-            batch_num = 1
-            while True:
-                batch_file = os.path.join(dataset_path, f'datalist_batch_{batch_num}.pt')
-                if not os.path.exists(batch_file):
-                    break
-                batch_data = torch.load(batch_file, map_location='cpu')
-                if isinstance(batch_data, list):
-                    datalist.extend(batch_data)
-                batch_num += 1
+            for city in all_cities:
+                city_data_path=os.path.join(dataset_path, city)
+                for file in os.listdir(city_data_path):
+                    if file.endswith('.pt'):
+                        datalist.append(file)
+                        
             print(f"Loaded {len(datalist)} items for transductive learning")
-            
-            unseen_datalist = None  # No separate unseen data
+            unseen_datalist=None
             
         else:  # inductive variants
             # Load seen data (for training/validation)
             seen_datalist = []
-            batch_num = 1
-            while True:
-                batch_file = os.path.join(dataset_path, f'datalist_batch_{batch_num}.pt')
-                if not os.path.exists(batch_file):
-                    break
-                batch_data = torch.load(batch_file, map_location='cpu')
-                if isinstance(batch_data, list):
-                    seen_datalist.extend(batch_data)
-                batch_num += 1
-            print(f"Loaded {len(seen_datalist)} items from seen cities")
-            
-            # Load unseen data (for testing)
-            unseen_datalist = []
-            batch_num = 1
-            while True:
-                batch_file = os.path.join(unseen_dataset_path, f'datalist_batch_{batch_num}.pt')
-                if not os.path.exists(batch_file):
-                    break
-                batch_data = torch.load(batch_file, map_location='cpu')
-                if isinstance(batch_data, list):
-                    unseen_datalist.extend(batch_data)
-                batch_num += 1
-            print(f"Loaded {len(unseen_datalist)} items from unseen cities")
+            for city in seen_cities and if city in seen_cities:
+                city_data_path=os.path.join(dataset_path, city)
+                for file in os.listdir(city_data_path):
+                    if file.endswith('.pt'):
+                        seen_datalist.append(file)
+                        
+            print(f"Loaded {len(seen_datalist)} items for transductive learning")
+            unseen_datalist=[]
+            for city in unseen_cities and if city in unseen_cities:
+                city_data_path=os.path.join(dataset_path, city)
+                for file in os.listdir(city_data_path):
+                    if file.endswith('.pt'):
+                        unseen_datalist.append(file)
+            print(f"Loaded {len(unseen_datalist)} items for transductive learning")
             
             datalist = seen_datalist  # For compatibility with existing code
 

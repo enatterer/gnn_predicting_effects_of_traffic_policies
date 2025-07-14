@@ -41,7 +41,9 @@ hex_sizes = [500, 1000, 2000] # Hexagon sizes to process
 required_modes_on_links = ['car', 'car_passenger'] # Capacity will be reduced on links that have at least one of these modes
 use_linegraph = True # Flag to use line graph transformation
 use_allowed_modes = False
-all_cities = ['rosenheim','schweinfurt']
+all_cities = ['rosenheim', 'schweinfurt', 'aschaffenburg', 'wuerzburg', 
+              'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten', 
+              'landshut', 'ingolstadt', 'regensburg']
 
 # Get the absolute path to the project root
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -79,7 +81,7 @@ def compute_result_dic(basecase_links, networks, use_destination_activity):
     result_dic_eqasim_trips = {}
     result_dic_output_links["base_network_no_policies"] = basecase_links
     
-    for network in tqdm(networks, desc="Processing Networks", unit="network"):
+    for network in networks:
         
         policy_key = create_policy_key(network) #TODO: fix for paris
         df_output_links = read_output_links(network)
@@ -118,7 +120,7 @@ def generate_graph_data_with_hexagons(city, result_dic, result_dic_mode_stats, l
     graph_items = {k: v for k, v in result_dic.items() 
                    if isinstance(v, pd.DataFrame) and k != "base_network_no_policies"}
     
-    for key, df in tqdm(graph_items.items(), desc="Processing graphs"):
+    for key, df in graph_items.items():
         gdf = prepare_gdf(df, links_base_case) 
         _, capacity_reduction, highway, freespeed_scenario = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
         policy_region, scenario = key
@@ -194,7 +196,7 @@ def get_capacity_base_case(links_base_case, required_modes_on_links):
     capacity_base_case = np.where(combined_mask, links_base_case['capacity'], 0)
     return capacity_base_case
 
-def extract_and_get_networks(compressed_dirs):
+def extract_and_get_networks(tar_files):
     """
     Extract all tar.gz files from compressed directories and return network paths.
     Each tar.gz contains files directly, so we need to create the proper directory structure.
@@ -202,49 +204,42 @@ def extract_and_get_networks(compressed_dirs):
     networks = []
     temp_dirs = []  # Keep track for cleanup
     
-    for compressed_dir in compressed_dirs:
-        if os.path.exists(compressed_dir) and os.path.isdir(compressed_dir):
-            print(f"Processing directory: {compressed_dir}")
-            
-            # Find all .tar.gz files in this directory
-            tar_files = [f for f in os.listdir(compressed_dir) if f.endswith('.tar.gz')]
-            print(f"  Found {len(tar_files)} tar.gz files")
-            
-            for tar_file in tar_files:
-                tar_path = os.path.join(compressed_dir, tar_file)
-                #print(f"  Extracting: {tar_file}")
+    for tar_file in tar_files:
+        tar_path = tar_file
+        #print(f"  Extracting: {tar_file}")
                 
-                # Extract network name from tar filename (remove .tar.gz)
-                network_name = tar_file.replace('.tar.gz', '')
+        # Extract network name from tar filename (remove .tar.gz)
+        network_name = os.path.basename(tar_file).replace('.tar.gz', '')
+        
+        # Get the compressed directory name to preserve hex size info
+        compressed_dir_name = os.path.basename(os.path.dirname(tar_path))
                 
-                # Create temporary directory for this tar file
-                temp_dir = tempfile.mkdtemp()
-                temp_dirs.append(temp_dir)
-                
-                # Create the original directory structure to preserve hex size info
-                # Extract hex size from compressed_dir name (e.g., compressed_rosenheim_hex_500_seed_2)
-                compressed_dir_name = os.path.basename(compressed_dir)
-                preserve_structure_dir = os.path.join(temp_dir, compressed_dir_name)
-                os.makedirs(preserve_structure_dir, exist_ok=True)
-                
-                # Create network subdirectory (what the processing code expects)
-                network_dir = os.path.join(preserve_structure_dir, network_name)
-                os.makedirs(network_dir, exist_ok=True)
-                
-                # Extract tar.gz file directly into the network directory
-                with tarfile.open(tar_path, 'r:gz') as tar:
-                    tar.extractall(network_dir)
-                
-                # Add the network directory to our list
-                networks.append(network_dir)
-                #print(f"    Created network: {network_name} in {compressed_dir_name}")
+        # Create temporary directory for this tar file
+        temp_dir = tempfile.mkdtemp()
+        temp_dirs.append(temp_dir)
+        
+        # Create the directory structure that preserves hex size info
+        preserve_structure_dir = os.path.join(temp_dir, compressed_dir_name)
+        os.makedirs(preserve_structure_dir, exist_ok=True)
+        
+        # Create network subdirectory (what the processing code expects)
+        network_dir = os.path.join(preserve_structure_dir, network_name)
+        os.makedirs(network_dir, exist_ok=True)
+        
+        # Extract tar.gz file directly into the network directory
+        with tarfile.open(tar_path, 'r:gz') as tar:
+            tar.extractall(network_dir)
+        
+        # Add the network directory to our list
+        networks.append(network_dir)
+        #print(f"    Created network: {network_name} in temp directory")
     
     return networks, temp_dirs
 
-def process_single_city(city, project_root, use_destination_activity, use_allowed_modes):
+def process_single_city(city, project_root, result_path, use_destination_activity, use_allowed_modes, required_batch_size):
     
     """Process a single city and return its graph data."""
-    print(f"Processing city: {city}")
+    print(f"\nProcessing city: {city}\n")
     
     # Paths to compressed directories and basecase files
     if city != 'paris':
@@ -252,84 +247,102 @@ def process_single_city(city, project_root, use_destination_activity, use_allowe
     else:
         sim_input_paths = [os.path.join(project_root, 'data', 'raw_data', city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes] # TODO: fix for paris
     
-    
     basecase_links_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'basecase_average_output_links.geojson')
     basecase_stats_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'basecase_average_trips.csv')
     basecase_eqasim_trips_path = os.path.join(project_root, 'data', 'links_and_stats', 'basecases_mean', city, 'eqasim_trips.csv')
-
-    try:
-        # Extract all tar.gz files from compressed directories
-        networks, temp_dirs = extract_and_get_networks(sim_input_paths)
-        networks = [network for network in networks if not network.endswith(".DS_Store")]
-        networks.sort()
-
-        # Load basecase eqasim trips
-        df_basecase_eqasim_trips = pd.read_csv(basecase_eqasim_trips_path, delimiter=';')
-
-        # Load basecase data
-        gdf_basecase_links = gpd.read_file(basecase_links_path)
-        gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True) # TODO: fix for paris
-        
-        if use_destination_activity:    
-            gdf_basecase_links = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips)
-        
-        gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
-
-        # Process networks and generate graph data
-        result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity)
-        base_gdf = result_dic_output_links["base_network_no_policies"]
-        
-        city_data = generate_graph_data_with_hexagons(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
-                                                        use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes)
-        
-        print(f"Processed {city} with {len(city_data)} graphs")
-        return city_data
-        
-    finally:
-        # Clean up temporary directories
-        for temp_dir in temp_dirs:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            #print(f"Cleaned up: {temp_dir}")
-        print(f"Cleaned up: left {len(temp_dirs)} temp directories")
-
-def process_cities(cities, project_root, use_destination_activity, use_allowed_modes, required_batch_size):
     
-    result_base_path = os.path.join(project_root, 'data', 'training_data')
-    os.makedirs(result_base_path, exist_ok=True)
+    """Process the city and save data in balanced batches."""
+    total_batch_counter = 0
     
-    for city in cities:
-        
-        """Process the city and save data in balanced batches."""
-        total_batch_counter = 0
-        current_batch = []
-        
-        result_path = os.path.join(result_base_path, city)
-        os.makedirs(result_path, exist_ok=True)
-        
-        city_data = process_single_city(city, project_root, use_destination_activity, use_allowed_modes)
-        
-        # Add city graphs to current batch
-        for graph in city_data:
+    # Collect tar files with hex_size info
+    tar_files_with_hex = []
+    for compressed_dir in sim_input_paths:
+        if os.path.exists(compressed_dir) and os.path.isdir(compressed_dir):
+            print(f"Processing directory: {compressed_dir}")
             
-            current_batch.append(graph)
+            # Extract hex_size from directory name (e.g., "compressed_schweinfurt_hex_2000_seed_2" -> 2000)
+            import re
+            hex_match = re.search(r'hex_(\d+)', os.path.basename(compressed_dir))
+            hex_size = int(hex_match.group(1)) if hex_match else "unknown"
             
-            # When we have enough graphs for a full batch, save it
-            if len(current_batch) >= required_batch_size:
-                total_batch_counter += 1
-                torch.save(current_batch, os.path.join(result_path, f'datalist_batch_{total_batch_counter}.pt'))
-                print(f"Saved batch {total_batch_counter} with {len(current_batch)} graphs")
-                current_batch = []  # Reset batch
-        
-        # Clear city_data from memory
-        del city_data
+            # Find all .tar.gz files in this directory and tag with hex_size
+            for f in os.listdir(compressed_dir):
+                if f.endswith('.tar.gz'):
+                    tar_files_with_hex.append({
+                        'path': os.path.join(compressed_dir, f),
+                        'hex_size': hex_size
+                    })
     
-        # Save any remaining graphs in the final batch
-        if current_batch:
+    print(f"  Found {len(tar_files_with_hex)} tar.gz files")
+    
+    # Group by hex_size for batch counters
+    hex_batch_counters = {}
+
+    for i in tqdm(range(0, len(tar_files_with_hex), required_batch_size), desc="Processing batches", unit="batch"):
+        
+        sliced_inputs_with_hex = tar_files_with_hex[i:i+required_batch_size]
+        sliced_inputs = [item['path'] for item in sliced_inputs_with_hex]
+        
+        # Get hex_size from this batch (should be the same for all files in batch)
+        current_hex_size = sliced_inputs_with_hex[0]['hex_size']
+        
+        # Initialize batch counter for this hex_size if not exists
+        if current_hex_size not in hex_batch_counters:
+            hex_batch_counters[current_hex_size] = 0
+        
+        try:
+            # Extract all tar.gz files from compressed directories
+            networks, temp_dirs = extract_and_get_networks(sliced_inputs)
+            networks = [network for network in networks if not network.endswith(".DS_Store")]
+            networks.sort()
+
+            # Load basecase eqasim trips
+            df_basecase_eqasim_trips = pd.read_csv(basecase_eqasim_trips_path, delimiter=';')
+
+            # Load basecase data
+            gdf_basecase_links = gpd.read_file(basecase_links_path)
+            gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True) # TODO: fix for paris
+            
+            if use_destination_activity:    
+                gdf_basecase_links = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips)
+            
+            gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
+
+            # Process networks and generate graph data
+            result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity)
+            base_gdf = result_dic_output_links["base_network_no_policies"]
+            
+            city_data = generate_graph_data_with_hexagons(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips, links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
+                                                            use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes)
+            
+            current_batch = []
+            for graph in city_data:
+                current_batch.append(graph)
+            
+            # Increment counter for this hex_size
+            hex_batch_counters[current_hex_size] += 1
             total_batch_counter += 1
-            torch.save(current_batch, os.path.join(result_path, f'datalist_batch_{total_batch_counter}.pt'))
-            print(f"Saved final batch {total_batch_counter} with {len(current_batch)} graphs")
-    
-        print(f"Total batches saved for {city}: {total_batch_counter}")
+            
+            # Save with hex_size in filename
+            batch_filename = f'datalist_batch_{current_hex_size}_{hex_batch_counters[current_hex_size]}.pt'
+            torch.save(current_batch, os.path.join(result_path, batch_filename))
+            print(f"Saved batch: {batch_filename}")
+            
+            del city_data
+            
+        finally:
+            # Clean up temporary directories
+            for temp_dir in temp_dirs:
+                try:
+                    if os.path.exists(temp_dir):
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        #print(f"Cleaned up: {temp_dir}")
+                except Exception as e:
+                    print(f"Warning: Could not clean up {temp_dir}: {e}")
+            print(f"Cleaned up: {len(temp_dirs)} temp directories")
+            
+    print(f"Processed {city} with {len(tar_files_with_hex)} graphs")
+    print(f"Batch counters by hex_size: {hex_batch_counters}")
 
 def main():
     
@@ -342,7 +355,7 @@ def main():
     parser.add_argument('--use_allowed_modes', type=bool, default=False,
                         help='Choose whether to use allowed modes as feature for each link or not')
     
-    parser.add_argument('--required_batch_size', type=int, default=50,
+    parser.add_argument('--required_batch_size', type=int, default=1,
                         help='how many graphs to save in each storage batch')
     
     args = parser.parse_args()
@@ -351,7 +364,16 @@ def main():
     use_allowed_modes = args.use_allowed_modes
     required_batch_size = args.required_batch_size
     
-    process_cities(all_cities, project_root, use_destination_activity, use_allowed_modes, required_batch_size)
+    # Create the result base path
+    result_base_path = os.path.join(project_root, 'data', 'training_data_2')
+    os.makedirs(result_base_path, exist_ok=True)
+    
+    for city in all_cities:
+        
+        result_path = os.path.join(result_base_path, city)
+        os.makedirs(result_path, exist_ok=True)
+        
+        process_single_city(city, project_root, result_path, use_destination_activity, use_allowed_modes, required_batch_size)
 
 if __name__ == '__main__':
     main()

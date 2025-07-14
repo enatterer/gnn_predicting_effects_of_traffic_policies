@@ -115,20 +115,91 @@ def get_memory_info():
     used_memory = total_memory - available_memory
     return total_memory, available_memory, used_memory
 
-def fixed_proportion_sampler(dataset):
+def parse_filepath_metadata(filepath):
+    """
+    Parse city and hex_size from filepath string.
+    Example: 'augsburg/datalist_batch_500_1.pt' -> city='augsburg', hex_size='500'
+    Assumes filename format: datalist_batch_{hex_size}_{counter}.pt
+    """
+    city = os.path.basename(os.path.dirname(filepath))
+    hex_size = os.path.basename(filepath).split('_')[2]
+    return city, hex_size
+
+def fixed_proportion_sampler(filepaths, batch_size=16, threshold=100):
+    """
+    Create a sampler that maintains city proportions within each batch.
+    
+    Steps:
+    1. Group filepaths by city
+    2. Calculate global weights (city_count / total_count)
+    3. For each batch, determine how many graphs from each city based on weights
+    4. Sample with/without replacement based on city size threshold
+    
+    Args:
+        filepaths: List of file paths
+        batch_size: Target batch size for maintaining proportions
+        threshold: If city has > threshold graphs, sample without replacement
+    """
+    
+    # Step 1: Group filepaths by city into dictionary
+    city_filepaths = {}
+    for filepath in filepaths:
+        city = parse_filepath_metadata(filepath)[0]
+        if city not in city_filepaths:
+            city_filepaths[city] = []
+        city_filepaths[city].append(filepath)
+    
+    # Step 2: Calculate global weights for each city
+    total_graphs = len(filepaths)
+    city_weights = {}
     city_counts = {}
-    for graph in dataset:
-        city = graph.city
-        city_counts[city] = city_counts.get(city, 0) + 1
-
-    global_weights = []
-    for graph in dataset:
-        city = graph.city
-        graph_weight = city_counts[city] / len(dataset)
-        global_weights.append(graph_weight)  
-
-    sampler = WeightedRandomSampler(weights=global_weights, num_samples=len(dataset), replacement=True)
-    return sampler
+    
+    for city, paths in city_filepaths.items():
+        city_counts[city] = len(paths)
+        city_weights[city] = len(paths) / total_graphs
+    
+    print(f"City distribution:")
+    for city, count in city_counts.items():
+        print(f"  {city}: {count} graphs ({city_weights[city]:.3f})")
+    
+    # Step 3 & 4: Create sampling weights for each filepath
+    weights = []
+    
+    for filepath in filepaths:
+        city = parse_filepath_metadata(filepath)[0]
+        
+        # Step 3: Calculate how many graphs this city should have in a batch
+        target_in_batch = city_weights[city] * batch_size
+        
+        # Step 4: Determine sampling strategy based on city size
+        if city_counts[city] > threshold:
+            # Large city: sample without replacement (standard proportional weight)
+            weight = city_weights[city]
+        else:
+            # Small city: sample with replacement (boost weight to allow duplicates)
+            # For small cities, we need higher weight to reach target proportion
+            weight = city_weights[city]
+            # Boost inversely proportional to city size
+            if city_counts[city] <= threshold:
+                boost = threshold / city_counts[city]  # Smaller cities get bigger boost
+                weight = weight * boost
+        
+        weights.append(weight)
+    
+    # Normalize weights so they sum to len(filepaths)
+    total_weight = sum(weights)
+    if total_weight > 0:
+        weights = [w / total_weight * len(filepaths) for w in weights]
+    else:
+        weights = [1.0] * len(filepaths)
+    
+    print(f"Sampling strategy:")
+    for city, count in city_counts.items():
+        strategy = "without replacement" if count > threshold else "with replacement"
+        target = city_weights[city] * batch_size
+        print(f"  {city}: {count} graphs, target {target:.1f} per batch ({strategy})")
+    
+    return WeightedRandomSampler(weights, num_samples=len(filepaths), replacement=True)
 
 def nested_fixed_proportion_sampler(dataset):
     """
@@ -260,18 +331,18 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         if split_mode == "full":
             # Full train/val/test split for transductive learning
             if use_bootstrapping:
-                train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
+                train_paths, valid_paths, test_paths = split_into_subsets_with_bootstrapping(dataset=datalist, test_ratio=0.1, bootstrap_seed=4)
             else:
-                train_set, valid_set, test_set = split_into_subsets(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05, split_variant=split_variant, split_mode=split_mode)
-            print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+                train_paths, valid_paths, test_paths = split_into_subsets_from_filepaths(dataset=datalist, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05, split_variant=split_variant, split_mode=split_mode)
+            print(f"Split complete. Train: {len(train_paths)}, Valid: {len(valid_paths)}, Test: {len(test_paths)}")
         else:  # split_mode == "train_val_only"
             # Train/val split only for inductive learning
             if use_bootstrapping:
-                train_set, valid_set = split_into_subsets_with_bootstrapping_train_val_only(dataset=datalist, bootstrap_seed=4)
+                train_paths, valid_paths = split_into_subsets_with_bootstrapping_train_val_only(dataset=datalist, bootstrap_seed=4)
             else:
-                train_set, valid_set = split_into_subsets(dataset=datalist, train_ratio=0.85, val_ratio=0.15, split_variant=split_variant, split_mode=split_mode)
-            test_set = None
-            print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: None (using unseen data)")
+                train_paths, valid_paths = split_into_subsets_from_filepaths(dataset=datalist, train_ratio=0.85, val_ratio=0.15, split_variant=split_variant, split_mode=split_mode)
+            test_paths = None
+            print(f"Split complete. Train: {len(train_paths)}, Valid: {len(valid_paths)}, Test: None (using unseen data)")
 
         if use_all_features:
             node_features = [feat.name for feat in EdgeFeatures]
@@ -294,45 +365,45 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
                              ]
         
         print("Normalizing train set and fitting global scalers...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features)
+        train_set_normalized_filepaths, scalers_train = normalize_dataset(dataset_input=train_paths, node_features=node_features)
         print("Train set normalized")      
         
         print("Applying global scalers to validation set...")
-        valid_set_normalized= apply_global_scaler(data_list=valid_set, scaler=scalers_train['x_scaler'], node_features=node_features)
+        valid_set_normalized_filepaths= apply_global_scaler(data_list=valid_paths, scaler=scalers_train['x_scaler'], node_features=node_features)
         print("Validation set normalized")
         
         if split_mode == "full":
             print("Applying global scalers to test set...")
-            test_set_normalized = apply_global_scaler(data_list=test_set, scaler=scalers_train['x_scaler'], node_features=node_features)
+            test_set_normalized_filepaths = apply_global_scaler(data_list=test_paths, scaler=scalers_train['x_scaler'], node_features=node_features)
             print("Test set normalized")
         
         print(f"Creating train loader with {sampler_variant} sampling...")
         if sampler_variant == "fixed_proportion":
-            train_sampler = fixed_proportion_sampler(train_set_normalized)
+            train_sampler = fixed_proportion_sampler(train_set_normalized_filepaths, batch_size=batch_size, threshold=100)
         elif sampler_variant == "nested_fixed_proportion":
-            train_sampler = nested_fixed_proportion_sampler(train_set_normalized)
+            train_sampler = nested_fixed_proportion_sampler(train_set_normalized_filepaths)
             #TODO: Uncomment this to test the sampler distribution for nested_fixed_proportion
             #test_sampler_distribution(train_set_normalized, train_sampler, num_samples=100) 
         else:
             raise ValueError(f"Invalid sampler variant: {sampler_variant}. Please choose from fixed_proportion or nested_fixed_proportion.")
         
         # DEBUG: Print dataset and sampler information
-        print(f"DEBUG: Train set length: {len(train_set_normalized)}")
+        print(f"DEBUG: Train set length: {len(train_set_normalized_filepaths)}")
         print(f"DEBUG: Batch size: {batch_size}")
         print(f"DEBUG: Sampler num_samples: {train_sampler.num_samples}")
         print(f"DEBUG: Expected batches: {train_sampler.num_samples // batch_size}")
         
-        train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, sampler=train_sampler, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
+        train_loader = DataLoader(dataset=train_set_normalized_filepaths, batch_size=batch_size, sampler=train_sampler, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
         print("Train loader created")
         print(f"DEBUG: Actual train loader length: {len(train_loader)}")
         
         print("Creating validation loader...")
-        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
+        val_loader = DataLoader(dataset=valid_set_normalized_filepaths, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
         print("Validation loader created")
         
         if split_mode == "full":
             print("Creating test loader...")
-            test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
+            test_loader = DataLoader(dataset=test_set_normalized_filepaths, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn, worker_init_fn=seed_worker)
             print("Test loader created")
             
             save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
@@ -364,7 +435,7 @@ def prepare_data_with_graph_features(datalist, batch_size, path_to_save_dataload
         traceback.print_exc()
         raise
 
-def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_size, use_all_features, path_to_save_dataloader, is_eign=False):
+def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_size, use_all_features, path_to_save_dataloader, is_eign=False): #TODO: for filepaths
     """
     Prepare test dataloader from unseen data using pre-fitted scalers from training data.
     
@@ -430,41 +501,43 @@ def prepare_test_dataloader_from_unseen(unseen_datalist, scalers_train, batch_si
         traceback.print_exc()
         raise
         
-def normalize_dataset(dataset_input, node_features, is_eign=False):
-    if hasattr(dataset_input, 'indices'):  # It's a Subset object
-        data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
-    else:  # It's already a list of Data objects
-        data_list = [copy.deepcopy(data) for data in dataset_input]
+def normalize_dataset(dataset_input, node_features, is_eign=False): #TODO: ROHAN!! How to integrate pos_scaler for paris here
+    """
+    Normalize dataset - handles both filepaths and actual data objects.
+    """
+    # Check what type of input we have
+    if not is_eign:
+        if isinstance(dataset_input, list) and len(dataset_input) > 0:
+            # Check if it's a list of filepaths (strings) or Data objects
+            if isinstance(dataset_input[0], str):
+                # It's a list of filepaths
+                print("Detected filepaths - using filepath-based normalization")
+                normalized_filepaths, x_scaler = normalize_x_features_global_inductive_from_filepaths(dataset_input, node_features)
+                
+                # Return in the expected format for filepath-based processing
+                scalers_dict = {
+                    "x_scaler": x_scaler,
+                }
+                return normalized_filepaths, scalers_dict
+            else:
+                # It's a list of Data objects
+                print("Detected Data objects - using object-based normalization")
+                data_list = [copy.deepcopy(data) for data in dataset_input]
+        elif hasattr(dataset_input, 'indices'):  # It's a Subset object
+            print("Detected Subset object - using object-based normalization")
+            data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
+        else:
+            raise ValueError(f"Unsupported dataset_input type: {type(dataset_input)}")
         
-    print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_global_inductive(data_list, node_features)
-    print("x features normalized")
-    
-    if is_eign:
+    else: #TODO: filepath normalization in case of EIGN
         print("Fitting and normalizing x_signed features...")
-        normalized_data_list, x_signed_scaler = normalize_x_signed_features_batched(
-            normalized_data_list
-        )
+        normalized_data_list, x_signed_scaler = normalize_x_signed_features_batched(data_list) #TODO: This should be changed for EIGN
         print("x_signed features normalized")
-    else:
-        #print("Fitting and normalizing pos features...")
-        #normalized_data_list, pos_scaler = normalize_pos_features_batched(normalized_data_list)
-        #print("Pos features normalized")
-        pass
-        
-    # print("Fitting and normalizing modestats features...")
-    # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
-    # print("Modestats features normalized")
-    
-    scalers_dict = {
-        "x_scaler": x_scaler,
-        "x_signed_scaler": x_signed_scaler,
-    } if is_eign else {
-        "x_scaler": x_scaler,
-        #"pos_scaler": pos_scaler,
-        # "modestats_scaler": modestats_scaler
-    }
-    return normalized_data_list, scalers_dict
+        scalers_dict = {
+            "x_signed_scaler": x_signed_scaler,
+        }
+        return normalized_data_list, scalers_dict
+
 
 
 def normalize_pos_features_batched(data_list, batch_size=1000):
@@ -762,6 +835,112 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
+def normalize_x_features_global_inductive_from_filepaths(filepaths, node_features, batch_size=100):
+    """
+    Global normalization across ALL cities for inductive learning with batching.
+    Works with filepaths instead of loaded graph objects for memory efficiency.
+    """
+    scaler = StandardScaler()
+    
+    # Continuous features to normalize - only the ones that will be used
+    continuous_feat = [EdgeFeatures[feature].value for feature in node_features]
+    
+    # First pass: Fit the scaler on ALL cities using batching
+    print("Fitting global scaler across all cities from filepaths...")
+    
+    processed_graphs = 0
+    for i in tqdm(range(0, len(filepaths), batch_size), desc="Fitting scaler"):
+        batch_filepaths = filepaths[i:i+batch_size]
+        
+        # Load graphs from this batch of filepaths
+        batch_data = []
+        for filepath in batch_filepaths:
+            try:
+                # Load the batch file
+                loaded_data = torch.load(filepath, map_location='cpu')
+                if isinstance(loaded_data, list):
+                    batch_data.extend(loaded_data)
+                else:
+                    batch_data.append(loaded_data)
+            except Exception as e:
+                print(f"Warning: Could not load {filepath}: {e}")
+                continue
+        
+        if batch_data:
+            # Extract features for scaler fitting
+            batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch_data])
+            scaler.partial_fit(batch_x)
+            processed_graphs += len(batch_data)
+        
+        # Clear memory
+        del batch_data
+    
+    print(f"Global scaler fitted on {processed_graphs} graphs from all cities")
+    print(f"Feature means: {scaler.mean_}")
+    print(f"Feature scales: {scaler.scale_}")
+    
+    # Second pass: Transform and save the data using batching
+    print("Transforming and saving normalized data...")
+    normalized_filepaths = []
+    
+    for i in tqdm(range(0, len(filepaths), batch_size), desc="Normalizing x features"):
+        batch_filepaths = filepaths[i:i+batch_size]
+        
+        for filepath in batch_filepaths:
+            try:
+                # Load the batch file
+                loaded_data = torch.load(filepath, map_location='cpu')
+                if isinstance(loaded_data, list):
+                    data_list = loaded_data
+                else:
+                    data_list = [loaded_data]
+                
+                # Normalize this batch of graphs
+                normalized_graphs = []
+                for data in data_list:
+                    # Transform features
+                    data_x = data.x[:,continuous_feat].numpy()
+                    data_x_normalized = scaler.transform(data_x)
+                    data.x[:,continuous_feat] = torch.tensor(data_x_normalized, dtype=data.x.dtype)
+                    
+                    # Filter features to keep only selected ones
+                    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+                    data.x = data.x[:, node_feature_filter]
+                    
+                    # One-hot encode highway if needed
+                    if "HIGHWAY" in node_features:
+                        # Apply one-hot encoding to this single graph
+                        highway_idx = node_features.index("HIGHWAY")
+                        one_hot_highway([data], idx=highway_idx)
+                    
+                    normalized_graphs.append(data)
+                
+                # Save normalized data back to the same file (or new location)
+                torch.save(normalized_graphs if len(normalized_graphs) > 1 else normalized_graphs[0], filepath)
+                normalized_filepaths.append(filepath)
+                
+                # Clear memory
+                del data_list, normalized_graphs
+                
+            except Exception as e:
+                print(f"Warning: Could not process {filepath}: {e}")
+                continue
+    
+    if normalized_filepaths:
+        print(f'Shape of features (from first file): checking...')
+        # Check shape from first file
+        try:
+            sample_data = torch.load(normalized_filepaths[0], map_location='cpu')
+            if isinstance(sample_data, list):
+                sample_graph = sample_data[0]
+            else:
+                sample_graph = sample_data
+            print(f'Shape of features: {sample_graph.x.shape}')
+        except:
+            print('Could not determine feature shape')
+    
+    return normalized_filepaths, scaler
+
 def normalize_x_features_global_inductive(data_list, node_features, batch_size=100):
     """
     Global normalization across ALL cities for inductive learning with batching.
@@ -854,19 +1033,105 @@ def normalize_x_features_with_scaler_global_inductive(data_list, node_features, 
     return data_list
 
 
-def apply_global_scaler(data_list, scaler, node_features):
+def apply_global_scaler(data_input, scaler, node_features, batch_size=100):
     """
-    Apply the global scaler to the data list.
-    Uses the same logic as normalize_x_features_with_scaler_global_inductive.
-    Handles both regular lists and Subset objects.
+    Apply the global scaler to the data.
+    Handles both Data objects and filepaths.
+    - If data_input contains strings (filepaths), processes files in batches
+    - If data_input contains Data objects, uses the original logic
     """
-    # Convert Subset to list if needed
-    if hasattr(data_list, 'indices'):  # It's a Subset object
-        data_list_actual = [data_list[i] for i in range(len(data_list))]
+    # Check if input is filepaths (strings) or Data objects
+    if len(data_input) > 0 and isinstance(data_input[0], str):
+        # Handle filepaths case
+        return apply_global_scaler_from_filepaths(data_input, scaler, node_features, batch_size)
     else:
-        data_list_actual = data_list
+        # Handle Data objects case
+        # Convert Subset to list if needed
+        if hasattr(data_input, 'indices'):  # It's a Subset object
+            data_list_actual = [data_input[i] for i in range(len(data_input))]
+        else:
+            data_list_actual = data_input
+        
+        return normalize_x_features_with_scaler_global_inductive(data_list_actual, node_features, scaler)
+
+
+def apply_global_scaler_from_filepaths(filepaths, scaler, node_features, batch_size=100):
+    """
+    Apply a fitted global scaler to data stored in filepaths.
+    Works with filepaths instead of loaded graph objects for memory efficiency.
     
-    return normalize_x_features_with_scaler_global_inductive(data_list_actual, node_features, scaler)
+    Args:
+        filepaths: List of file paths containing graph data
+        scaler: Pre-fitted StandardScaler object
+        node_features: List of feature names to use
+        batch_size: Number of files to process at once
+    
+    Returns:
+        List of processed filepaths
+    """
+    # Continuous features to normalize - only the ones that will be used
+    continuous_feat = [EdgeFeatures[feature].value for feature in node_features]
+    
+    print("Applying fitted global scaler to data from filepaths...")
+    processed_filepaths = []
+    
+    for i in tqdm(range(0, len(filepaths), batch_size), desc="Applying scaler to files"):
+        batch_filepaths = filepaths[i:i+batch_size]
+        
+        for filepath in batch_filepaths:
+            try:
+                # Load the batch file
+                loaded_data = torch.load(filepath, map_location='cpu')
+                if isinstance(loaded_data, list):
+                    data_list = loaded_data
+                else:
+                    data_list = [loaded_data]
+                
+                # Apply scaler to this batch of graphs
+                normalized_graphs = []
+                for data in data_list:
+                    # Transform features using the fitted scaler
+                    data_x = data.x[:,continuous_feat].numpy()
+                    data_x_normalized = scaler.transform(data_x)
+                    data.x[:,continuous_feat] = torch.tensor(data_x_normalized, dtype=data.x.dtype)
+                    
+                    # Filter features to keep only selected ones
+                    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+                    data.x = data.x[:, node_feature_filter]
+                    
+                    # One-hot encode highway if needed
+                    if "HIGHWAY" in node_features:
+                        # Apply one-hot encoding to this single graph
+                        highway_idx = node_features.index("HIGHWAY")
+                        one_hot_highway([data], idx=highway_idx)
+                    
+                    normalized_graphs.append(data)
+                
+                # Save normalized data back to the same file
+                torch.save(normalized_graphs if len(normalized_graphs) > 1 else normalized_graphs[0], filepath)
+                processed_filepaths.append(filepath)
+                
+                # Clear memory
+                del data_list, normalized_graphs
+                
+            except Exception as e:
+                print(f"Warning: Could not process {filepath}: {e}")
+                continue
+    
+    if processed_filepaths:
+        print(f'Applied scaler to {len(processed_filepaths)} files')
+        # Check shape from first file
+        try:
+            sample_data = torch.load(processed_filepaths[0], map_location='cpu')
+            if isinstance(sample_data, list):
+                sample_graph = sample_data[0]
+            else:
+                sample_graph = sample_data
+            print(f'Shape of features after scaling: {sample_graph.x.shape}')
+        except:
+            print('Could not determine feature shape')
+    
+    return processed_filepaths
 
 
 def verify_batch_distribution(data_container, num_batches_to_check=None):

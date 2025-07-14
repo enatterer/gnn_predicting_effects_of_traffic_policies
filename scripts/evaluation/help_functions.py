@@ -85,6 +85,9 @@ def create_test_object(links_base_case, test_data, stacked_edge_geometries_tenso
     x = torch.zeros((len(nodes), 1), dtype=torch.float)
     data = Data(edge_index=edge_index, x=x)
     
+    # Set num_nodes explicitly to avoid PyTorch Geometric warning
+    data.num_nodes = len(nodes)
+    
     capacities_new = test_data['capacity'].values
     capacity_reduction= capacities_new - capacity_base_case
 
