@@ -11,4 +11,5 @@ Miniconda3-latest-Linux-x86_64.sh
 inductive_gnn_data_results/
 data/
 data_new/
+inductive_gnn_data_results/
 *.log

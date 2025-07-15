@@ -103,7 +103,7 @@ def main():
         else:  # inductive variants
             # Load seen data (for training/validation)
             seen_datalist = []
-            for city in seen_cities and if city in seen_cities:
+            for city in seen_cities:
                 city_data_path=os.path.join(dataset_path, city)
                 for file in os.listdir(city_data_path):
                     if file.endswith('.pt'):
@@ -111,7 +111,7 @@ def main():
                         
             print(f"Loaded {len(seen_datalist)} items for transductive learning")
             unseen_datalist=[]
-            for city in unseen_cities and if city in unseen_cities:
+            for city in unseen_cities:
                 city_data_path=os.path.join(dataset_path, city)
                 for file in os.listdir(city_data_path):
                     if file.endswith('.pt'):
