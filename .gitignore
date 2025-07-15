@@ -1,13 +1,8 @@
+data/
 logs/
 **/wandb/
 **/.ipynb_checkpoints/
 **/__pycache__/
 scripts/evaluation/results/
-inductive_gnn_data/
-Miniconda3-latest-Linux-x86_64.sh
 *.sh
 *.pt
-*.pt
-inductive_gnn_data_results/
-data/
-*.log

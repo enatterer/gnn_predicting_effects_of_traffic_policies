@@ -233,3 +233,42 @@ def get_link_geometries(links_gdf_input, apply_scaling=True):
         return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes, scaling_params
     else:
         return edge_start_point_tensor, stacked_edge_geometries_tensor, edges_base, nodes
+    
+def extract_and_get_networks(tar_files):
+    """
+    Extract all tar.gz files from compressed directories and return network paths.
+    Each tar.gz contains files directly, so we need to create the proper directory structure.
+    """
+    networks = []
+    temp_dirs = []  # Keep track for cleanup
+    
+    for tar_file in tar_files:
+        
+        tar_path = tar_file
+                
+        # Extract network name from tar filename (remove .tar.gz)
+        network_name = os.path.basename(tar_file).replace('.tar.gz', '')
+        
+        # Get the compressed directory name to preserve hex size info
+        compressed_dir_name = os.path.basename(os.path.dirname(tar_path))
+                
+        # Create temporary directory for this tar file
+        temp_dir = tempfile.mkdtemp()
+        temp_dirs.append(temp_dir)
+        
+        # Create the directory structure that preserves hex size info
+        preserve_structure_dir = os.path.join(temp_dir, compressed_dir_name)
+        os.makedirs(preserve_structure_dir, exist_ok=True)
+        
+        # Create network subdirectory (what the processing code expects)
+        network_dir = os.path.join(preserve_structure_dir, network_name)
+        os.makedirs(network_dir, exist_ok=True)
+        
+        # Extract tar.gz file directly into the network directory
+        with tarfile.open(tar_path, 'r:gz') as tar:
+            tar.extractall(network_dir)
+        
+        # Add the network directory to our list
+        networks.append(network_dir)
+    
+    return networks, temp_dirs
