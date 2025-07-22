@@ -24,6 +24,8 @@ from gnn.gnn_io import *
 from gnn.models.point_net_transf_gat import PointNetTransfGAT
 from gnn.models.gcn import GCN, GCN2
 from gnn.models.gat import GAT
+from gnn.models.gatv2 import GATv2
+from gnn.models.gatv3 import GATv3
 from gnn.models.trans_conv import TransConv
 from gnn.models.pnc import PNC
 from gnn.models.fc_nn import FC_NN
@@ -117,7 +119,7 @@ def prepare_data_with_graph_features(train_data, test_data,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling):
     
-    print(f"Prparing data with {len(train_data)+len(test_data)} items")
+    print(f"Preparing data with {len(train_data) + (len(test_data) if test_data is not None else 0)} items")
     
     print("Splitting into subsets...")
 
@@ -520,6 +522,12 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     
     elif gnn_arch == "gat":
         return GAT(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gatv2":
+        return GATv2(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gatv3":
+        return GATv3(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "trans_conv":
         return TransConv(**common_kwargs, **model_kwargs).to(device)

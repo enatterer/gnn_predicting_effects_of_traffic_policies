@@ -13,13 +13,21 @@ class GraphDataset(Dataset):
         self.paths = paths
         self.labels = labels
 
-    def len(self):
+    def __len__(self):
         return len(self.paths)
 
     @lru_cache(maxsize=8192)
     def get(self, idx):
         data = torch.load(self.paths[idx])
         return data
+    
+    def __getitem__(self, idx):
+        if isinstance(idx, slice):
+            # Handle slice indexing by creating a list of indices
+            start, stop, step = idx.indices(len(self))
+            return [self.get(i) for i in range(start, stop, step)]
+        else:
+            return self.get(idx)
 
 # Use test_data for an exclusive test set, train and validation sets from train_data.
 # Otherwise split into train, validation, and test sets from train_data.
@@ -28,7 +36,7 @@ def load_data_and_split_into_subsets(train_data, test_data, train_ratio, val_rat
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
-    dataset_length = len(train_data) + len(test_data)
+    dataset_length = len(train_data) + (len(test_data) if test_data is not None else 0)
     print(f"Total dataset length: {dataset_length}")
 
     paths = train_data['path']
@@ -100,7 +108,7 @@ def save_dataloader_params(dataloader, file_path):
     params = {
         'batch_size': dataloader.batch_size,
         # 'shuffle': dataloader.shuffle,
-        'collate_fn': dataloader.collate_fn.__name__  # Assuming collate_fn is a known function
+        'collate_fn': dataloader.collate_fn.__name__ if hasattr(dataloader.collate_fn, '__name__') else str(type(dataloader.collate_fn))
     }
     with open(file_path, 'w') as f:
         json.dump(params, f)

@@ -127,8 +127,8 @@ def read_eqasim_trips(folder):
 
 def add_destinations_to_gdf(gdf, df_eqasim_trips):
     """
-    Add destination-related features to GeoDataFrame based on eqasim_trips data.
-    For each unique link, find what destination links are associated with it.
+    Add land use features to GeoDataFrame based on eqasim_trips data.
+    Analyzes trip destinations to infer what types of activities are located near each link.
     """
     gdf_extended = gdf.copy()
     
@@ -137,21 +137,90 @@ def add_destinations_to_gdf(gdf, df_eqasim_trips):
         required_cols = ['destination_link_id', 'following_purpose']
         if all(col in df_eqasim_trips.columns for col in required_cols):
             
-            # Create the pivot table directly
-            df_all_link = df_eqasim_trips.groupby(['destination_link_id'])['following_purpose'].value_counts().unstack(fill_value=0)
+            # Land use analysis: Count destinations only (where activities are located)
+            # Get all unique activity types from destinations (what's actually built there)
+            all_activities = set(df_eqasim_trips['following_purpose'].unique())
+            
+            df_land_use_activities = pd.DataFrame()
+            
+            for activity in all_activities:
+                # Count unique people going TO each link for this activity
+                # This represents land use: "how many people use this link for this activity type"
+                activity_destinations = df_eqasim_trips[
+                    df_eqasim_trips['following_purpose'] == activity
+                ].groupby(['destination_link_id', 'person_id']).size().groupby('destination_link_id').size()
+                
+                df_land_use_activities[activity] = activity_destinations
+            
+            df_land_use_activities = df_land_use_activities.fillna(0)
+            
+            # 3. Create identifier for links present in eqasim_trips
+            all_trip_links = set(df_eqasim_trips['destination_link_id'].astype(str))
             
             # Convert link column to same type before merging
             gdf_extended['link'] = gdf_extended['link'].astype(str)
-            df_all_link.index = df_all_link.index.astype(str)
+            df_land_use_activities.index = df_land_use_activities.index.astype(str)
             
-            # Then merge this with the GeoDataFrame using the link column
-            gdf_extended = gdf_extended.merge(df_all_link, left_on='link', right_index=True, how='left').fillna(0)
+            # 4. Add trip data identifier (1 if link appears in trips, 0 otherwise)
+            gdf_extended['is_in_eqasim_trips'] = gdf_extended['link'].isin(all_trip_links).astype(int)
+            
+            # 5. Merge land use activity features
+            gdf_extended = gdf_extended.merge(df_land_use_activities, left_on='link', right_index=True, how='left').fillna(0)
     
     return gdf_extended
 
-def compute_target_tensor_only_edge_features(vol_base_case, gdf):
+def compute_target_tensor_only_edge_features(vol_base_case, gdf, column_name: str, normalization_type: str):
     edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
-    return torch.tensor(edge_car_volume_difference, dtype=torch.float).unsqueeze(1)
+    
+    if column_name == 'vol_car':
+        # Keep continuous values for training - round only at inference
+        # Sign preserved: +500.3 cars vs -200.7 cars
+        data_to_normalize = edge_car_volume_difference
+        
+    elif column_name == 'vol_car_percentage':
+        # Division by base case to get percentage change  
+        # Sign preserved: +50% vs -30%
+        epsilon = 1e-6 #adjust as needed
+        base_case_with_epsilon = vol_base_case.copy()
+        zero_mask = vol_base_case == 0
+        base_case_with_epsilon[zero_mask] = epsilon
+        data_to_normalize = edge_car_volume_difference / base_case_with_epsilon
+    
+    # Use signed_log_normalized for both - preserves sign, compresses range
+    normalized_data = normalization_of_edge_features(
+        data_to_normalize, normalization_type
+    )
+    return torch.tensor(normalized_data, dtype=torch.float).unsqueeze(1)
+
+def normalization_of_edge_features(data, normalization_type: str):
+    """
+    Normalize numpy array data using specified method.
+    Args:
+        data: numpy array with data to normalize
+        normalization_type: 'mean_std', 'min_max' or 'signed_log_normalization'
+        base_case_data: numpy array for log-based normalizations (epsilon already handled if needed)
+    """
+    if normalization_type == 'mean_std':
+        std = np.std(data)
+        if std == 0:
+            return np.zeros_like(data)  # If all values are same, return zeros
+        return (data - np.mean(data)) / std
+    elif normalization_type == 'min_max':
+        data_min, data_max = np.min(data), np.max(data)
+        if data_max == data_min:
+            return np.zeros_like(data)  # If all values are same, return zeros
+        return (data - data_min) / (data_max - data_min)
+    elif normalization_type == 'signed_log_normalization': #TODO: try signed min-max normalization instead of standardization
+        # Step 1: Signed log transformation
+        signed_log = np.sign(data) * np.log1p(np.abs(data))
+        # Step 2: Standard normalization with zero-std protection
+        std = np.std(signed_log)
+        if std == 0:
+            return np.zeros_like(signed_log)  # If all values are same, return zeros
+        return (signed_log - np.mean(signed_log)) / std
+    else:
+        raise ValueError(f"Invalid normalization type: {normalization_type}")
+
 
 def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
     # Create a mask for each required mode and combine with OR logic
