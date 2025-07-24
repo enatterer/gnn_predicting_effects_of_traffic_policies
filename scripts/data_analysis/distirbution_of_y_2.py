@@ -34,7 +34,7 @@ seed = 3
 hex_sizes = [500]
 required_modes_on_links = ['car', 'car_passenger']
 use_destination_activity = False  # Simplified - no activity features needed
-all_cities = ['landshut', 'ingolstadt', 'regensburg', 'neuulm', 'nuernberg', 'augsburg', 'rosenheim']
+all_cities = ['muenchen']
 target_feature = 'vol_car_percentage'  # Target feature for Y values (options: 'vol_car', 'vol_car_percentage')
 target_feature_normalization_type = 'None'  # Normalization type for Y values (options: 'None', 'signed_log_normalization', 'mean_std', 'min_max')
 

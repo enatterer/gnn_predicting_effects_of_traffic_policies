@@ -225,15 +225,26 @@ class EIGN(BaseGNN):
 
                 # Ensure data is in float32
                 data = data.to(device)
-                targets_node_predictions_signed = data.y_signed.to(torch.float32)
-                targets_node_predictions_unsigned = data.y.to(torch.float32)
+                #TODO: check if this is correct
+                # Import target selection function
+                from gnn.models.base_gnn import select_target_tensor
+                targets_node_predictions_signed = data.y_signed.to(torch.float32) if hasattr(data, 'y_signed') else None #TODO: check if this is correct
+                targets_node_predictions_unsigned = select_target_tensor(data, getattr(config, 'target_type', 'default')).to(torch.float32)
 
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(
-                    data.x.detach().clone().cpu().numpy()
-                )
-                x_unscaled_signed = scalers_train["x_signed_scaler"].inverse_transform(
-                    data.x_signed.detach().clone().cpu().numpy()
-                )
+                # Handle scalers - they may be None if features are pre-normalized
+                if scalers_train is not None and "x_scaler" in scalers_train:
+                    x_unscaled = scalers_train["x_scaler"].inverse_transform(
+                        data.x.detach().clone().cpu().numpy()
+                    )
+                else:
+                    x_unscaled = data.x.detach().clone().cpu().numpy()
+                
+                if scalers_train is not None and "x_signed_scaler" in scalers_train:
+                    x_unscaled_signed = scalers_train["x_signed_scaler"].inverse_transform(
+                        data.x_signed.detach().clone().cpu().numpy()
+                    )
+                else:
+                    x_unscaled_signed = data.x_signed.detach().clone().cpu().numpy() if hasattr(data, 'x_signed') else None
 
                 if config.predict_mode_stats:
                     raise NotImplementedError(
@@ -266,19 +277,20 @@ class EIGN(BaseGNN):
                         predicted_signed = predicted_signed.to(torch.float32)
                         predicted_unsigned = predicted_unsigned.to(torch.float32)
 
-                        loss_signed = loss_fct(
-                            predicted_signed,
-                            targets_node_predictions_signed,
-                            x_unscaled_signed,
-                        )
-
-                        loss_unsigned = loss_fct(
-                            predicted_unsigned,
-                            targets_node_predictions_unsigned,
-                            x_unscaled,
-                        )
-
-                        train_loss = loss_signed if use_signed else loss_unsigned
+                        if use_signed and x_unscaled_signed is not None:
+                            loss_signed = loss_fct(
+                                predicted_signed,
+                                targets_node_predictions_signed,
+                                torch.tensor(x_unscaled_signed, dtype=torch.float32, device=device),
+                            )
+                            train_loss = loss_signed
+                        else:
+                            loss_unsigned = loss_fct(
+                                predicted_unsigned,
+                                targets_node_predictions_unsigned,
+                                torch.tensor(x_unscaled, dtype=torch.float32, device=device),
+                            )
+                            train_loss = loss_unsigned
 
                 # Backward pass
                 train_loss = train_loss.to(dtype=torch.float32)

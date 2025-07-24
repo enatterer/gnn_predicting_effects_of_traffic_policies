@@ -14,6 +14,7 @@ from sklearn.preprocessing import StandardScaler
 
 import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch_geometric.data import Batch
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -32,7 +33,13 @@ from gnn.models.fc_nn import FC_NN
 from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.xgboost import XGBoostModel
-from data_preprocessing.process_simulations_for_gnn import EdgeFeatures, use_allowed_modes
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
+
+#####control center parameters#####
+use_allowed_modes = False
+use_destination_activity = False
+use_highway = False
+###################################
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -133,62 +140,80 @@ def prepare_data_with_graph_features(train_data, test_data,
     print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
 
     if use_all_features:
-        node_features = [feat.name for feat in EdgeFeatures]
-        if not use_allowed_modes:
-            node_features = [feat for feat in node_features if "ALLOWED_MODE" not in feat]
+        node_features = []
+        for feat in EdgeFeatures:
+            name = feat.name
+            if not use_allowed_modes and name.startswith("ALLOWED_MODE"):
+                continue
+            if not use_destination_activity and name in {
+                "HOME", "WORK", "EDUCATION", "LEISURE", "SHOP", "OTHER", "OUTSIDE" ,'IS_IN_EQASIM_TRIPS'
+            }:
+                continue
+            if not use_highway and name.startswith("HIGHWAY"):
+                continue
+            node_features.append(name)
     else:
-        # Most important features (from ablation study)
-        node_features = ["VOL_BASE_CASE",
-                            "CAPACITY_BASE_CASE",
-                            "CAPACITY_REDUCTION",
-                            "FREESPEED",
-                            "LENGTH",
-                            #"DESTINATION_HOME",
-                            #"DESTINATION_WORK",
-                            #"DESTINATION_OTHER",
-                            #"DESTINATION_EDUCATION",
-                            #"DESTINATION_LEISURE",
-                            #"DESTINATION_SHOP",
-                            #"DESTINATION_OUTSIDE"
-                            ]
+        # Manual feature selection (e.g., from ablation)
+        node_features = [
+            "VOL_BASE_CASE",
+            "CAPACITY_BASE_CASE",
+            "CAPACITY_REDUCTION",
+            "FREESPEED",
+            "LENGTH",
+            # Add/remove features as desired
+            # "HOME",
+            # "WORK",
+            # "SHOP",
+        ]
 
-    # Fit GLOBAL Scaler!
-    # Assume no exclusive test scaler, #TODO:fix later if needed
-    scalers_train, continuous_feat = fit_global_scaler(dataset, batch_size=128)
-    scalers_test = copy.deepcopy(scalers_train)
+    # COMMENTED OUT: Features already normalized during preprocessing
+    # # Fit GLOBAL Scaler!
+    # # Assume no exclusive test scaler, #TODO:fix later if needed
+    # scalers_train, continuous_feat = fit_global_scaler(dataset, batch_size=128)
+    # scalers_test = copy.deepcopy(scalers_train)
 
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-    collate_with_scaler = partial(scale_and_collate, scaler=scalers_train['x_scaler'], continuous_feat=continuous_feat, node_feature_filter=node_feature_filter)
+    
+    # MODIFIED: Use simple collate function without scaling
+    #collate_with_scaler = partial(scale_and_collate, scaler=scalers_train['x_scaler'], continuous_feat=continuous_feat, node_feature_filter=node_feature_filter)
+    collate_without_scaler = partial(collate_without_scaling, node_feature_filter=node_feature_filter) 
     
     print("Creating train loader...")
     train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
                                 sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
-                                num_workers=4, prefetch_factor=4, pin_memory=True, collate_fn=collate_with_scaler, worker_init_fn=seed_worker)
+                                num_workers=4, prefetch_factor=4, pin_memory=True, 
+                                collate_fn=collate_without_scaler,  # MODIFIED
+                                worker_init_fn=seed_worker)
     
     print("Creating validation loader...")
     val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
                             shuffle=True if not use_weighted_sampling else None,
                             sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
-                            num_workers=4, pin_memory=True, collate_fn=collate_with_scaler, worker_init_fn=seed_worker)
+                            num_workers=4, pin_memory=True, 
+                            collate_fn=collate_without_scaler,  # MODIFIED
+                            worker_init_fn=seed_worker)
     
     print("Creating test loader...")
     test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
                                 sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
-                                num_workers=4, collate_fn=collate_with_scaler, worker_init_fn=seed_worker)
+                                num_workers=4, 
+                                collate_fn=collate_without_scaler,  # MODIFIED
+                                worker_init_fn=seed_worker)
     
-    joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
+    # COMMENTED OUT: No need to save scalers for features
+    # joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
     # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
-
-    joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
+    # joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
     # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
     
     save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
     save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-    print("Test dataloader and scalers saved.")
+    print("Test dataloader saved.")
     
-    return train_loader, val_loader, scalers_train
+    # MODIFIED: Return None for scalers since we don't need them
+    return train_loader, val_loader, None  # was: scalers_train
 
 def fit_global_scaler(dataset, batch_size=128):
     
@@ -571,7 +596,9 @@ def load_metadata_from_disk(data, metadata_path):
 
     city_data = json.load(open(metadata_path, 'r'))
     
-    data['path'].extend(city_data['path'])
-    data['policy_region'].extend(city_data['policy_region'])
-    data['scenario'].extend(city_data['scenario'])
-    data['city'].extend(city_data['city'])
+    data['path'].extend(city_data['path'][:1000])
+    data['policy_region'].extend(city_data['policy_region'][:1000])
+    data['scenario'].extend(city_data['scenario'][:1000])
+    data['city'].extend(city_data['city'][:1000])
+
+

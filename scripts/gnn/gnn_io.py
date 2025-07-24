@@ -131,6 +131,19 @@ def scale_and_collate(batch, scaler, continuous_feat, node_feature_filter):
     
     return batch
 
+def collate_without_scaling(batch, node_feature_filter):
+    """
+    Collate function that filters features but doesn't apply scaling
+    since features are already normalized during preprocessing.
+    """
+    batch = Batch.from_data_list(batch)
+    
+    # Filter node features
+    if node_feature_filter is not None:
+        batch.x = batch.x[:, node_feature_filter]
+    
+    return batch
+
 def print_model_info(model):
     total_params = sum(p.numel() for p in model.parameters())
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)

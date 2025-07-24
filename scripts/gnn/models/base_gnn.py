@@ -18,6 +18,24 @@ if scripts_path not in sys.path:
 
 from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler
 
+def select_target_tensor(data, target_type: str = "vol_car_percentage"):
+    """
+    Select the appropriate target tensor based on target_type.
+    
+    Args:
+        data: PyTorch Geometric data object
+        target_type: String specifying which target to use
+        
+    Returns:
+        Selected target tensor
+    """
+    if target_type == "vol_car" and hasattr(data, 'y_vol_car'):
+        return data.y_vol_car
+    elif target_type == "vol_car_percentage" and hasattr(data, 'y_vol_car_percentage'):
+        return data.y_vol_car_percentage
+    else:
+        raise ValueError(f"Invalid target type: {target_type}")
+
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 
                  in_channels: int,
@@ -158,15 +176,22 @@ class BaseGNN(nn.Module, ABC):
                     
                 data = data.to(device)
                 print(f"DEBUG DATA: Data moved to device successfully")
-                targets_node_predictions = data.y
+                
+                # Select target based on configuration
+                targets_node_predictions = select_target_tensor(data, config.target_type)
+                print(f"DEBUG DATA: Using target type: {config.target_type}")
+                print(f"DEBUG DATA: targets_node_predictions.shape = {targets_node_predictions.shape}")
                 print(f"DEBUG DATA: About to inverse transform scaler...")
-                # Only inverse transform the continuous features that were originally normalized
-                # The scaler was fitted on 5 features: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
-                x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
-                print(f"DEBUG DATA: Scaler transformation completed")
+
+                # COMMENT OUT: Features are already normalized during preprocessing
+                # # Only inverse transform the continuous features that were originally normalized
+                # # The scaler was fitted on 5 features: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+                # continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+                # continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
+                # x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
+                # x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
+
+                print(f"DEBUG DATA: No scaler transformation needed - features pre-normalized")
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
@@ -178,9 +203,9 @@ class BaseGNN(nn.Module, ABC):
                         # Debug prints for shape mismatch
                         print(f"DEBUG TRAIN MODE: predicted.shape = {predicted.shape}")
                         print(f"DEBUG TRAIN MODE: targets_node_predictions.shape = {targets_node_predictions.shape}")
-                        print(f"DEBUG TRAIN MODE: x_unscaled.shape = {x_unscaled.shape}")
+                        print(f"DEBUG TRAIN MODE: x_unscaled.shape = {data.x.shape}")
                         print(f"DEBUG TRAIN MODE: data.batch.shape = {data.batch.shape}")
-                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
@@ -188,10 +213,10 @@ class BaseGNN(nn.Module, ABC):
                         # Debug prints for shape mismatch
                         print(f"DEBUG TRAIN: predicted.shape = {predicted.shape}")
                         print(f"DEBUG TRAIN: targets_node_predictions.shape = {targets_node_predictions.shape}")
-                        print(f"DEBUG TRAIN: x_unscaled.shape = {x_unscaled.shape}")
+                        print(f"DEBUG TRAIN: data.x.shape = {data.x.shape}")
                         print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
                         print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
-                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled,data.batch)
+                        train_loss = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()

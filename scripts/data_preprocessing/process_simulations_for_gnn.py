@@ -13,6 +13,7 @@ import sys
 import json
 from enum import IntEnum
 import shutil
+import random
 
 import numpy as np
 import pandas as pd
@@ -22,6 +23,11 @@ from tqdm import tqdm
 import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
+
+# Set seeds for reproducibility
+np.random.seed(13)
+random.seed(13)
+torch.manual_seed(13)
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -34,19 +40,21 @@ from data_preprocessing.help_functions import *
 ##### Control Center #####
 ##########################
 
-batch_size = 128 # Do processing in batches to avoid memory issues
+batch_size = 256 # Do processing in batches to avoid memory issues
 seed = 3 # Seed for Bavarian Simulations
 hex_sizes = [500] # Hexagon Sizes for Bavarian Simulations
 required_modes_on_links = ['car', 'car_passenger'] # Capacity will be reduced on links that have at least one of these modes
-use_allowed_modes = False # Flag to use allowed modes as edge features
-use_destination_activity = False # Flag to use destination activity as edge features
+use_allowed_modes = True # Flag to use allowed modes as edge features
+use_destination_activity = True # Flag to use destination activity as edge features
 use_linegraph = True # Flag to use line graph transformation
-all_cities = ['schweinfurt', 'aschaffenburg', 'wuerzburg', 
-              'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten', 
-              'landshut', 'ingolstadt', 'regensburg', 'neuulm', 'nuernberg', 'augsburg', 'muenchen']
-target_feature = 'vol_car_percentage' #other options: 'vol_car'
+# Test with just one city
+#all_cities = ['','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
+#cities_1=['nuernberg', 'augsburg', 'muenchen','schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten','landshut', 'ingolstadt', 'regensburg', 'neuulm',rosenheim]
+#cities_rest=[']
+all_cities = ['rosenheim']
+#target_feature = 'vol_car_percentage' #other options: 'vol_car'
 target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max'
-x_normalization_type = 'mean_std' #other options: 'min_max'
+x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
 
 ##########################
 
@@ -58,40 +66,46 @@ class EdgeFeatures(IntEnum):
     CAPACITY_BASE_CASE = 1
     CAPACITY_REDUCTION = 2
     FREESPEED = 3
-    HIGHWAY = 4
-    LENGTH = 5
-    ALLOWED_MODE_CAR = 6
-    ALLOWED_MODE_CAR_PASSENGER = 7
-    ALLOWED_MODE_BUS = 8
-    ALLOWED_MODE_PT = 9
-    ALLOWED_MODE_TRAIN = 10
-    ALLOWED_MODE_TRAM = 11
-    ALLOWED_MODE_RAIL = 12
-    ALLOWED_MODE_SUBWAY = 13
-    ALLOWED_MODE_FUNICULAR = 14
+    HIGHWAY_PRIMARY = 4
+    HIGHWAY_SECONDARY = 5
+    HIGHWAY_TERTIARY = 6
+    HIGHWAY_RESIDENTIAL = 7
+    HIGHWAY_PT = 8
+    HIGHWAY_OTHER = 9
+    LENGTH = 10
+    ALLOWED_MODE_CAR = 11
+    ALLOWED_MODE_CAR_PASSENGER = 12
+    ALLOWED_MODE_BUS = 13
+    ALLOWED_MODE_PT = 14
+    ALLOWED_MODE_TRAIN = 15
+    ALLOWED_MODE_TRAM = 16
+    ALLOWED_MODE_RAIL = 17
+    ALLOWED_MODE_SUBWAY = 18
+    ALLOWED_MODE_FUNICULAR = 19
     # Activity features (combined origin + destination for each activity type)
-    HOME=15
-    WORK=16
-    EDUCATION=17
-    LEISURE=18
-    SHOP=19
-    OTHER=20
-    OUTSIDE=21
+    HOME=20
+    WORK=21
+    EDUCATION=22
+    LEISURE=23
+    SHOP=24
+    OTHER=25
+    OUTSIDE=26
     
     # Trip data availability
-    IS_IN_EQASIM_TRIPS=22
+    IS_IN_EQASIM_TRIPS=27
 
-def get_capacity_base_case(links_base_case, required_modes_on_links):
+def get_capacity_and_freespeed_base_case(links_base_case, required_modes_on_links):
     mode_masks = [links_base_case['modes'].str.contains(mode) for mode in required_modes_on_links]
     combined_mask = mode_masks[0]
     for mask in mode_masks[1:]:
         combined_mask = combined_mask | mask
     capacity_base_case = np.where(combined_mask, links_base_case['capacity'], 0)
-    return capacity_base_case
+    freespeed_base_case = np.where(combined_mask, links_base_case['freespeed'], 0)
+    return capacity_base_case, freespeed_base_case
 
 # Read all network data into a dictionary of GeoDataFrames
 # For paris, please use the flag 'use_destination_activity' as False
-def compute_result_dic(basecase_links, networks, use_destination_activity):
+def compute_result_dic(basecase_links, networks, use_destination_activity, activity_destination_names):
     
     result_dic_output_links = {}
     result_dic_eqasim_trips = {}
@@ -107,7 +121,17 @@ def compute_result_dic(basecase_links, networks, use_destination_activity):
             gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
             gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
             if use_destination_activity:
-                gdf_extended_with_destinations = add_destinations_to_gdf(gdf_extended, df_eqasim_trips)
+                # Extend the normalized activity features from base case instead of re-normalizing
+                gdf_extended_with_destinations = gdf_extended
+                # Add normalized activity features from base case
+                for feature in activity_destination_names:
+                    if feature in basecase_links.columns:
+                        gdf_extended_with_destinations = extend_geodataframe(
+                            gdf_base=basecase_links, 
+                            gdf_to_extend=gdf_extended_with_destinations, 
+                            column_to_extend=feature, 
+                            new_column_name=feature
+                        )
             else:
                 gdf_extended_with_destinations = gdf_extended
             result_dic_output_links[policy_key] = gdf_extended_with_destinations
@@ -121,15 +145,21 @@ def compute_result_dic(basecase_links, networks, use_destination_activity):
     return result_dic_output_links, result_dic_eqasim_trips
 
 def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case,
-                        gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes):
+                        gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes, x_normalization_type,required_modes_on_links):
     
     datalist = []
     linegraph_transformation = LineGraph()
 
     vol_base_case = links_base_case['vol_car'].values
-    capacity_base_case = get_capacity_base_case(links_base_case, required_modes_on_links)
+    capacity_base_case, freespeed_base_case = get_capacity_and_freespeed_base_case(links_base_case, required_modes_on_links)
     length = links_base_case['length'].values
-    allowed_modes = encode_modes(links_base_case)
+    vol_base_case_normalized = normalization_of_edge_features(vol_base_case, x_normalization_type)
+    capacity_base_case_normalized = normalization_of_edge_features(capacity_base_case, x_normalization_type)
+    freespeed_base_case_normalized = normalization_of_edge_features(freespeed_base_case, x_normalization_type)
+    length_normalized = normalization_of_edge_features(length, x_normalization_type)
+    
+    # Only compute allowed modes if the flag is True
+    allowed_modes = encode_modes(links_base_case) if use_allowed_modes else None
     
     # Get link geometries and edges_base FIRST
     _, stacked_edge_geometries_tensor, edges_base, nodes, _ = get_link_geometries(links_base_case, apply_scaling=True)
@@ -143,7 +173,7 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
     
     for key, df in graph_items.items():
         gdf = prepare_gdf(df, links_base_case) 
-        _, capacity_reduction, highway, freespeed_scenario = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
+        _, capacity_reduction, highway = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
         policy_region, scenario = key
 
         # Apply normalization to all features before creating tensors - WITH DEBUG
@@ -160,14 +190,22 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
             return result
             
         edge_feature_dict = {
-            EdgeFeatures.VOL_BASE_CASE: torch.tensor(debug_normalize("VOL_BASE_CASE", vol_base_case, x_normalization_type)),
-            EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(debug_normalize("CAPACITY_BASE_CASE", capacity_base_case, x_normalization_type)),
+            EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case_normalized),
+            EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(capacity_base_case_normalized),
             EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(debug_normalize("CAPACITY_REDUCTION", capacity_reduction, x_normalization_type)),
-            EdgeFeatures.FREESPEED: torch.tensor(debug_normalize("FREESPEED", freespeed_scenario, x_normalization_type)),
-            EdgeFeatures.HIGHWAY: torch.tensor(highway),  # Binary feature - no normalization needed
-            EdgeFeatures.LENGTH: torch.tensor(debug_normalize("LENGTH", length, x_normalization_type)),
-        }
-
+            EdgeFeatures.FREESPEED: torch.tensor(freespeed_base_case_normalized),
+            EdgeFeatures.LENGTH: torch.tensor(length_normalized)}
+        # Add highway one-hot encoding
+        highway_feature_keys = [
+        EdgeFeatures.HIGHWAY_PRIMARY,
+        EdgeFeatures.HIGHWAY_SECONDARY,
+        EdgeFeatures.HIGHWAY_TERTIARY,
+        EdgeFeatures.HIGHWAY_RESIDENTIAL,
+        EdgeFeatures.HIGHWAY_PT,
+        EdgeFeatures.HIGHWAY_OTHER]
+        for i, key in enumerate(highway_feature_keys):
+            edge_feature_dict[key] = torch.tensor(highway[:, i], dtype=torch.float)
+        
         if use_allowed_modes:
             edge_feature_dict.update({
                 EdgeFeatures.ALLOWED_MODE_CAR: allowed_modes[0],
@@ -182,20 +220,27 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
             })
         if use_destination_activity:
             edge_feature_dict.update({
-                # Activity features (combined origin + destination for each activity type)
-                EdgeFeatures.HOME: torch.tensor(normalization_of_edge_features(gdf.get('home', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.WORK: torch.tensor(normalization_of_edge_features(gdf.get('work', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.EDUCATION: torch.tensor(normalization_of_edge_features(gdf.get('education', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.LEISURE: torch.tensor(normalization_of_edge_features(gdf.get('leisure', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.SHOP: torch.tensor(normalization_of_edge_features(gdf.get('shop', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.OTHER: torch.tensor(normalization_of_edge_features(gdf.get('other', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
-                EdgeFeatures.OUTSIDE: torch.tensor(normalization_of_edge_features(gdf.get('outside', pd.Series(0.0, index=gdf.index)).values, x_normalization_type)),
+                # Activity features (using pre-normalized values from add_destinations_to_gdf)
+                EdgeFeatures.HOME: torch.tensor(gdf.get('home_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.WORK: torch.tensor(gdf.get('work_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.EDUCATION: torch.tensor(gdf.get('education_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.LEISURE: torch.tensor(gdf.get('leisure_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.SHOP: torch.tensor(gdf.get('shop_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.OTHER: torch.tensor(gdf.get('other_normalized', pd.Series(0.0, index=gdf.index)).values),
+                EdgeFeatures.OUTSIDE: torch.tensor(gdf.get('outside_normalized', pd.Series(0.0, index=gdf.index)).values),
                 
                 # Trip data availability identifier
                 EdgeFeatures.IS_IN_EQASIM_TRIPS: torch.tensor(gdf.get('is_in_eqasim_trips', pd.Series(0, index=gdf.index)).values, dtype=torch.float),
             })
-        # Create the edge_tensor by iterating through the EdgeFeatures enum
-        edge_tensor = torch.stack([edge_feature_dict[feat] for feat in EdgeFeatures if feat in edge_feature_dict], dim=1)
+        # Create the edge_tensor by stacking only the features that are actually in the dictionary
+        feature_list = []
+        feature_names = []
+        for feat in EdgeFeatures:
+            if feat in edge_feature_dict:
+                feature_list.append(edge_feature_dict[feat])
+                feature_names.append(feat.name)
+        
+        edge_tensor = torch.stack(feature_list, dim=1)
         
         data = Data(edge_index=edge_index)
         data.num_nodes = len(nodes)
@@ -203,7 +248,13 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
             data = linegraph_transformation(data)
         data.x = edge_tensor
         data.pos = stacked_edge_geometries_tensor
-        data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf,target_feature,target_feature_normalization_type)
+        # Store multiple target options
+        #data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf, target_feature, target_feature_normalization_type)
+        
+        # Additional target options - you can add more as needed
+        data.y_vol_car = compute_target_tensor_only_edge_features(vol_base_case, gdf, 'vol_car', target_feature_normalization_type)
+        data.y_vol_car_percentage = compute_target_tensor_only_edge_features(vol_base_case, gdf, 'vol_car_percentage', target_feature_normalization_type)
+        
         data.policy_region = policy_region
         data.city = city
         data.scenario = scenario
@@ -224,6 +275,50 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
 
         if data.validate(raise_on_error=True):
             datalist.append(data)
+            
+            # Debug: Print feature information for the first graph
+            if len(datalist) == 1:
+                print(f"\n=== DEBUG: First Graph Features for {city} ===")
+                # Debug: Print which features are being included
+                print(f"\n=== Features Included in Tensor ===")
+                print(f"Total features: {len(feature_list)}")
+                print(f"Feature names: {feature_names}")
+                print("=" * 30)
+                print(f"Graph shape: {data.x.shape}")
+                print(f"Number of nodes: {data.num_nodes}")
+                print(f"Number of features: {data.x.shape[1]}")
+                print(f"Target (vol_car): {data.y_vol_car.shape}")
+                print(f"Target (vol_car_percentage): {data.y_vol_car_percentage.shape}")
+                print(f"Policy region: {data.policy_region}")
+                print(f"Scenario: {data.scenario}")
+                
+                # Print feature statistics
+                print(f"\n--- Feature Statistics ---")
+                for i, feat_name in enumerate(feature_names):
+                    feat_values = data.x[:, i].numpy()
+                    print(f"{feat_name}: mean={feat_values.mean():.4f}, std={feat_values.std():.4f}, "
+                          f"min={feat_values.min():.4f}, max={feat_values.max():.4f}")
+                
+                # Print target statistics
+                target_values_vol_car = data.y_vol_car.numpy()
+                target_values_vol_car_percentage = data.y_vol_car_percentage.numpy()
+                print(f"\n--- Target Statistics ---")
+                print(f"Target (vol_car): mean={target_values_vol_car.mean():.4f}, std={target_values_vol_car.std():.4f}, "
+                      f"min={target_values_vol_car.min():.4f}, max={target_values_vol_car.max():.4f}")
+                print(f"Target (vol_car_percentage): mean={target_values_vol_car_percentage.mean():.4f}, std={target_values_vol_car_percentage.std():.4f}, "
+                      f"min={target_values_vol_car_percentage.min():.4f}, max={target_values_vol_car_percentage.max():.4f}")
+                
+                # Check for NaN or Inf values
+                if torch.isnan(data.x).any():
+                    print("WARNING: NaN values found in features!")
+                if torch.isinf(data.x).any():
+                    print("WARNING: Inf values found in features!")
+                if torch.isnan(data.y_vol_car).any():
+                    print("WARNING: NaN values found in target!")
+                if torch.isinf(data.y_vol_car).any():
+                    print("WARNING: Inf values found in target!")
+                
+                print("=" * 50)
     
     return datalist
 
@@ -238,7 +333,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
         sim_input_paths = list()
         
         # Paths to compressed directories
-        compressed_input_paths = [os.path.join(project_root, 'data','inductive_data',city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes]
+        compressed_input_paths = [os.path.join(project_root, 'data','inductive_data','raw_data',city, f'compressed_{city}_hex_{hex_size}_seed_{seed}') for hex_size in hex_sizes]
 
         for path in compressed_input_paths:
             if os.path.exists(path) and os.path.isdir(path):
@@ -270,8 +365,20 @@ def process_single_city(city, project_root, result_path, use_destination_activit
     gdf_basecase_links = gdf_basecase_links.set_crs("EPSG:25832", allow_override=True) # TODO: fix for paris is EPSG:4326
     gdf_basecase_mean_mode_stats = pd.read_csv(basecase_stats_path, delimiter=',')
 
+    # Initialize activity_destination_names
+    activity_destination_names = []
+    
     if use_destination_activity:    
-        gdf_basecase_links = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips)
+        gdf_basecase_links, activity_destination_names = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips, x_normalization_type, normalize_activities=True)
+        print(f"\n=== Activity Features Added === *****BASECASE LINKS*****")
+        print(f"Activity destination names: {activity_destination_names}")
+        #print(f"Base case columns: {list(gdf_basecase_links.columns)}")
+        # Check if normalized features exist
+        for feat in activity_destination_names:
+            if feat in gdf_basecase_links.columns:
+                values = gdf_basecase_links[feat].values
+                print(f"{feat}: mean={values.mean():.4f}, std={values.std():.4f}, min={values.min():.4f}, max={values.max():.4f}")
+        print("=" * 30)
 
     # Sort for reproducibility, hopefully!
     sim_input_paths.sort()
@@ -294,12 +401,13 @@ def process_single_city(city, project_root, result_path, use_destination_activit
                 temp_dirs = []
             
             # Process networks and generate graph data
-            result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity)
+            result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity, activity_destination_names=activity_destination_names)
             base_gdf = result_dic_output_links["base_network_no_policies"]
             
             city_data = generate_graph_data(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips,
                                             links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
-                                            use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes)
+                                            use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes,
+                                            x_normalization_type=x_normalization_type, required_modes_on_links=required_modes_on_links)
             
             for graph in city_data:
                 filename = f'{idx:06d}.pt'
@@ -331,7 +439,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
 def main():
     
     # Create the result base path
-    result_base_path = os.path.join(project_root, 'data_new', 'training_data')
+    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data')
     os.makedirs(result_base_path, exist_ok=True)
     
     for city in all_cities:

@@ -26,6 +26,17 @@ highway_mapping = {
     'busway': -1, 'platform': -1, 'track': -1, 'bus_stop': -1,
     'path': -1
 }
+
+# Map numeric classes to one-hot classes (6 total)
+highway_cluster_mapping = {
+    -1: 4,  # PT / non-road
+    0: 5,   # Other
+    1: 0,   # PRIMARY
+    2: 1,   # SECONDARY
+    3: 2,   # TERTIARY
+    4: 3,   # RESIDENTIAL
+    5: 5, 6: 5, 7: 5, 8: 5, 9: 5  # Others
+}
     
 def create_policy_key(folder_name):
     # Extract the relevant part of the folder name
@@ -125,10 +136,16 @@ def read_eqasim_trips(folder):
     else:
         return None
 
-def add_destinations_to_gdf(gdf, df_eqasim_trips):
+def add_destinations_to_gdf(gdf, df_eqasim_trips, normalization_type, normalize_activities=True):
     """
     Add land use features to GeoDataFrame based on eqasim_trips data.
     Analyzes trip destinations to infer what types of activities are located near each link.
+    
+    Args:
+        gdf: GeoDataFrame with road network data
+        df_eqasim_trips: DataFrame with trip data
+        normalize_activities: Whether to normalize activity features
+        normalization_type: Type of normalization ('mean_std', 'min_max', 'signed_log_normalization')
     """
     gdf_extended = gdf.copy()
     
@@ -139,7 +156,7 @@ def add_destinations_to_gdf(gdf, df_eqasim_trips):
             
             # Land use analysis: Count destinations only (where activities are located)
             # Get all unique activity types from destinations (what's actually built there)
-            all_activities = set(df_eqasim_trips['following_purpose'].unique())
+            all_activities = sorted(list(set(df_eqasim_trips['following_purpose'].unique())))  # Sort for deterministic order
             
             df_land_use_activities = pd.DataFrame()
             
@@ -148,12 +165,22 @@ def add_destinations_to_gdf(gdf, df_eqasim_trips):
                 # This represents land use: "how many people use this link for this activity type"
                 activity_destinations = df_eqasim_trips[
                     df_eqasim_trips['following_purpose'] == activity
-                ].groupby(['destination_link_id', 'person_id']).size().groupby('destination_link_id').size()
+                ].groupby(['destination_link_id', 'person_id'], sort=True).size().groupby('destination_link_id', sort=True).size()
                 
                 df_land_use_activities[activity] = activity_destinations
             
             df_land_use_activities = df_land_use_activities.fillna(0)
             
+            # Normalize activity features if requested
+            if normalize_activities and not df_land_use_activities.empty:
+                for activity in all_activities:
+                    if activity in df_land_use_activities.columns:
+                        activity_data = df_land_use_activities[activity].values
+                        normalized_data = normalization_of_edge_features(activity_data, normalization_type)
+                        df_land_use_activities[f'{activity}_normalized'] = normalized_data
+                        # Keep original values too for reference
+                        df_land_use_activities[f'{activity}_original'] = activity_data
+
             # 3. Create identifier for links present in eqasim_trips
             all_trip_links = set(df_eqasim_trips['destination_link_id'].astype(str))
             
@@ -166,8 +193,10 @@ def add_destinations_to_gdf(gdf, df_eqasim_trips):
             
             # 5. Merge land use activity features
             gdf_extended = gdf_extended.merge(df_land_use_activities, left_on='link', right_index=True, how='left').fillna(0)
+
+            activity_destination_names = [f'{activity}_normalized' for activity in all_activities] + ['is_in_eqasim_trips']
     
-    return gdf_extended
+    return gdf_extended, activity_destination_names
 
 def compute_target_tensor_only_edge_features(vol_base_case, gdf, column_name: str, normalization_type: str):
     edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
@@ -180,7 +209,7 @@ def compute_target_tensor_only_edge_features(vol_base_case, gdf, column_name: st
     elif column_name == 'vol_car_percentage':
         # Division by base case to get percentage change  
         # Sign preserved: +50% vs -30%
-        epsilon = 1e-6 #adjust as needed
+        epsilon = 1 #adjust as needed
         base_case_with_epsilon = vol_base_case.copy()
         zero_mask = vol_base_case == 0
         base_case_with_epsilon[zero_mask] = epsilon
@@ -197,7 +226,7 @@ def normalization_of_edge_features(data, normalization_type: str):
     Normalize numpy array data using specified method.
     Args:
         data: numpy array with data to normalize
-        normalization_type: 'mean_std', 'min_max' or 'signed_log_normalization'
+        normalization_type: 'mean_std', 'min_max', 'signed_log_normalization' or 'robust_normalization'
         base_case_data: numpy array for log-based normalizations (epsilon already handled if needed)
     """
     if normalization_type == 'mean_std':
@@ -210,14 +239,24 @@ def normalization_of_edge_features(data, normalization_type: str):
         if data_max == data_min:
             return np.zeros_like(data)  # If all values are same, return zeros
         return (data - data_min) / (data_max - data_min)
+    elif normalization_type == 'robust_normalization':
+        median = np.median(data)
+        q1 = np.percentile(data, 25)
+        q3 = np.percentile(data, 75)
+        iqr = q3 - q1
+        if iqr == 0:
+            print('all values are same')
+            return np.zeros_like(data)
+        return (data - median) / iqr
     elif normalization_type == 'signed_log_normalization': #TODO: try signed min-max normalization instead of standardization
         # Step 1: Signed log transformation
         signed_log = np.sign(data) * np.log1p(np.abs(data))
         # Step 2: Standard normalization with zero-std protection
-        std = np.std(signed_log)
-        if std == 0:
-            return np.zeros_like(signed_log)  # If all values are same, return zeros
-        return (signed_log - np.mean(signed_log)) / std
+        #std = np.std(signed_log)
+        #if std == 0:
+        #    return np.zeros_like(signed_log)  # If all values are same, return zeros
+        #return (signed_log - np.mean(signed_log)) / std
+        return signed_log
     else:
         raise ValueError(f"Invalid normalization type: {normalization_type}")
 
@@ -231,9 +270,12 @@ def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
     
     capacities_new = np.where(combined_mask, gdf['capacity'], 0) # capacity is 0 for links that are not used by the required modes
     capacity_reduction = capacities_new - capacity_base_case #check the sign of this
-    highway = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
-    freespeed = np.where(combined_mask, gdf['freespeed'], 0) # freespeed is 0 for links that are not used by the required modes
-    return capacities_new, capacity_reduction, highway, freespeed
+    highway_raw = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
+    highway_clustered = np.vectorize(highway_cluster_mapping.get)(highway_raw)
+    # One-hot encode into 6 classes
+    highway_onehot = np.eye(6)[highway_clustered]  # shape: (N, 6)
+    #freespeed = np.where(combined_mask, gdf['freespeed'], 0) # freespeed is not caclulated per graph, as it is same as basecase freespeed
+    return capacities_new, capacity_reduction, highway_onehot
 
 def prepare_gdf(df, gdf_input):
     gdf = gdf_input[['link', 'geometry']].merge(df, on='link', how='left')
