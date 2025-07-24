@@ -14,6 +14,7 @@ import json
 from enum import IntEnum
 import shutil
 import random
+import glob
 
 import numpy as np
 import pandas as pd
@@ -48,10 +49,10 @@ use_allowed_modes = True # Flag to use allowed modes as edge features
 use_destination_activity = True # Flag to use destination activity as edge features
 use_linegraph = True # Flag to use line graph transformation
 # Test with just one city
-#all_cities = ['','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
+#all_cities = ['rosenheim','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
 #cities_1=['nuernberg', 'augsburg', 'muenchen','schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten','landshut', 'ingolstadt', 'regensburg', 'neuulm',rosenheim]
 #cities_rest=[']
-all_cities = ['rosenheim']
+all_cities = ['landshut', 'ingolstadt', 'regensburg']
 #target_feature = 'vol_car_percentage' #other options: 'vol_car'
 target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max'
 x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
@@ -103,6 +104,57 @@ def get_capacity_and_freespeed_base_case(links_base_case, required_modes_on_link
     freespeed_base_case = np.where(combined_mask, links_base_case['freespeed'], 0)
     return capacity_base_case, freespeed_base_case
 
+def get_reduced_capacity_links(city, policy_region, scenario, project_root):
+    """
+    Load reduced capacity links from geojson file for given policy_region and scenario.
+    
+    Args:
+        city: City name (e.g., 'rosenheim')
+        policy_region: Policy region (e.g., '500') 
+        scenario: Scenario (e.g., 's1')
+        project_root: Project root path
+        
+    Returns:
+        set: Set of link IDs that have reduced capacity
+    """
+    # Construct the directory path
+    reduced_links_dir = os.path.join(
+        project_root, 'data', 'inductive_data', 'reduced_links', 
+        city, f'{city}_hex_{policy_region}'
+    )
+    
+    # Find the geojson file matching the pattern
+    # Pattern: network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson
+    pattern = f"network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson"
+    search_pattern = os.path.join(reduced_links_dir, f"network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson")
+    
+    matching_files = glob.glob(search_pattern)
+    
+    if not matching_files:
+        print(f"WARNING: No reduced capacity geojson file found for {city}, policy_region={policy_region}, scenario={scenario}")
+        print(f"  Searched in: {reduced_links_dir}")
+        print(f"  Pattern: network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson")
+        return set()
+    
+    if len(matching_files) > 1:
+        print(f"WARNING: Multiple reduced capacity files found for {city}, policy_region={policy_region}, scenario={scenario}")
+        print(f"  Files: {matching_files}")
+        print(f"  Using first file: {matching_files[0]}")
+    
+    geojson_file = matching_files[0]
+    print(f"Loading reduced capacity links from: {os.path.basename(geojson_file)}")
+    
+    try:
+        # Load geojson and extract link IDs
+        gdf_reduced = gpd.read_file(geojson_file)
+        reduced_link_ids = set(gdf_reduced['link'].astype(str))
+        print(f"  Found {len(reduced_link_ids)} links with reduced capacity")
+        return reduced_link_ids
+        
+    except Exception as e:
+        print(f"ERROR: Failed to load reduced capacity file {geojson_file}: {e}")
+        return set()
+
 # Read all network data into a dictionary of GeoDataFrames
 # For paris, please use the flag 'use_destination_activity' as False
 def compute_result_dic(basecase_links, networks, use_destination_activity, activity_destination_names):
@@ -145,7 +197,8 @@ def compute_result_dic(basecase_links, networks, use_destination_activity, activ
     return result_dic_output_links, result_dic_eqasim_trips
 
 def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case,
-                        gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes, x_normalization_type,required_modes_on_links):
+                        gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes, 
+                        x_normalization_type, required_modes_on_links, project_root):
     
     datalist = []
     linegraph_transformation = LineGraph()
@@ -171,10 +224,27 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
     graph_items = {k: v for k, v in result_dic.items() 
                    if isinstance(v, pd.DataFrame) and k != "base_network_no_policies"}
     
+    print(f"\n=== PROCESSING {len(graph_items)} GRAPHS FOR {city.upper()} ===")
+    print("Using BINARY capacity reduction from GeoJSON files")
+    print("Policy regions and scenarios:")
+    
     for key, df in graph_items.items():
         gdf = prepare_gdf(df, links_base_case) 
-        _, capacity_reduction, highway = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
         policy_region, scenario = key
+        print(f"  - Policy: {policy_region}, Scenario: {scenario}")
+        # Get reduced capacity links for this policy/scenario
+        reduced_links = get_reduced_capacity_links(city, policy_region, scenario, project_root)
+        
+        # Create binary capacity reduction: 1 if link is in reduced set, 0 otherwise
+        gdf['link_str'] = gdf['link'].astype(str)  # Ensure string comparison
+        capacity_reduction_binary = gdf['link_str'].isin(reduced_links).astype(int).values
+        
+        # Get highway attributes (unchanged)
+        _, _, highway = get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links)
+        
+        print(f"  Policy: {policy_region}, Scenario: {scenario}")
+        print(f"  Links with reduced capacity: {capacity_reduction_binary.sum()}/{len(capacity_reduction_binary)}")
+        print(f"  Reduced links found in GDF: {len(set(gdf['link_str']) & reduced_links)}")
 
         # Apply normalization to all features before creating tensors - WITH DEBUG
         def debug_normalize(feature_name, data, norm_type):
@@ -192,7 +262,7 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
         edge_feature_dict = {
             EdgeFeatures.VOL_BASE_CASE: torch.tensor(vol_base_case_normalized),
             EdgeFeatures.CAPACITY_BASE_CASE: torch.tensor(capacity_base_case_normalized),
-            EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(debug_normalize("CAPACITY_REDUCTION", capacity_reduction, x_normalization_type)),
+            EdgeFeatures.CAPACITY_REDUCTION: torch.tensor(capacity_reduction_binary, dtype=torch.float),  # Binary: 1 if reduced, 0 otherwise
             EdgeFeatures.FREESPEED: torch.tensor(freespeed_base_case_normalized),
             EdgeFeatures.LENGTH: torch.tensor(length_normalized)}
         # Add highway one-hot encoding
@@ -275,6 +345,12 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
 
         if data.validate(raise_on_error=True):
             datalist.append(data)
+            
+            # Debug: Print capacity reduction statistics for each graph
+            capacity_reduction_feature = data.x[:, EdgeFeatures.CAPACITY_REDUCTION].numpy()
+            print(f"  Graph created: {data.x.shape[0]} nodes, {data.x.shape[1]} features")
+            print(f"  Capacity reduction feature: {capacity_reduction_feature.sum():.0f} links reduced out of {len(capacity_reduction_feature)}")
+            print()
             
             # Debug: Print feature information for the first graph
             if len(datalist) == 1:
@@ -407,7 +483,8 @@ def process_single_city(city, project_root, result_path, use_destination_activit
             city_data = generate_graph_data(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips,
                                             links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
                                             use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes,
-                                            x_normalization_type=x_normalization_type, required_modes_on_links=required_modes_on_links)
+                                            x_normalization_type=x_normalization_type, required_modes_on_links=required_modes_on_links,
+                                            project_root=project_root)
             
             for graph in city_data:
                 filename = f'{idx:06d}.pt'
