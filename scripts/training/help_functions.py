@@ -596,9 +596,9 @@ def load_metadata_from_disk(data, metadata_path):
 
     city_data = json.load(open(metadata_path, 'r'))
     
-    data['path'].extend(city_data['path'][:1000])
-    data['policy_region'].extend(city_data['policy_region'][:1000])
-    data['scenario'].extend(city_data['scenario'][:1000])
-    data['city'].extend(city_data['city'][:1000])
+    data['path'].extend(city_data['path'][:500])
+    data['policy_region'].extend(city_data['policy_region'][:500])
+    data['scenario'].extend(city_data['scenario'][:500])
+    data['city'].extend(city_data['city'][:500])
 
 

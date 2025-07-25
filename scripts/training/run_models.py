@@ -31,7 +31,7 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
-dataset_path = os.path.join(project_root, 'data_new', 'training_data')
+dataset_path = os.path.join(project_root, 'data_new','inductive_data','training_data')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 
 train_cities = ['schweinfurt','wuerzburg','aschaffenburg','regensburg','landshut','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','neuulm','augsburg','rosenheim','nuernberg']
@@ -47,7 +47,7 @@ def main():
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
-    parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features.")
+    parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features(True) or a subset of features(False).")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
