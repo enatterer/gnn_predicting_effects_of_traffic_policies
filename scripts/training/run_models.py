@@ -8,7 +8,7 @@ Example usage with default architecture, dropout, and most significant features 
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 
 Our use case:
-python run_models.py --gnn_arch gatv2 --unique_model_description gatv2_transductive_5_features_15_cities_retina --in_channels 5 --use_all_features False --num_epochs 20 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
+python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 1 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
 '''
 
 import os
@@ -18,7 +18,7 @@ import argparse
 
 import torch
 #from torchinfo import summary
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues
+#os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -31,10 +31,10 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
-dataset_path = os.path.join(project_root, 'data_new','inductive_data','training_data')
+dataset_path = os.path.join(project_root, 'data','inductive_data','training_data')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 
-train_cities = ['schweinfurt','wuerzburg','aschaffenburg','regensburg','landshut','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','neuulm','augsburg','rosenheim','nuernberg']
+train_cities = ['schweinfurt','wuerzburg','aschaffenburg','regensburg','landshut','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','neuulm','augsburg','rosenheim','nuernberg','muenchen']
 test_cities = [] # Non empty implies inductive learning
     
 def main():
@@ -42,7 +42,7 @@ def main():
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
                         choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
-    parser.add_argument("--project_name", type=str, default="Inductive_Bavaria_New",
+    parser.add_argument("--project_name", type=str, default="Inductive_Bavaria_LRZ",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
@@ -60,7 +60,7 @@ def main():
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--use_wighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
-    parser.add_argument("--batch_size", type=int, default=4, help="Batch size for training.")
+    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")

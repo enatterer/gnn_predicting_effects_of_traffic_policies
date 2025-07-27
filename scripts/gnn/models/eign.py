@@ -37,6 +37,7 @@ from gnn.models.block import (
 from gnn.help_functions import (
     validate_model_during_training_eign,
     LinearWarmupCosineDecayScheduler,
+    select_target_tensor,
 )
 
 
@@ -226,9 +227,7 @@ class EIGN(BaseGNN):
                 # Ensure data is in float32
                 data = data.to(device)
                 #TODO: check if this is correct
-                # Import target selection function
-                from gnn.models.base_gnn import select_target_tensor
-                targets_node_predictions_signed = data.y_signed.to(torch.float32) if hasattr(data, 'y_signed') else None #TODO: check if this is correct
+                targets_node_predictions_signed = data.y_signed.to(torch.float32) if hasattr(data, 'y_signed') else None
                 targets_node_predictions_unsigned = select_target_tensor(data, getattr(config, 'target_type', 'default')).to(torch.float32)
 
                 # Handle scalers - they may be None if features are pre-normalized

@@ -267,12 +267,12 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
             EdgeFeatures.LENGTH: torch.tensor(length_normalized)}
         # Add highway one-hot encoding
         highway_feature_keys = [
-        EdgeFeatures.HIGHWAY_PRIMARY,
-        EdgeFeatures.HIGHWAY_SECONDARY,
-        EdgeFeatures.HIGHWAY_TERTIARY,
-        EdgeFeatures.HIGHWAY_RESIDENTIAL,
-        EdgeFeatures.HIGHWAY_PT,
-        EdgeFeatures.HIGHWAY_OTHER]
+            EdgeFeatures.HIGHWAY_PRIMARY,
+            EdgeFeatures.HIGHWAY_SECONDARY,
+            EdgeFeatures.HIGHWAY_TERTIARY,
+            EdgeFeatures.HIGHWAY_RESIDENTIAL,
+            EdgeFeatures.HIGHWAY_PT,
+            EdgeFeatures.HIGHWAY_OTHER]
         for i, key in enumerate(highway_feature_keys):
             edge_feature_dict[key] = torch.tensor(highway[:, i], dtype=torch.float)
         

@@ -16,25 +16,7 @@ scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
-from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler
-
-def select_target_tensor(data, target_type: str = "vol_car_percentage"):
-    """
-    Select the appropriate target tensor based on target_type.
-    
-    Args:
-        data: PyTorch Geometric data object
-        target_type: String specifying which target to use
-        
-    Returns:
-        Selected target tensor
-    """
-    if target_type == "vol_car" and hasattr(data, 'y_vol_car'):
-        return data.y_vol_car
-    elif target_type == "vol_car_percentage" and hasattr(data, 'y_vol_car_percentage'):
-        return data.y_vol_car_percentage
-    else:
-        raise ValueError(f"Invalid target type: {target_type}")
+from gnn.help_functions import validate_model_during_training, LinearWarmupCosineDecayScheduler, select_target_tensor
 
 class BaseGNN(nn.Module, ABC):
     def __init__(self, 
@@ -168,7 +150,7 @@ class BaseGNN(nn.Module, ABC):
                 
                 # Debug prints for data loading
                 print(f"DEBUG DATA: data.x.shape = {data.x.shape}")
-                print(f"DEBUG DATA: data.y.shape = {data.y.shape}")
+                print(f"DEBUG DATA: data.y = {data.y_vol_car_percentage.shape}")
                 print(f"DEBUG DATA: data.edge_index.shape = {data.edge_index.shape}")
                 if hasattr(data, 'batch'):
                     print(f"DEBUG DATA: data.batch.shape = {data.batch.shape}")

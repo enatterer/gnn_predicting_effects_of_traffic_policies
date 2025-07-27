@@ -126,7 +126,7 @@ def prepare_data_with_graph_features(train_data, test_data,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling):
     
-    print(f"Preparing data with {len(train_data) + (len(test_data) if test_data is not None else 0)} items")
+    print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
     print("Splitting into subsets...")
 
@@ -165,7 +165,7 @@ def prepare_data_with_graph_features(train_data, test_data,
             # "WORK",
             # "SHOP",
         ]
-
+    print(node_features)
     # COMMENTED OUT: Features already normalized during preprocessing
     # # Fit GLOBAL Scaler!
     # # Assume no exclusive test scaler, #TODO:fix later if needed
@@ -596,9 +596,9 @@ def load_metadata_from_disk(data, metadata_path):
 
     city_data = json.load(open(metadata_path, 'r'))
     
-    data['path'].extend(city_data['path'][:500])
-    data['policy_region'].extend(city_data['policy_region'][:500])
-    data['scenario'].extend(city_data['scenario'][:500])
-    data['city'].extend(city_data['city'][:500])
+    data['path'].extend(city_data['path'][:100])
+    data['policy_region'].extend(city_data['policy_region'][:100])
+    data['scenario'].extend(city_data['scenario'][:100])
+    data['city'].extend(city_data['city'][:100])
 
 

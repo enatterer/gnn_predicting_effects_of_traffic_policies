@@ -36,7 +36,7 @@ def load_data_and_split_into_subsets(train_data, test_data, train_ratio, val_rat
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
-    dataset_length = len(train_data) + (len(test_data) if test_data is not None else 0)
+    dataset_length = len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)
     print(f"Total dataset length: {dataset_length}")
 
     paths = train_data['path']

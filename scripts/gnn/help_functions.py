@@ -10,7 +10,6 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import DataLoader
-from gnn.models.base_gnn import select_target_tensor
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -110,6 +109,30 @@ class LinearWarmupCosineDecayScheduler:
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay
 
+
+def select_target_tensor(data, target_type: str ):
+    """
+    Select the appropriate target tensor based on target_type.
+    
+    Args:
+        data: PyTorch Geometric data object
+        target_type: String specifying which target to use
+        
+    Returns:
+        Selected target tensor
+    """
+    if target_type == "vol_car" and hasattr(data, 'y_vol_car'):
+        return data.y_vol_car
+    elif target_type == "vol_car_percentage" and hasattr(data, 'y_vol_car_percentage'):
+        return data.y_vol_car_percentage
+    elif target_type == "absolute_change" and hasattr(data, 'y_absolute_change'):
+        return data.y_absolute_change
+    elif target_type == "log_normalized" and hasattr(data, 'y_log_normalized'):
+        return data.y_log_normalized
+    else:
+        # Default fallback to data.y
+        return data.y
+    
 def compute_baseline_of_mean_target(dataset, loss_fct, device, scalers):
     """
     Computes the baseline Mean Squared Error (MSE) for normalized y values in the dataset.
@@ -302,10 +325,8 @@ def validate_model_during_training_eign(
         for idx, data in tqdm(enumerate(dataset), total=len(dataset), desc="EIGN Validation", unit="batch"):
             data = data.to(device)
             
-            # Import the target selection function 
-            from gnn.models.base_gnn import select_target_tensor
             targets_node_predictions_signed = data.y_signed if hasattr(data, 'y_signed') else None
-            targets_node_predictions_unsigned = select_target_tensor(data, getattr(config, 'target_type', 'default'))
+            targets_node_predictions_unsigned = select_target_tensor(data, config.target_type)
             
             # Check if scalers are available (they may be None if features are pre-normalized)
             if scalers_validation is not None and "x_scaler" in scalers_validation:
