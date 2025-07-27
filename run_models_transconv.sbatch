@@ -4,7 +4,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=128G
 #SBATCH --time=2880
-#SBATCH --job-name=trial_run_gatv2_transductive
+#SBATCH --job-name=trial_run_transconv_transductive
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
