@@ -9,7 +9,10 @@ Example usage with default architecture, dropout, and most significant features 
 
 Our use case:
 python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 1 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
+python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
+
 '''
+
 
 import os
 import sys
@@ -70,8 +73,17 @@ def main():
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
+    parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=True, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
+    parser.add_argument("--neighbor_sizes", type=str, default="10,10", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
+    parser.add_argument("--subgraphs_per_graph", type=int, default=10, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
+    parser.add_argument("--seed_batch_size", type=int, default=1000, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
 
     args = vars(parser.parse_args())
+    
+    # Parse neighbor_sizes from string to list
+    if isinstance(args['neighbor_sizes'], str):
+        args['neighbor_sizes'] = [int(x.strip()) for x in args['neighbor_sizes'].split(',')]
+    
     set_random_seeds()
     
     try:
@@ -108,7 +120,11 @@ def main():
                                                                              path_to_save_dataloader=path_to_save_dataloader,
                                                                              use_all_features=args['use_all_features'],
                                                                              use_bootstrapping=args['use_bootstrapping'],
-                                                                             use_weighted_sampling=args['use_wighted_sampling'])
+                                                                             use_weighted_sampling=args['use_wighted_sampling'],
+                                                                             use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
+                                                                             neighbor_sizes=args['neighbor_sizes'],
+                                                                             subgraphs_per_graph=args['subgraphs_per_graph'],
+                                                                             seed_batch_size=args['seed_batch_size'])
         
         # Create WandB config
         config = setup_wandb(args)

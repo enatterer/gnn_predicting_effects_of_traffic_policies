@@ -13,8 +13,9 @@ import wandb
 from sklearn.preprocessing import StandardScaler
 
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
-from torch_geometric.data import Batch
+from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRandomSampler
+from torch_geometric.data import Batch, Data
+from torch_geometric.loader import NeighborLoader
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -124,7 +125,8 @@ def get_memory_info():
 # test_data implies use of complete inductive testing
 def prepare_data_with_graph_features(train_data, test_data,
                                      batch_size, path_to_save_dataloader,
-                                     use_all_features, use_bootstrapping, use_weighted_sampling):
+                                     use_all_features, use_bootstrapping, use_weighted_sampling,
+                                     use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_batch_size):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
@@ -179,12 +181,32 @@ def prepare_data_with_graph_features(train_data, test_data,
     collate_without_scaler = partial(collate_without_scaling, node_feature_filter=node_feature_filter) 
     
     print("Creating train loader...")
-    train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
+    base_train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
                                 sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
                                 num_workers=4, prefetch_factor=4, pin_memory=True, 
                                 collate_fn=collate_without_scaler,  # MODIFIED
                                 worker_init_fn=seed_worker)
+    if use_nested_neighbor_loader:
+        # 2) wrap it in our IterableDataset
+        nested_ds = NestedNeighborDataset(
+            graph_loader=base_train_loader,
+            neighbor_sizes=neighbor_sizes,
+            subgraphs_per_graph=subgraphs_per_graph,
+            seed_batch_size=seed_batch_size,
+        )
+        # 3) final train_loader yields *subgraphs* directly
+        #    Now with proper batching: batch_size * subgraphs_per_graph subgraphs per batch
+        train_loader = DataLoader(
+            nested_ds,
+            batch_size=batch_size * subgraphs_per_graph,  # 8 * 3 = 24 subgraphs per batch
+            num_workers=4,
+            pin_memory=True,
+            collate_fn=Batch.from_data_list,
+            shuffle=True,
+        )
+    else:
+        train_loader = base_train_loader
     
     print("Creating validation loader...")
     val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
@@ -571,6 +593,64 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")
 
+
+class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
+    def __init__(self,
+                 graph_loader: DataLoader,
+                 neighbor_sizes: list,
+                 subgraphs_per_graph: int,
+                 seed_batch_size: int):
+        """
+        graph_loader:  yields lists or Batches of whole-graph Data objects
+        neighbor_sizes: #neighbors per hop, e.g. [15,10,5]
+        subgraphs_per_graph: how many subgraphs to sample *per* graph
+        seed_batch_size: how many seed nodes in each subgraph
+        """
+        self.graph_loader = graph_loader
+        self.neighbor_sizes = neighbor_sizes
+        self.subgraphs_per_graph = subgraphs_per_graph
+        self.seed_batch_size = seed_batch_size
+        
+        # Pre-generate all subgraphs to support indexing
+        self._generate_subgraphs()
+    
+    def _generate_subgraphs(self):
+        """Pre-generate all subgraphs for indexing support."""
+        self.subgraphs = []
+        
+        for graph_batch in self.graph_loader:
+            # graph_batch might be a Batch or a list of Data objects:
+            graphs = (graph_batch.to_data_list()
+                      if hasattr(graph_batch, 'to_data_list')
+                      else graph_batch)
+            
+            batch_subgraphs = []
+            for graph in graphs:
+                # we take all nodes as potential seeds
+                all_nodes = torch.arange(graph.num_nodes)
+                # build a small neighbor‑loader on *this* single graph
+                neigh_loader = NeighborLoader(
+                    data=graph,
+                    num_neighbors=self.neighbor_sizes,
+                    input_nodes=all_nodes,
+                    batch_size=self.seed_batch_size,
+                    shuffle=True,
+                )
+                # pull out exactly `subgraphs_per_graph` subgraphs
+                graph_subgraphs = []
+                for i, sub in enumerate(neigh_loader):
+                    if i >= self.subgraphs_per_graph:
+                        break
+                    graph_subgraphs.append(sub)
+                batch_subgraphs.extend(graph_subgraphs)
+            
+            self.subgraphs.extend(batch_subgraphs)
+    
+    def __len__(self):
+        return len(self.subgraphs)
+    
+    def __getitem__(self, idx):
+        return self.subgraphs[idx]
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience
