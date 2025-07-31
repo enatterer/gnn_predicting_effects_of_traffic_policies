@@ -74,10 +74,13 @@ def main():
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=True, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
-    parser.add_argument("--neighbor_sizes", type=str, default="10,10", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
-    parser.add_argument("--subgraphs_per_graph", type=int, default=10, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
-    parser.add_argument("--seed_batch_size", type=int, default=1000, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
-
+    parser.add_argument("--neighbor_sizes", type=str, default="5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
+    parser.add_argument("--subgraphs_per_graph", type=int, default=3, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
+    parser.add_argument("--seed_batch_size", type=int, default=100, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
+    parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.") # TODO: New for GraphSAGE
+    parser.add_argument("--min_subgraph_nodes", type=int, default=10, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE
+    parser.add_argument("--max_subgraph_nodes", type=int, default=100, help="The maximum number of nodes in a subgraph.") # TODO: New for GraphSAGE
+    
     args = vars(parser.parse_args())
     
     # Parse neighbor_sizes from string to list
@@ -124,7 +127,10 @@ def main():
                                                                              use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
                                                                              neighbor_sizes=args['neighbor_sizes'],
                                                                              subgraphs_per_graph=args['subgraphs_per_graph'],
-                                                                             seed_batch_size=args['seed_batch_size'])
+                                                                             seed_batch_size=args['seed_batch_size'],
+                                                                             sampling_strategy=args['sampling_strategy'],
+                                                                             min_subgraph_nodes=args['min_subgraph_nodes'],
+                                                                             max_subgraph_nodes=args['max_subgraph_nodes'])
         
         # Create WandB config
         config = setup_wandb(args)

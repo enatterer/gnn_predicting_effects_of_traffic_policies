@@ -8,6 +8,11 @@ from torch import nn
 from torch_geometric.nn import SAGEConv
 from torch_geometric.utils import add_self_loops
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from torch_geometric.nn import MessagePassing
+
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 if scripts_path not in sys.path:
@@ -26,14 +31,14 @@ class GraphSAGE(BaseGNN):
                  out_channels: int = 1,
                  hidden_channels: list[int] = [256, 256],
                  aggregator: str = 'mean',  # Options: 'mean' | 'gcn' | 'pool'
-                 update_function: str = 'relu',  # Options: 'relu', 'mlp'
-                 mlp_hidden_dim: int = 64,  # Hidden dim for learnable MLP update
+                 update_function: str = 'mlp',  # Options: 'relu', 'mlp'
+                 mlp_hidden_dim: int = 1024,  # Hidden dim for learnable MLP update
                  dropout: float = 0.3, 
                  use_dropout: bool = True,
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = True):
-        
+                
         # Call parent class constructor
         super().__init__(
             in_channels=in_channels,
@@ -46,6 +51,7 @@ class GraphSAGE(BaseGNN):
         
         # Model-specific parameters
         self.hidden_channels = hidden_channels
+        self.mlp_hidden_dim    = mlp_hidden_dim
         if aggregator not in ['mean', 'gcn', 'pool']:
             raise ValueError(f"Unsupported aggregator: {aggregator}. Choose 'mean' or 'gcn' or 'pool'.")
         else:
@@ -54,7 +60,6 @@ class GraphSAGE(BaseGNN):
             raise ValueError(f"Unsupported update function: {update_function}. Choose 'relu' or 'mlp'.")
         else:
             self.update_function = update_function
-        self.mlp_hidden_dim = mlp_hidden_dim
         
         if self.log_to_wandb:
             wandb.config.update({
@@ -62,7 +67,7 @@ class GraphSAGE(BaseGNN):
                 'aggregator': aggregator,
                 'update_function': update_function,
                 'mlp_hidden_dim': mlp_hidden_dim,
-                'in_channels': self.in_channels
+                'in_channels': self.in_channels,
             }, allow_val_change=True)
 
         # Define the layers of the model
@@ -80,46 +85,34 @@ class GraphSAGE(BaseGNN):
         if self.aggregator == 'pool':
             self.post_concat = nn.ModuleList() #list of MLPs to concatenate the features of the source and target nodes
         
-        for i in range(len(self.hidden_channels)):
+        for i, hidden_channels in enumerate(self.hidden_channels):
             if i == 0:
                 in_channels = self.in_channels
             else:
-                in_channels = self.hidden_channels[i - 1]
-            out_channels = self.hidden_channels[i]
+                in_channels = hidden_channels[i - 1]
 
-            if self.aggregator == 'mean':
-                # Use standard SAGEConv with mean aggregation
-                conv = SAGEConv(in_channels, out_channels, aggr='mean')
-            elif self.aggregator == 'gcn': #TODO: check if this is correct
-                # Use standard SAGEConv with gcn aggregation
-                conv = SAGEConv(in_channels, out_channels, aggr='gcn',root_weight=False)
-            else: # pool
-                #a small MLP to transform the neghbour features before pooling
-                aggr_mlp = nn.Sequential(
-                    nn.Linear(in_channels, self.mlp_hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(self.mlp_hidden_dim, out_channels)
-                )
-                setattr(self, f'aggr_mlp{i + 1}', aggr_mlp)
-                # Use standard SAGEConv with pool aggregation
-                conv = SAGEConv(in_channels, out_channels, aggr='max') #TODO: check if this is correct
-                post_concat = nn.Linear(out_channels+in_channels, out_channels) #concatenate the features of the source and target nodes
-                self.post_concat.append(post_concat)
+            conv = SAGEConv(
+                in_channels, hidden_channels,
+                aggr=self.aggregator,   # 'mean', 'pool', 'lstm', or 'gcn'
+                root_weight=True,
+                normalize=False,
+                bias=True)
             self.layers.append(conv)
 
-            if self.update_function == 'mlp': #TODO: check if this is correct
+            if self.update_function == 'mlp': 
                 # Define a small MLP for learnable update
                 update_mlp = nn.Sequential(
-                    nn.Linear(out_channels, self.mlp_hidden_dim),
+                    nn.Linear(hidden_channels, self.mlp_hidden_dim),
                     nn.ReLU(),
-                    nn.Linear(self.mlp_hidden_dim, out_channels)
+                    nn.Linear(self.mlp_hidden_dim, hidden_channels)
                 )
                 setattr(self, f'update_mlp{i + 1}', update_mlp)
-
+        # final prediction head
+        last_dim = self.hidden_channels[-1]
+        self.fc = nn.Linear(last_dim, self.out_channels)
+        
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
-
-        self.fc = nn.Linear(self.hidden_channels[-1], self.out_channels)
 
     def forward(self, data):
         """
@@ -128,39 +121,23 @@ class GraphSAGE(BaseGNN):
         # Unpack data
         x = data.x.to(self.dtype)
         edge_index = data.edge_index
+        
         if self.aggregator == 'gcn':
-            edge_index = add_self_loops(edge_index, num_nodes=x.size(0),fill_value=1)
+            edge_index, _ = add_self_loops(edge_index, num_nodes=x.size(0))
+            
         # Apply GraphSAGE layers
         for i, conv in enumerate(self.layers):
-            # (a)GCN: add self-loops only on the first layer if using gcn
-            if self.aggregator == 'gcn' and i == 0:
-                edge_index, _ = add_self_loops(edge_index,
-                                               num_nodes=x.size(0),fill_value=1)
-            # (b) Pool: run the aggr_mlp first, then concat & post‐MLP
-            if self.aggregator == 'pool':
-                aggr_mlp      = getattr(self, f'aggr_mlp{i+1}')
-                x_neigh       = aggr_mlp(x)
-                x             = conv((x_neigh, x), edge_index)
-                x             = self.post_concat[i](torch.cat([x, x], dim=-1))
-            else:  
-                # (c) Mean: standard SAGEConv
-                x = conv(x, edge_index)
- 
-            # Apply update function
+            x = conv(x, edge_index)
+            # apply your chosen “update function”
             if self.update_function == 'relu':
-                x = nn.functional.relu(x)
-            else:  # mlp
-                update_mlp = getattr(self, f'update_mlp{i + 1}')
-                x = update_mlp(x)
- 
-            # Apply dropout if enabled
+                x = F.relu(x)
+            else:
+                x = getattr(self, f'update_mlp{i}')(x)
+            # optional feature dropout
             if self.use_dropout:
                 x = self.dropout_layer(x)
- 
-        # Final linear layer for predictions
-        x = self.fc(x)
-       
-        return x
+        # final linear layer
+        return self.fc(x)
     
     '''def forward(self, data):
         """
