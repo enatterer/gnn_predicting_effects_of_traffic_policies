@@ -189,9 +189,9 @@ def prepare_data_with_graph_features(train_data, test_data,
                                 collate_fn=collate_without_scaler,  # MODIFIED
                                 worker_init_fn=seed_worker)
     if use_nested_neighbor_loader:
-        train_loader = create_enhanced_nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
+        train_loader = nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
                                                          subgraphs_per_graph=subgraphs_per_graph, seed_batch_size=seed_batch_size,
-                                                         final_batch_size=batch_size, sampling_strategy=sampling_strategy, 
+                                                         final_batch_size=batch_size*subgraphs_per_graph, sampling_strategy=sampling_strategy, 
                                                          min_subgraph_nodes=min_subgraph_nodes,
                                                          max_subgraph_nodes=max_subgraph_nodes)
     else:
@@ -240,8 +240,8 @@ def prepare_data_with_graph_features(train_data, test_data,
     # MODIFIED: Return None for scalers since we don't need them
     return train_loader, val_loader, None  # was: scalers_train
 
-def create_enhanced_nested_dataloader(base_train_loader: DataLoader,
-                                    neighbor_sizes: List[int] = [15, 10, 5],
+def nested_dataloader(base_train_loader: DataLoader,
+                                    neighbor_sizes: list[int] = [15, 10, 5],
                                     subgraphs_per_graph: int = 3,
                                     seed_batch_size: int = 32,
                                     final_batch_size: int = 24,  # batch_size * subgraphs_per_graph
@@ -258,7 +258,8 @@ def create_enhanced_nested_dataloader(base_train_loader: DataLoader,
         seed_batch_size: Batch size for seed nodes in neighbor sampling
         final_batch_size: Final batch size for the nested loader
         sampling_strategy: Single sampling strategy to use for all subgraphs
-        city_aware: Whether to track city information
+        min_subgraph_nodes: Minimum nodes in subgraph
+        max_subgraph_nodes: Maximum nodes in subgraph 
     
     Returns:
         DataLoader that yields batched subgraphs
@@ -712,8 +713,8 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
         print(f"Processed {total_original_graphs} original graphs")
     
     def _sample_subgraphs_from_single_graph(self, graph: Data, batch_idx: int, 
-                                          graph_idx: int) -> List[Data]:
-        """Sample multiple subgraphs from a single graph using the same strategy."""
+                                          graph_idx: int) -> list[Data]:
+        """Sample multiple subgraphs from a single graph."""
         subgraphs = []
         
         # Skip if graph is too small
@@ -752,7 +753,7 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
         return subgraphs
     
     def _neighbor_sampling_subgraph(self, graph: Data) -> Data:
-        """Use NeighborLoader for subgraph sampling (your existing approach)."""
+        """Use NeighborLoader for subgraph sampling."""
         all_nodes = torch.arange(graph.num_nodes)
         
         # Create neighbor loader for this specific graph
@@ -760,7 +761,7 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
             data=graph,
             num_neighbors=self.neighbor_sizes,
             input_nodes=all_nodes,
-            batch_size=min(self.seed_batch_size, graph.num_nodes),
+            batch_size=self.seed_batch_size,
             shuffle=True,
         )
         
