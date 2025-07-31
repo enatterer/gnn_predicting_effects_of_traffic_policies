@@ -277,7 +277,6 @@ def nested_dataloader(base_train_loader: DataLoader,
     )
     
     print(f"Using strategy: {sampling_strategy}")
-    print(f"Strategy distribution: {nested_dataset.get_strategy_counts()}")
     
     # Create final dataloader
     nested_loader = DataLoader(
@@ -602,6 +601,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     Returns:
     - Initialized model on the specified device
     """
+    print(f"[DEBUG] create_gnn_model: Creating {gnn_arch} model")
+    print(f"[DEBUG] create_gnn_model: config.in_channels={config.in_channels}, config.out_channels={config.out_channels}")
 
     common_kwargs = {
         "in_channels": config.in_channels,
@@ -612,11 +613,17 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dtype": torch.float32,
         "log_to_wandb": True} # During training, yes
 
+    print(f"[DEBUG] create_gnn_model: common_kwargs={common_kwargs}")
+    print(f"[DEBUG] create_gnn_model: model_kwargs={model_kwargs}")
+
     if gnn_arch == "point_net_transf_gat":
         return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "graphSAGE":
-        return GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+        print(f"[DEBUG] create_gnn_model: Creating GraphSAGE model")
+        model = GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+        print(f"[DEBUG] create_gnn_model: GraphSAGE model created successfully")
+        return model
     
     elif gnn_arch == "gcn":
         return GCN(**common_kwargs, **model_kwargs).to(device)
@@ -763,6 +770,7 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
             input_nodes=all_nodes,
             batch_size=self.seed_batch_size,
             shuffle=True,
+            # Remove return_e_id parameter as it's not available in this version
         )
         
         # Get first subgraph from the loader

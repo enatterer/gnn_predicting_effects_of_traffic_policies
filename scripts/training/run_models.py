@@ -144,14 +144,19 @@ def main():
             model_kwargs = {}
         
         # Create model instance
+        print(f"[DEBUG] About to create GNN model: {config.gnn_arch}")
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
                                         config=config,
                                         model_kwargs=model_kwargs,
                                         device=device).to(device)
+        print(f"[DEBUG] GNN model created successfully")
         
         
+        print(f"[DEBUG] About to create loss function")
+        print(f"[DEBUG] train_dl.dataset[0].x.shape = {train_dl.dataset[0].x.shape}")
         loss_fct = GNN_Loss(loss_fct=config.loss_fct, num_nodes=train_dl.dataset[0].x.shape[0],
                             device=device, weighted=config.use_weighted_loss)
+        print(f"[DEBUG] Loss function created successfully")
         
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
