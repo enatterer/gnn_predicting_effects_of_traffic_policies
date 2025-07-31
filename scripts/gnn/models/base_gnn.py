@@ -81,25 +81,13 @@ class BaseGNN(nn.Module, ABC):
             model_save_path: str = None,
             scalers_train: dict = None,
             scalers_validation: dict = None) -> tuple:
-        """
-        Basic training pipeline for GNN models, can be overridden by child classes.
-
-        Parameters:
-        - model (nn.Module): The model to train.
-        - config (object, optional): Configuration object containing training parameters.
-        - loss_fct (nn.Module, optional): Loss function for training.
-        - optimizer (optim.Optimizer, optional): Optimizer for model training.
-        - train_dl (DataLoader, optional): DataLoader for training data.
-        - valid_dl (DataLoader, optional): DataLoader for validation data.
-        - device (torch.device, optional): Device to use for training.
-        - early_stopping (object, optional): Early stopping mechanism.
-        - model_save_path (str, optional): Path to save the best model.
-        - scalers_train (dict, optional): x and pos scalers for training data.
-        - scalers_validation (dict, optional): x and pos scalers for validation data.
-
-        Returns:
-        - tuple: Validation loss and the best epoch.
-        """
+        
+        print(f"[DEBUG] train_model: Starting training")
+        print(f"[DEBUG] train_model: config={config}")
+        print(f"[DEBUG] train_model: loss_fct={loss_fct}")
+        print(f"[DEBUG] train_model: train_dl={train_dl}")
+        print(f"[DEBUG] train_model: device={device}")
+        
         if config is None:
             raise ValueError("Config cannot be None")
         
@@ -134,6 +122,7 @@ class BaseGNN(nn.Module, ABC):
             print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
 
         for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
+            print(f"[DEBUG] train_model: Starting epoch {epoch+1}/{config.num_epochs}")
             super().train()
             optimizer.zero_grad()
 
@@ -142,7 +131,9 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
 
+            print(f"[DEBUG] train_model: About to start training loop with {len(train_dl)} batches")
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
+                print(f"[DEBUG] train_model: Processing batch {idx+1}/{len(train_dl)}")
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
@@ -198,6 +189,7 @@ class BaseGNN(nn.Module, ABC):
                         print(f"DEBUG TRAIN: data.x.shape = {data.x.shape}")
                         print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
                         print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
+                        print(f"DEBUG TRAIN: About to call loss_fct with data.x type={type(data.x)}, data.x={data.x if isinstance(data.x, int) else 'Tensor'}")
                         train_loss = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
 
                 # Total loss

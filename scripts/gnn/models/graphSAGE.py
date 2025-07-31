@@ -30,7 +30,7 @@ class GraphSAGE(BaseGNN):
                  in_channels: int = 5, 
                  out_channels: int = 1,
                  hidden_channels: list[int] = [256, 256],
-                 aggregator: str = 'mean',  # Options: 'mean' | 'gcn' | 'pool'
+                 aggregator: str = 'max',  # Options: 'mean' | 'gcn' | 'pool' | 'max'
                  update_function: str = 'mlp',  # Options: 'relu', 'mlp'
                  mlp_hidden_dim: int = 1024,  # Hidden dim for learnable MLP update
                  dropout: float = 0.3, 
@@ -38,8 +38,15 @@ class GraphSAGE(BaseGNN):
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = True):
+        
+        print(f"[DEBUG] GraphSAGE.__init__: Starting constructor")
+        print(f"[DEBUG] GraphSAGE.__init__: in_channels={in_channels}, out_channels={out_channels}")
+        print(f"[DEBUG] GraphSAGE.__init__: hidden_channels={hidden_channels}")
+        print(f"[DEBUG] GraphSAGE.__init__: aggregator={aggregator}")
+        print(f"[DEBUG] GraphSAGE.__init__: update_function={update_function}")
                 
         # Call parent class constructor
+        print(f"[DEBUG] GraphSAGE.__init__: About to call super().__init__")
         super().__init__(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -48,11 +55,13 @@ class GraphSAGE(BaseGNN):
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
             log_to_wandb=log_to_wandb)
+        print(f"[DEBUG] GraphSAGE.__init__: super().__init__ completed")
         
         # Model-specific parameters
+        print(f"[DEBUG] GraphSAGE.__init__: Setting model-specific parameters")
         self.hidden_channels = hidden_channels
         self.mlp_hidden_dim    = mlp_hidden_dim
-        if aggregator not in ['mean', 'gcn', 'pool']:
+        if aggregator not in ['mean', 'gcn', 'pool','max']:
             raise ValueError(f"Unsupported aggregator: {aggregator}. Choose 'mean' or 'gcn' or 'pool'.")
         else:
             self.aggregator = aggregator
@@ -61,6 +70,7 @@ class GraphSAGE(BaseGNN):
         else:
             self.update_function = update_function
         
+        print(f"[DEBUG] GraphSAGE.__init__: About to update wandb config")
         if self.log_to_wandb:
             wandb.config.update({
                 'hidden_channels': hidden_channels,
@@ -69,44 +79,65 @@ class GraphSAGE(BaseGNN):
                 'mlp_hidden_dim': mlp_hidden_dim,
                 'in_channels': self.in_channels,
             }, allow_val_change=True)
+        print(f"[DEBUG] GraphSAGE.__init__: wandb config updated")
 
         # Define the layers of the model
+        print(f"[DEBUG] GraphSAGE.__init__: About to call define_layers()")
         self.define_layers()
+        print(f"[DEBUG] GraphSAGE.__init__: define_layers() completed")
 
         # Initialize weights
+        print(f"[DEBUG] GraphSAGE.__init__: About to call initialize_weights()")
         self.initialize_weights()
+        print(f"[DEBUG] GraphSAGE.__init__: initialize_weights() completed")
+        print(f"[DEBUG] GraphSAGE.__init__: Constructor completed successfully")
 
     def define_layers(self):
         """
         Define the GraphSAGE layers, including flexible aggregators and update functions.
         """
+        print(f"[DEBUG] GraphSAGE.define_layers: Starting layer definition")
+        print(f"[DEBUG] GraphSAGE.define_layers: self.hidden_channels={self.hidden_channels}")
+        print(f"[DEBUG] GraphSAGE.define_layers: self.in_channels={self.in_channels}")
+        
         self.layers = nn.ModuleList()
         
         if self.aggregator == 'pool':
+            print(f"[DEBUG] GraphSAGE.define_layers: Creating post_concat ModuleList for pool aggregator")
             self.post_concat = nn.ModuleList() #list of MLPs to concatenate the features of the source and target nodes
         
-        for i, hidden_channels in enumerate(self.hidden_channels):
+        print(f"[DEBUG] GraphSAGE.define_layers: About to create {len(self.hidden_channels)} layers")
+        for i, hidden_dim in enumerate(self.hidden_channels):
+            print(f"[DEBUG] GraphSAGE.define_layers: Creating layer {i+1}/{len(self.hidden_channels)}")
+            print(f"[DEBUG] GraphSAGE.define_layers: hidden_dim={hidden_dim}")
+            
             if i == 0:
                 in_channels = self.in_channels
             else:
-                in_channels = hidden_channels[i - 1]
+                in_channels = self.hidden_channels[i - 1]
+            
+            print(f"[DEBUG] GraphSAGE.define_layers: Layer {i+1} - in_channels={in_channels}, hidden_dim={hidden_dim}")
+            print(f"[DEBUG] GraphSAGE.define_layers: About to create SAGEConv with aggr={self.aggregator}")
 
             conv = SAGEConv(
-                in_channels, hidden_channels,
+                in_channels, hidden_dim,
                 aggr=self.aggregator,   # 'mean', 'pool', 'lstm', or 'gcn'
                 root_weight=True,
                 normalize=False,
                 bias=True)
             self.layers.append(conv)
+            print(f"[DEBUG] GraphSAGE.define_layers: Layer {i+1} created successfully")
 
             if self.update_function == 'mlp': 
                 # Define a small MLP for learnable update
                 update_mlp = nn.Sequential(
-                    nn.Linear(hidden_channels, self.mlp_hidden_dim),
+                    nn.Linear(hidden_dim, self.mlp_hidden_dim),
                     nn.ReLU(),
-                    nn.Linear(self.mlp_hidden_dim, hidden_channels)
+                    nn.Linear(self.mlp_hidden_dim, hidden_dim)
                 )
                 setattr(self, f'update_mlp{i + 1}', update_mlp)
+                print(f"[DEBUG] GraphSAGE.define_layers: update_mlp{i + 1} created")
+        
         # final prediction head
         last_dim = self.hidden_channels[-1]
         self.fc = nn.Linear(last_dim, self.out_channels)
@@ -128,11 +159,11 @@ class GraphSAGE(BaseGNN):
         # Apply GraphSAGE layers
         for i, conv in enumerate(self.layers):
             x = conv(x, edge_index)
-            # apply your chosen “update function”
+            # apply your chosen "update function"
             if self.update_function == 'relu':
                 x = F.relu(x)
             else:
-                x = getattr(self, f'update_mlp{i}')(x)
+                x = getattr(self, f'update_mlp{i + 1}')(x)
             # optional feature dropout
             if self.use_dropout:
                 x = self.dropout_layer(x)
