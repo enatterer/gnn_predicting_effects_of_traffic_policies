@@ -220,7 +220,7 @@ def prepare_data_with_graph_features(train_data, test_data,
     # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
     # Test the nested loader
     if use_nested_neighbor_loader:
-        print("\n=== Testing Enhanced Nested Loader ===")
+        print("\n=== Testing Nested Loader ===")
         for batch in train_loader:
             print(f"Total subgraphs in batch: {batch.num_graphs}")
             
@@ -265,7 +265,6 @@ def nested_dataloader(base_train_loader: DataLoader,
         DataLoader that yields batched subgraphs
     """
     
-    print("Creating Enhanced Nested Neighbor Dataset...")
     nested_dataset = NestedNeighborDataset(
         graph_loader=base_train_loader,
         neighbor_sizes=neighbor_sizes,
@@ -275,8 +274,6 @@ def nested_dataloader(base_train_loader: DataLoader,
         min_subgraph_nodes=min_subgraph_nodes,
         max_subgraph_nodes=max_subgraph_nodes
     )
-    
-    print(f"Using strategy: {sampling_strategy}")
     
     # Create final dataloader
     nested_loader = DataLoader(
@@ -601,8 +598,6 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     Returns:
     - Initialized model on the specified device
     """
-    print(f"[DEBUG] create_gnn_model: Creating {gnn_arch} model")
-    print(f"[DEBUG] create_gnn_model: config.in_channels={config.in_channels}, config.out_channels={config.out_channels}")
 
     common_kwargs = {
         "in_channels": config.in_channels,
@@ -613,16 +608,11 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dtype": torch.float32,
         "log_to_wandb": True} # During training, yes
 
-    print(f"[DEBUG] create_gnn_model: common_kwargs={common_kwargs}")
-    print(f"[DEBUG] create_gnn_model: model_kwargs={model_kwargs}")
-
     if gnn_arch == "point_net_transf_gat":
         return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "graphSAGE":
-        print(f"[DEBUG] create_gnn_model: Creating GraphSAGE model")
         model = GraphSAGE(**common_kwargs, **model_kwargs).to(device)
-        print(f"[DEBUG] create_gnn_model: GraphSAGE model created successfully")
         return model
     
     elif gnn_arch == "gcn":

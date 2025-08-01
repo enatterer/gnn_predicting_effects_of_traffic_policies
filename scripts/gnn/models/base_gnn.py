@@ -82,12 +82,6 @@ class BaseGNN(nn.Module, ABC):
             scalers_train: dict = None,
             scalers_validation: dict = None) -> tuple:
         
-        print(f"[DEBUG] train_model: Starting training")
-        print(f"[DEBUG] train_model: config={config}")
-        print(f"[DEBUG] train_model: loss_fct={loss_fct}")
-        print(f"[DEBUG] train_model: train_dl={train_dl}")
-        print(f"[DEBUG] train_model: device={device}")
-        
         if config is None:
             raise ValueError("Config cannot be None")
         
@@ -122,7 +116,6 @@ class BaseGNN(nn.Module, ABC):
             print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
 
         for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
-            print(f"[DEBUG] train_model: Starting epoch {epoch+1}/{config.num_epochs}")
             super().train()
             optimizer.zero_grad()
 
@@ -131,30 +124,29 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
 
-            print(f"[DEBUG] train_model: About to start training loop with {len(train_dl)} batches")
+            print(f"Starting training loop with {len(train_dl)} batches")
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
-                print(f"[DEBUG] train_model: Processing batch {idx+1}/{len(train_dl)}")
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
                 
                 # Debug prints for data loading
-                print(f"DEBUG DATA: data.x.shape = {data.x.shape}")
-                print(f"DEBUG DATA: data.y = {data.y_vol_car_percentage.shape}")
-                print(f"DEBUG DATA: data.edge_index.shape = {data.edge_index.shape}")
-                if hasattr(data, 'batch'):
-                    print(f"DEBUG DATA: data.batch.shape = {data.batch.shape}")
-                print(f"DEBUG DATA: Moving data to device...")
+                #print(f"DEBUG DATA: data.x.shape = {data.x.shape}")
+                #print(f"DEBUG DATA: data.y = {data.y_vol_car_percentage.shape}")
+                #print(f"DEBUG DATA: data.edge_index.shape = {data.edge_index.shape}")
+                #if hasattr(data, 'batch'):
+                #    print(f"DEBUG DATA: data.batch.shape = {data.batch.shape}")
+                #print(f"DEBUG DATA: Moving data to device...")
                     
                 data = data.to(device)
-                print(f"DEBUG DATA: Data moved to device successfully")
+                #print(f"DEBUG DATA: Data moved to device successfully")
                 
                 # Select target based on configuration
                 targets_node_predictions = select_target_tensor(data, config.target_type)
-                print(f"DEBUG DATA: Using target type: {config.target_type}")
-                print(f"DEBUG DATA: targets_node_predictions.shape = {targets_node_predictions.shape}")
-                print(f"DEBUG DATA: About to inverse transform scaler...")
+                #print(f"DEBUG DATA: Using target type: {config.target_type}")
+                #print(f"DEBUG DATA: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                #print(f"DEBUG DATA: About to inverse transform scaler...")
 
                 # COMMENT OUT: Features are already normalized during preprocessing
                 # # Only inverse transform the continuous features that were originally normalized
@@ -164,7 +156,7 @@ class BaseGNN(nn.Module, ABC):
                 # x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
                 # x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
 
-                print(f"DEBUG DATA: No scaler transformation needed - features pre-normalized")
+                #print(f"DEBUG DATA: No scaler transformation needed - features pre-normalized")
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
@@ -184,12 +176,12 @@ class BaseGNN(nn.Module, ABC):
                     else:
                         predicted = self(data)
                         # Debug prints for shape mismatch
-                        print(f"DEBUG TRAIN: predicted.shape = {predicted.shape}")
-                        print(f"DEBUG TRAIN: targets_node_predictions.shape = {targets_node_predictions.shape}")
-                        print(f"DEBUG TRAIN: data.x.shape = {data.x.shape}")
-                        print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
-                        print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
-                        print(f"DEBUG TRAIN: About to call loss_fct with data.x type={type(data.x)}, data.x={data.x if isinstance(data.x, int) else 'Tensor'}")
+                        #print(f"DEBUG TRAIN: predicted.shape = {predicted.shape}")
+                        #print(f"DEBUG TRAIN: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                        #print(f"DEBUG TRAIN: data.x.shape = {data.x.shape}")
+                        #print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
+                        #print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
+                        #print(f"DEBUG TRAIN: About to call loss_fct with data.x type={type(data.x)}, data.x={data.x if isinstance(data.x, int) else 'Tensor'}")
                         train_loss = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
 
                 # Total loss
