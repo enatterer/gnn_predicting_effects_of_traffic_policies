@@ -30,7 +30,7 @@ class GraphSAGE(BaseGNN):
                  in_channels: int = 5,
                  use_pos: bool = False,
                  out_channels: int = 1,
-                 hidden_channels: list[int] = [256,512],
+                 hidden_channels: list[int] = [512, 256, 128],
                  dropout: float = 0.3, 
                  use_dropout: bool = False,
                  predict_mode_stats: bool = False,

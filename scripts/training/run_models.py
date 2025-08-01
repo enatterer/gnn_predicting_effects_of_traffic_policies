@@ -76,9 +76,9 @@ def main():
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
     #parameters for the GraphSAGE
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=True, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
-    parser.add_argument("--neighbor_sizes", type=str, default="5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
+    parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
     parser.add_argument("--subgraphs_per_graph", type=int, default=3, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
-    parser.add_argument("--seed_size", type=int, default=300, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
+    parser.add_argument("--seed_size", type=int, default=128, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
     parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
                         choices=["neighbor_sampling", "random_walk"]) # TODO: New for GraphSAGE
     parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE
