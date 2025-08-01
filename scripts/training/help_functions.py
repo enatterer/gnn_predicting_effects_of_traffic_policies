@@ -6,6 +6,7 @@ import joblib
 import subprocess
 from functools import partial
 from collections import Counter
+import tempfile
 
 import numpy as np
 from tqdm import tqdm
@@ -123,10 +124,10 @@ def get_memory_info():
     return total_memory, available_memory, used_memory
 
 # test_data implies use of complete inductive testing
-def prepare_data_with_graph_features(train_data, test_data,
+def prepare_data_with_graph_features(train_data, val_data, test_data,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
-                                     use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_batch_size,
+                                     use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
@@ -135,9 +136,9 @@ def prepare_data_with_graph_features(train_data, test_data,
 
     # TODO: Fix Later
     if use_bootstrapping:
-        train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=train_data, test_ratio=0.1, bootstrap_seed=4)
+        train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=train_data, test_ratio=0.1, bootstrap_seed=4) # TODO: fix later
     else:
-        dataset, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, test_data=test_data,
+        dataset, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
                                                                                     train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
     
     print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
@@ -187,13 +188,15 @@ def prepare_data_with_graph_features(train_data, test_data,
                                 sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
                                 num_workers=4, prefetch_factor=4, pin_memory=True, 
                                 collate_fn=collate_without_scaler,  # MODIFIED
-                                worker_init_fn=seed_worker)
+                                worker_init_fn=seed_worker,
+                                drop_last=False)
     if use_nested_neighbor_loader:
         train_loader = nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
-                                                         subgraphs_per_graph=subgraphs_per_graph, seed_batch_size=seed_batch_size,
+                                                         subgraphs_per_graph=subgraphs_per_graph, seed_size=seed_size,  
                                                          final_batch_size=batch_size*subgraphs_per_graph, sampling_strategy=sampling_strategy, 
                                                          min_subgraph_nodes=min_subgraph_nodes,
-                                                         max_subgraph_nodes=max_subgraph_nodes)
+                                                         max_subgraph_nodes=max_subgraph_nodes,
+                                                         node_feature_filter=node_feature_filter)
     else:
         train_loader = base_train_loader
     
@@ -203,7 +206,8 @@ def prepare_data_with_graph_features(train_data, test_data,
                             sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
                             num_workers=4, pin_memory=True, 
                             collate_fn=collate_without_scaler,  # MODIFIED
-                            worker_init_fn=seed_worker)
+                            worker_init_fn=seed_worker,
+                            drop_last=False)
     
     print("Creating test loader...")
     test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
@@ -211,7 +215,8 @@ def prepare_data_with_graph_features(train_data, test_data,
                                 sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
                                 num_workers=4, 
                                 collate_fn=collate_without_scaler,  # MODIFIED
-                                worker_init_fn=seed_worker)
+                                worker_init_fn=seed_worker,
+                                drop_last=False)
     
     # COMMENTED OUT: No need to save scalers for features
     # joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
@@ -243,36 +248,39 @@ def prepare_data_with_graph_features(train_data, test_data,
 def nested_dataloader(base_train_loader: DataLoader,
                                     neighbor_sizes: list[int] = [15, 10, 5],
                                     subgraphs_per_graph: int = 3,
-                                    seed_batch_size: int = 32,
+                                    seed_size: int = 1,  # Single seed per subgraph   
                                     final_batch_size: int = 24,  # batch_size * subgraphs_per_graph
                                     sampling_strategy: str = 'neighbor_sampling',  # Single strategy
                                     min_subgraph_nodes: int = 10,
-                                    max_subgraph_nodes: int = 100) -> DataLoader:
+                                    max_subgraph_nodes: int = 100,
+                                    node_feature_filter: list = None) -> DataLoader:
     """
-    Create enhanced nested dataloader that integrates with your existing pipeline.
+    Create enhanced nested dataloader with on-the-fly subgraph generation.
     
     Args:
         base_train_loader: Your existing base graph loader
         neighbor_sizes: Neighbor sampling sizes per hop
         subgraphs_per_graph: Number of subgraphs per original graph
-        seed_batch_size: Batch size for seed nodes in neighbor sampling
+        seed_size: Batch size for seed nodes in neighbor sampling 
         final_batch_size: Final batch size for the nested loader
         sampling_strategy: Single sampling strategy to use for all subgraphs
         min_subgraph_nodes: Minimum nodes in subgraph
         max_subgraph_nodes: Maximum nodes in subgraph 
     
     Returns:
-        DataLoader that yields batched subgraphs
+        DataLoader that yields batched subgraphs (generated on-the-fly)
     """
     
     nested_dataset = NestedNeighborDataset(
         graph_loader=base_train_loader,
         neighbor_sizes=neighbor_sizes,
         subgraphs_per_graph=subgraphs_per_graph,
-        seed_batch_size=seed_batch_size,
-        sampling_strategy=sampling_strategy,  # Single strategy
+        seed_size=seed_size,    
+        sampling_strategy=sampling_strategy,
         min_subgraph_nodes=min_subgraph_nodes,
-        max_subgraph_nodes=max_subgraph_nodes
+        max_subgraph_nodes=max_subgraph_nodes,
+        shuffle_mapping=False,  # Set to True for two layer randomization in combination with outer dataloader shuffle
+        node_feature_filter=node_feature_filter
     )
     
     # Create final dataloader
@@ -283,7 +291,7 @@ def nested_dataloader(base_train_loader: DataLoader,
         num_workers=4,
         pin_memory=True,
         collate_fn=Batch.from_data_list,
-        drop_last=True,
+        drop_last=False,
     )
     
     print(f"Created nested dataloader with {len(nested_dataset)} subgraphs")
@@ -648,109 +656,120 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         raise ValueError(f"Unknown architecture: {gnn_arch}")
 
 
-class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
+class NestedNeighborDataset(Dataset):
     '''
-    supports multiple sampling strategies
-    and integrates with your existing multi-model pipeline.
-    
-    This version pre-generates subgraphs to support proper indexing and batching,
-    while maintaining compatibility with your existing data preparation workflow.
+    On-the-fly subgraph generation with Dataset interface.
+    Generates fresh subgraphs every epoch using neighbor sampling,
+    providing better variety and following modern GNN practices.
     '''
     def __init__(self,
                  graph_loader: DataLoader,
                  neighbor_sizes: list,
                  subgraphs_per_graph: int,
-                 seed_batch_size: int,
+                 seed_size: int,  
                  sampling_strategy: str,
                  min_subgraph_nodes: int,
-                 max_subgraph_nodes: int):
+                 max_subgraph_nodes: int,
+                 shuffle_mapping: bool = False,
+                 node_feature_filter: list = None):
         """
         Args:
             graph_loader: Your existing base graph loader
             neighbor_sizes: Neighbor sampling sizes per hop [15,10,5]
             subgraphs_per_graph: Number of subgraphs per original graph (3)
-            seed_batch_size: Batch size for seed nodes
+            seed_size: Batch size for seed nodes
             sampling_strategy: Single sampling strategy to use for all subgraphs.
             min_subgraph_nodes: Minimum nodes in subgraph
             max_subgraph_nodes: Maximum nodes in subgraph 
         """
-        self.graph_loader = graph_loader
         self.neighbor_sizes = neighbor_sizes
         self.subgraphs_per_graph = subgraphs_per_graph
-        self.seed_batch_size = seed_batch_size
+        self.seed_size = seed_size  
         self.sampling_strategy = sampling_strategy
         self.min_subgraph_nodes = min_subgraph_nodes
         self.max_subgraph_nodes = max_subgraph_nodes
+        self.shuffle_mapping = shuffle_mapping
+        self.node_feature_filter = node_feature_filter
         
-        print(f"Initializing Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
+        print(f"Initializing On-The-Fly Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
         print(f"Using single sampling strategy: {self.sampling_strategy}")
+        print(f"Shuffle mapping: {shuffle_mapping}")
+        print(f"Feature filter: {node_feature_filter}")
         
-        # Pre-generate all subgraphs to support indexing
-        self._generate_all_subgraphs()
+        # Store original dataset for on-demand loading
+        self.original_dataset = graph_loader.dataset
         
-        print(f"Generated {len(self.subgraphs)} total subgraphs")
+        # Pre-compute the mapping from subgraph index to original graph
+        self._compute_subgraph_mapping()
+        
+        print(f"Total subgraphs to generate on-the-fly: {len(self.subgraph_mapping)}")
     
-    def _generate_all_subgraphs(self):
-        """Pre-generate all subgraphs with different sampling strategies."""
-        self.subgraphs = []
-        total_original_graphs = 0
+    def _compute_subgraph_mapping(self):
+        """Pre-compute which original graph each subgraph index corresponds to."""
+        self.subgraph_mapping = []
         
-        for batch_idx, graph_batch in enumerate(self.graph_loader):
-            # Handle both Batch objects and lists of Data objects
-            if hasattr(graph_batch, 'to_data_list'):
-                graphs = graph_batch.to_data_list()
-            else:
-                graphs = graph_batch if isinstance(graph_batch, list) else [graph_batch]
-            
-            for graph_idx, graph in enumerate(graphs):
-                total_original_graphs += 1
-                graph_subgraphs = self._sample_subgraphs_from_single_graph(graph, batch_idx, graph_idx)
-                
-                self.subgraphs.extend(graph_subgraphs)
-        print(f"Processed {total_original_graphs} original graphs")
+        # Direct iteration over dataset (much simpler!)
+        for graph_idx in range(len(self.original_dataset)):
+            for subgraph_idx in range(self.subgraphs_per_graph):
+                self.subgraph_mapping.append({
+                    'original_graph_idx': graph_idx,
+                    'subgraph_idx': subgraph_idx
+                })
+        
+        # Shuffle mapping if requested (for better randomization)
+        if self.shuffle_mapping:
+            import random
+            random.shuffle(self.subgraph_mapping)
+            print("Shuffled subgraph mapping for better randomization")
+        
+        print(f"Processed {len(self.original_dataset)} original graphs")
     
-    def _sample_subgraphs_from_single_graph(self, graph: Data, batch_idx: int, 
-                                          graph_idx: int) -> list[Data]:
-        """Sample multiple subgraphs from a single graph."""
-        subgraphs = []
+    def _sample_subgraphs_from_single_graph(self, graph: Data, subgraph_idx: int) -> Data:
+        """Sample a single subgraph from a graph."""
         
         # Skip if graph is too small
         if graph.num_nodes < self.min_subgraph_nodes:
             # For small graphs, just replicate the original graph
-            for i in range(self.subgraphs_per_graph):
-                subgraph = graph.clone()
-                subgraph.sampling_strategy = self.sampling_strategy
-                subgraph.original_batch_idx = batch_idx
-                subgraph.original_graph_idx = graph_idx
-                subgraph.subgraph_idx = i  # Track which subgraph this is (0, 1, or 2)
-                subgraphs.append(subgraph)
-            return subgraphs
-        for i in range(self.subgraphs_per_graph):
-            try:
-                if self.sampling_strategy == "neighbor_sampling":
-                    subgraph = self._neighbor_sampling_subgraph(graph)
-                elif self.sampling_strategy == "random_walk":
-                    subgraph = self._random_walk_subgraph(graph)
-                else:
-                    raise ValueError(f"Invalid sampling strategy: {self.sampling_strategy}")
-                
-                # Add metadata to subgraph
-                subgraph.sampling_strategy = self.sampling_strategy
-                subgraph.original_batch_idx = batch_idx
-                subgraph.original_graph_idx = graph_idx
-                subgraph.subgraph_idx = i  # Track which subgraph this is (0, 1, or 2)
-                 # Validate subgraph size
-                if subgraph.num_nodes > self.max_subgraph_nodes:
-                    subgraph = self._truncate_subgraph(subgraph, self.max_subgraph_nodes)
-                
-                subgraphs.append(subgraph)   
-            except Exception as e:
-                print(f"Error sampling subgraph from graph {graph_idx} in batch {batch_idx}: {e}")
-                continue
-        return subgraphs
+            subgraph = graph.clone()
+            subgraph.sampling_strategy = self.sampling_strategy
+            subgraph.subgraph_idx = subgraph_idx
+            return subgraph
+        
+        try:
+            if self.sampling_strategy == "neighbor_sampling":
+                subgraph = self._neighbor_sampling_subgraph(graph)
+            elif self.sampling_strategy == "random_walk":
+                subgraph = self._random_walk_subgraph(graph)
+            else:
+                raise ValueError(f"Invalid sampling strategy: {self.sampling_strategy}")
+            
+            # Add metadata to subgraph
+            subgraph.sampling_strategy = self.sampling_strategy
+            subgraph.subgraph_idx = subgraph_idx
+            
+            # Validate subgraph size
+            if subgraph.num_nodes > self.max_subgraph_nodes:
+                subgraph = self._truncate_subgraph(subgraph, self.max_subgraph_nodes)
+            
+            return subgraph
+            
+        except Exception as e:
+            print(f"Error sampling subgraph {subgraph_idx}: {e}")
+            # Fallback to original graph
+            subgraph = graph.clone()
+            subgraph.sampling_strategy = self.sampling_strategy
+            subgraph.subgraph_idx = subgraph_idx
+            return subgraph
     
     def _neighbor_sampling_subgraph(self, graph: Data) -> Data:
-        """Use NeighborLoader for subgraph sampling."""
+        """
+        Use NeighborLoader for subgraph sampling.
+        
+        Each subgraph contains:
+        - 1 seed node (seed_size=1)   
+        - Neighbors sampled according to neighbor_sizes [15, 10, 5]
+        - Total nodes: ~1 + 15 + 15*10 + 15*10*5 = ~800 nodes max
+        """
         all_nodes = torch.arange(graph.num_nodes)
         
         # Create neighbor loader for this specific graph
@@ -758,7 +777,7 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
             data=graph,
             num_neighbors=self.neighbor_sizes,
             input_nodes=all_nodes,
-            batch_size=self.seed_batch_size,
+            batch_size=self.seed_size,  # 1 seed per subgraph
             shuffle=True,
             # Remove return_e_id parameter as it's not available in this version
         )
@@ -849,10 +868,26 @@ class NestedNeighborDataset(Dataset):  # Changed from IterableDataset to Dataset
         return graph.clone()
     
     def __len__(self):
-        return len(self.subgraphs)
+        return len(self.subgraph_mapping)
     
     def __getitem__(self, idx):
-        return self.subgraphs[idx]
+        """Generate subgraph on-the-fly using neighbor sampling."""
+        mapping = self.subgraph_mapping[idx]
+        
+        # Load the original graph on-demand (direct indexing)
+        original_graph = self.original_dataset[mapping['original_graph_idx']]
+        
+        # Generate the subgraph dynamically (fresh every epoch)
+        subgraph = self._sample_subgraphs_from_single_graph(
+            graph=original_graph,
+            subgraph_idx=mapping['subgraph_idx']
+        )
+        
+        # Apply feature filtering to the subgraph
+        if hasattr(self, 'node_feature_filter') and self.node_feature_filter is not None:
+            subgraph.x = subgraph.x[:, self.node_feature_filter]
+        
+        return subgraph
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience

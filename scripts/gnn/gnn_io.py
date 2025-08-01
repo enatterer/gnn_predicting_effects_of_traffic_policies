@@ -31,33 +31,34 @@ class GraphDataset(Dataset):
 
 # Use test_data for an exclusive test set, train and validation sets from train_data.
 # Otherwise split into train, validation, and test sets from train_data.
-def load_data_and_split_into_subsets(train_data, test_data, train_ratio, val_ratio, test_ratio=0, seed=42):
+def load_data_and_split_into_subsets(train_data, val_data, test_data, train_ratio, val_ratio, test_ratio=0, seed=42):
     
     # Ensure the ratios sum to 1
     assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
     
-    dataset_length = len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)
+    dataset_length = len(train_data['path']) + (len(val_data['path']) if val_data is not None else 0) + (len(test_data['path']) if test_data is not None else 0)
     print(f"Total dataset length: {dataset_length}")
 
-    paths = train_data['path']
-    labels = [f"{city}_{policy_region}" for city, policy_region in zip(train_data['city'], train_data['policy_region'])]
-
-    if test_data is None:
+    if test_data is None and val_data is None:
+        paths = train_data['path']
+        labels = [f"{city}_{policy_region}" for city, policy_region in zip(train_data['city'], train_data['policy_region'])]
 
         indices = list(range(len(paths)))
         train_indices, test_indices = train_test_split(indices, test_size=test_ratio, random_state=seed, stratify=labels)
         train_indices, val_indices = train_test_split(train_indices, test_size=val_ratio/(train_ratio + val_ratio), random_state=seed, stratify=[labels[i] for i in train_indices])
 
     else:
-
-        indices = list(range(len(paths)))
-        train_indices, val_indices = train_test_split(indices, test_size=val_ratio, random_state=seed, stratify=labels)
         
-        paths = paths + test_data['path']
+        train_indices = list(range(len(train_data['path'])))
+        val_indices = list(range(len(train_data['path']), len(train_data['path']) + len(val_data['path'])))
+        test_indices = list(range(len(train_data['path']) + len(val_data['path']), len(train_data['path']) + len(val_data['path']) + len(test_data['path'])))
+        
+        paths = train_data['path'] + val_data['path'] + test_data['path']
+        train_labels = [f"{city}_{policy_region}" for city, policy_region in zip(train_data['city'], train_data['policy_region'])]
+        val_labels = [f"{city}_{policy_region}" for city, policy_region in zip(val_data['city'], val_data['policy_region'])]
         test_labels = [f"{city}_{policy_region}" for city, policy_region in zip(test_data['city'], test_data['policy_region'])]
-        labels = labels + test_labels
-        test_indices = list(range(len(paths)))[len(test_labels):]
-
+        labels = train_labels + val_labels + test_labels
+        
     # Create the dataset
     dataset = GraphDataset(paths, labels)
     

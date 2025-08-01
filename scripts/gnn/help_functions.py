@@ -38,10 +38,8 @@ class GNN_Loss:
         self.weighted = weighted
 
     def __call__(self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None, batch: Tensor = None) -> Tensor:
-        print(f"[DEBUG] GNN_Loss.__call__: type(x)={type(x)}, x.shape={getattr(x, 'shape', None) if x is not None else None}")
         if self.weighted:
             loss = self.loss_fct(y_pred, y_true)
-            print(f"[DEBUG] GNN_Loss.__call__: About to access x[:, EdgeFeatures.VOL_BASE_CASE], x type={type(x)}")
             weights = x[:, EdgeFeatures.VOL_BASE_CASE]
             
             if batch is not None:
@@ -123,28 +121,28 @@ def select_target_tensor(data, target_type: str ):
     Returns:
         Selected target tensor
     """
-    print(f"[DEBUG] select_target_tensor: target_type={target_type}")
-    print(f"[DEBUG] select_target_tensor: hasattr(data, 'y')={hasattr(data, 'y')}, data.y={data.y if hasattr(data, 'y') else 'No y attr'}")
-    print(f"[DEBUG] select_target_tensor: hasattr(data, 'y_vol_car')={hasattr(data, 'y_vol_car')}, data.y_vol_car={data.y_vol_car if hasattr(data, 'y_vol_car') else 'No y_vol_car attr'}")
-    print(f"[DEBUG] select_target_tensor: hasattr(data, 'y_vol_car_percentage')={hasattr(data, 'y_vol_car_percentage')}, data.y_vol_car_percentage={data.y_vol_car_percentage if hasattr(data, 'y_vol_car_percentage') else 'No y_vol_car_percentage attr'}")
+    #print(f"[DEBUG] select_target_tensor: target_type={target_type}")
+    #print(f"[DEBUG] select_target_tensor: hasattr(data, 'y')={hasattr(data, 'y')}, data.y={data.y if hasattr(data, 'y') else 'No y attr'}")
+    #print(f"[DEBUG] select_target_tensor: hasattr(data, 'y_vol_car')={hasattr(data, 'y_vol_car')}, data.y_vol_car={data.y_vol_car if hasattr(data, 'y_vol_car') else 'No y_vol_car attr'}")
+    #print(f"[DEBUG] select_target_tensor: hasattr(data, 'y_vol_car_percentage')={hasattr(data, 'y_vol_car_percentage')}, data.y_vol_car_percentage={data.y_vol_car_percentage if hasattr(data, 'y_vol_car_percentage') else 'No y_vol_car_percentage attr'}")
     
     # First check if data.y exists and is not None
     if hasattr(data, 'y') and data.y is not None:
-        print(f"[DEBUG] select_target_tensor: Returning data.y with type={type(data.y)}")
+        #print(f"[DEBUG] select_target_tensor: Returning data.y with type={type(data.y)}")
         return data.y
     
     # If data.y is None, try specific target attributes
     if target_type == "vol_car" and hasattr(data, 'y_vol_car') and data.y_vol_car is not None:
-        print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car with type={type(data.y_vol_car)}")
+        #print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car with type={type(data.y_vol_car)}")
         return data.y_vol_car
     elif target_type == "vol_car_percentage" and hasattr(data, 'y_vol_car_percentage') and data.y_vol_car_percentage is not None:
-        print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car_percentage with type={type(data.y_vol_car_percentage)}")
+        #print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car_percentage with type={type(data.y_vol_car_percentage)}")
         return data.y_vol_car_percentage
     elif target_type == "absolute_change" and hasattr(data, 'y_absolute_change') and data.y_absolute_change is not None:
-        print(f"[DEBUG] select_target_tensor: Returning data.y_absolute_change with type={type(data.y_absolute_change)}")
+        #print(f"[DEBUG] select_target_tensor: Returning data.y_absolute_change with type={type(data.y_absolute_change)}")
         return data.y_absolute_change
     elif target_type == "log_normalized" and hasattr(data, 'y_log_normalized') and data.y_log_normalized is not None:
-        print(f"[DEBUG] select_target_tensor: Returning data.y_log_normalized with type={type(data.y_log_normalized)}")
+        #print(f"[DEBUG] select_target_tensor: Returning data.y_log_normalized with type={type(data.y_log_normalized)}")
         return data.y_log_normalized
     else:
         # If no target is available, raise an error with helpful message
