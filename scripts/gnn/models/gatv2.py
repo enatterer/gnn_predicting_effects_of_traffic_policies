@@ -7,7 +7,7 @@ import wandb
 import torch
 from torch import nn
 
-from torch_geometric.nn import GATv2Conv
+from torch_geometric.nn import GATv2Conv, GraphNorm
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -27,7 +27,9 @@ class GATv2(BaseGNN):
                 use_dropout: bool = False,
                 predict_mode_stats: bool = False,
                 dtype: torch.dtype = torch.float32,
-                log_to_wandb: bool = False,
+                log_to_wandb: bool = True,
+                use_graph_norm: bool = False,
+                use_residuals: bool = False,
                 #GATv2 specific parameters
                 share_weights: bool = False,
                 negative_slope: float = 0.2,
@@ -48,6 +50,8 @@ class GATv2(BaseGNN):
         self.hidden_channels = hidden_channels
         self.num_heads = num_heads
         self.use_pos = use_pos
+        self.use_graph_norm = use_graph_norm
+        self.use_residuals = use_residuals
 
         # GATv2 specific parameters
         self.share_weights = share_weights
@@ -62,9 +66,8 @@ class GATv2(BaseGNN):
                                  'hidden_channels': hidden_channels,
                                  'num_heads': num_heads,
                                  'use_pos': use_pos,
-                                 'share_weights': share_weights,
-                                 'negative_slope': negative_slope,
-                                 'add_self_loops': add_self_loops},
+                                 'use_graph_norm': use_graph_norm,
+                                 'use_residuals': use_residuals},
                                  allow_val_change=True)
         
         # Define the layers of the model
@@ -84,7 +87,11 @@ class GATv2(BaseGNN):
             # Define the convolutional layer
             conv = GATv2Conv(in_channels, int(self.hidden_channels[i]/self.num_heads), heads=self.num_heads, share_weights=self.share_weights, negative_slope=self.negative_slope, add_self_loops=self.add_self_loops)    
             setattr(self, f'conv{i + 1}', conv)
-        
+
+            if self.use_graph_norm:
+                graph_norm = GraphNorm(self.hidden_channels[i-1] if i > 0 else self.in_channels)
+                setattr(self, f'graph_norm{i + 1}', graph_norm)
+
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
 
@@ -106,9 +113,26 @@ class GATv2(BaseGNN):
         x = x.to(self.dtype)
 
         for i in range(len(self.hidden_channels)):
+
+            # Residual connection
+            if self.use_residuals and i > 0 and self.hidden_channels[i] == self.hidden_channels[i - 1]:
+                x_0 = x
+
+            # Graph normalization
+            if self.use_graph_norm:
+                graph_norm = getattr(self, f'graph_norm{i + 1}')
+                x = graph_norm(x)
+                
             conv = getattr(self, f'conv{i + 1}')
             x = conv(x, edge_index)
+
+            # Residual connection
+            if self.use_residuals and i > 0 and self.hidden_channels[i] == self.hidden_channels[i - 1]:
+                x = x + x_0
+
             x = nn.functional.relu(x)
+
+            # Dropout
             if self.use_dropout:
                 x = self.dropout_layer(x)
 
