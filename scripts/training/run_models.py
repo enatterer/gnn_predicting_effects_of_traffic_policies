@@ -38,6 +38,7 @@ dataset_path = os.path.join(project_root, 'data','inductive_data','training_data
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 
 train_cities = ['schweinfurt','wuerzburg','aschaffenburg','regensburg','landshut','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','neuulm','augsburg','rosenheim','nuernberg','muenchen']
+val_cities =[] # Non empty implies inductive learning
 test_cities = [] # Non empty implies inductive learning
     
 def main():
@@ -61,7 +62,7 @@ def main():
     parser.add_argument("--target_type", type=str, default="vol_car_percentage", help="Which target to use for training.", 
                         choices=["vol_car", "vol_car_percentage"])
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
-    parser.add_argument("--use_wighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
+    parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
@@ -77,7 +78,7 @@ def main():
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=True, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
     parser.add_argument("--neighbor_sizes", type=str, default="5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
     parser.add_argument("--subgraphs_per_graph", type=int, default=3, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
-    parser.add_argument("--seed_batch_size", type=int, default=300, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
+    parser.add_argument("--seed_size", type=int, default=300, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
     parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
                         choices=["neighbor_sampling", "random_walk"]) # TODO: New for GraphSAGE
     parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE
@@ -112,6 +113,13 @@ def main():
         for city in sorted(train_cities):
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
+        if len(val_cities) > 0:
+            val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
+            for city in sorted(val_cities):
+                load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
+        else:
+            val_data = None
+
         if len(test_cities) > 0:
             test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
             for city in sorted(test_cities):
@@ -120,16 +128,17 @@ def main():
             test_data = None
 
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
+                                                                             val_data=val_data,
                                                                              test_data=test_data,
                                                                              batch_size=args['batch_size'],
                                                                              path_to_save_dataloader=path_to_save_dataloader,
                                                                              use_all_features=args['use_all_features'],
                                                                              use_bootstrapping=args['use_bootstrapping'],
-                                                                             use_weighted_sampling=args['use_wighted_sampling'],
+                                                                             use_weighted_sampling=args['use_weighted_sampling'],
                                                                              use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
                                                                              neighbor_sizes=args['neighbor_sizes'],
                                                                              subgraphs_per_graph=args['subgraphs_per_graph'],
-                                                                             seed_batch_size=args['seed_batch_size'],
+                                                                             seed_size=args['seed_size'],
                                                                              sampling_strategy=args['sampling_strategy'],
                                                                              min_subgraph_nodes=args['min_subgraph_nodes'],
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'])
