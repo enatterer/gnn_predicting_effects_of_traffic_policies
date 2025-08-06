@@ -72,7 +72,7 @@ def extract_y_and_capacity_reduction(city, result_dic, links_base_case):
     
     features_data = []
     vol_base_case = links_base_case['vol_car'].values
-    capacity_base_case = get_capacity_base_case(links_base_case, required_modes_on_links)
+    capacity_base_case,_ = get_capacity_and_freespeed_base_case(links_base_case, required_modes_on_links)
 
     # Filter out base_network_no_policies before the loop
     graph_items = {k: v for k, v in result_dic.items() 
