@@ -37,13 +37,21 @@ class GNN_Loss:
         self.device = device
         self.weighted = weighted
 
-    def __call__(self, y_pred: Tensor, y_true: Tensor, x: np.ndarray = None, batch: Tensor = None) -> Tensor:
+    def __call__(self, y_pred: Tensor, y_true: Tensor, data: object = None, batch: Tensor = None) -> Tensor:
         if self.weighted:
             loss = self.loss_fct(y_pred, y_true)
-            weights = x[:, EdgeFeatures.VOL_BASE_CASE]
+            
+            # Use edge_weights from data object if available, otherwise fall back to VOL_BASE_CASE
+            if hasattr(data, 'edge_weights') and data.edge_weights is not None:
+                weights = data.edge_weights
+                print(f"Using edge_weights for loss weighting: shape={weights.shape}")
+            else:
+                # Fallback to using VOL_BASE_CASE from features
+                weights = data.x[:, EdgeFeatures.VOL_BASE_CASE]
+                print(f"Using VOL_BASE_CASE for loss weighting: shape={weights.shape}")
             
             if batch is not None:
-                print('batch is not None')
+                print('batch is not None - handling multiple graphs in batch')
                 # Use batch information to handle variable graph sizes
                 unique_batch_ids = torch.unique(batch)
                 normalized_weights = torch.zeros_like(weights)
@@ -51,24 +59,18 @@ class GNN_Loss:
                 for batch_id in unique_batch_ids:
                     mask = (batch == batch_id)
                     batch_weights = weights[mask]
+                    # Since weights are already normalized per graph, we just use them as-is
+                    # But we need to ensure each graph's weights are properly scaled relative to each other
                     max_weight = torch.max(batch_weights)
-                    normalized_weights[mask] = batch_weights / max_weight
+                    if max_weight > 0:
+                        # Use the pre-normalized weights directly (they're already [0,1] per graph)
+                        normalized_weights[mask] = batch_weights
+                    else:
+                        normalized_weights[mask] = 1.0  # Equal weights if all zeros
             else:
-                print('batch is None')
-                # Fallback: No batch info available - treat as single graph or warn
-                if self.num_nodes is not None and weights.shape[0] % self.num_nodes == 0:
-                    # Old method: only works if weights divide evenly by num_nodes  
-                    for i in range(weights.shape[0] // self.num_nodes):
-                        start_idx = i * self.num_nodes
-                        end_idx = (i + 1) * self.num_nodes
-                        weights[start_idx:end_idx] /= np.max(weights[start_idx:end_idx])
-                    normalized_weights = torch.tensor(weights, dtype=torch.float32).to(self.device)
-                else:   
-                    # Safe fallback: normalize entire batch as one graph
-                    print("⚠️  WARNING: No batch info and variable graph sizes detected")
-                    print("   Normalizing entire batch as single graph (weights may be suboptimal)")
-                    max_weight = np.max(weights)
-                    normalized_weights = torch.tensor(weights / max_weight, dtype=torch.float32).to(self.device)
+                print('batch is None - single graph')
+                # Single graph case - weights are already normalized per graph
+                normalized_weights = weights
             
             return torch.mean(loss * normalized_weights.unsqueeze(1))
         else:
@@ -132,18 +134,22 @@ def select_target_tensor(data, target_type: str ):
         return data.y
     
     # If data.y is None, try specific target attributes
-    if target_type == "vol_car" and hasattr(data, 'y_vol_car') and data.y_vol_car is not None:
-        #print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car with type={type(data.y_vol_car)}")
-        return data.y_vol_car
-    elif target_type == "vol_car_percentage" and hasattr(data, 'y_vol_car_percentage') and data.y_vol_car_percentage is not None:
-        #print(f"[DEBUG] select_target_tensor: Returning data.y_vol_car_percentage with type={type(data.y_vol_car_percentage)}")
-        return data.y_vol_car_percentage
-    elif target_type == "absolute_change" and hasattr(data, 'y_absolute_change') and data.y_absolute_change is not None:
-        #print(f"[DEBUG] select_target_tensor: Returning data.y_absolute_change with type={type(data.y_absolute_change)}")
-        return data.y_absolute_change
-    elif target_type == "log_normalized" and hasattr(data, 'y_log_normalized') and data.y_log_normalized is not None:
-        #print(f"[DEBUG] select_target_tensor: Returning data.y_log_normalized with type={type(data.y_log_normalized)}")
-        return data.y_log_normalized
+    elif target_type == "abs_vol_car" and hasattr(data, 'y_abs_vol_car') and data.y_abs_vol_car is not None:
+        return data.y_abs_vol_car
+    elif target_type == "abs_vol_car_percentage" and hasattr(data, 'y_abs_vol_car_percentage') and data.y_abs_vol_car_percentage is not None:
+        return data.y_abs_vol_car_percentage
+    elif target_type == "vol_car_signed_log" and hasattr(data, 'y_vol_car_signed_log') and data.y_vol_car_signed_log is not None:
+        return data.y_vol_car_signed_log
+    elif target_type == "vol_car_percentage_signed_log" and hasattr(data, 'y_vol_car_percentage_signed_log') and data.y_vol_car_percentage_signed_log is not None:
+        return data.y_vol_car_percentage_signed_log
+    elif target_type == "vol_car_mean_std" and hasattr(data, 'y_vol_car_mean_std') and data.y_vol_car_mean_std is not None:
+        return data.y_vol_car_mean_std
+    elif target_type == "vol_car_percentage_mean_std" and hasattr(data, 'y_vol_car_percentage_mean_std') and data.y_vol_car_percentage_mean_std is not None:
+        return data.y_vol_car_percentage_mean_std
+    elif target_type == "vol_car_min_max" and hasattr(data, 'y_vol_car_min_max') and data.y_vol_car_min_max is not None:
+        return data.y_vol_car_min_max
+    elif target_type == "vol_car_percentage_min_max" and hasattr(data, 'y_vol_car_percentage_min_max') and data.y_vol_car_percentage_min_max is not None:
+        return data.y_vol_car_percentage_min_max
     else:
         # If no target is available, raise an error with helpful message
         available_targets = []
@@ -226,6 +232,104 @@ def compute_baseline_of_no_policies(dataset, loss_fct, device, scalers):
     loss = loss_fct(actual_difference_vol_car, target_tensor, x)
     return loss.item()
 
+def inverse_signed_log_transform(y_log):
+    """
+    Inverse transform from signed log space back to original scale.
+    
+    Args:
+        y_log (torch.Tensor): Values in signed log space
+        
+    Returns:
+        torch.Tensor: Values in original scale
+    """
+    # Inverse of signed_log_normalization: sign(x) * (exp(|x|) - 1)
+    sign = torch.sign(y_log)
+    abs_y = torch.abs(y_log)
+    return sign * (torch.exp(abs_y) - 1)
+
+def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices=None, epsilon=1.0):
+    """
+    Compute percentage-based metrics after converting from log space.
+    
+    Args:
+        pred_cars (torch.Tensor): Predicted volume changes in cars
+        true_cars (torch.Tensor): True volume changes in cars  
+        base_volumes (torch.Tensor): Base volumes in cars
+        batch_indices (torch.Tensor): Batch indices for each node (for graph-level aggregation)
+        epsilon (float): Small value to avoid division by zero
+        
+    Returns:
+        dict: Dictionary with percentage metrics
+    """
+    print(f"  DEBUG: Input shapes - pred_cars: {pred_cars_diff.shape}, true_cars: {true_cars_diff.shape}, base_volumes: {base_volumes.shape}")
+    if batch_indices is not None:
+        print(f"  DEBUG: batch_indices shape: {batch_indices.shape}, unique batches: {torch.unique(batch_indices)}")
+    
+    # Per-link epsilon (no clipping)
+    base_with_epsilon = torch.maximum(base_volumes, torch.tensor(epsilon, device=base_volumes.device))
+    print(f"  DEBUG: base_volumes range: [{base_volumes.min():.4f}, {base_volumes.max():.4f}]")
+    print(f"  DEBUG: base_with_epsilon range: [{base_with_epsilon.min():.4f}, {base_with_epsilon.max():.4f}]")
+    
+    # Per-link percentages (convert to percentage)
+    # Ensure base_with_epsilon has the same shape as pred_cars/true_cars
+    base_with_epsilon = base_with_epsilon.unsqueeze(-1) if len(base_with_epsilon.shape) == 1 else base_with_epsilon
+    
+    pred_percentages = (pred_cars_diff / base_with_epsilon) * 100
+    true_percentages = (true_cars_diff / base_with_epsilon) * 100
+    
+    print(f"  DEBUG: pred_cars range: [{pred_cars_diff.min():.4f}, {pred_cars_diff.max():.4f}]")
+    print(f"  DEBUG: true_cars range: [{true_cars_diff.min():.4f}, {true_cars_diff.max():.4f}]")
+    print(f"  DEBUG: pred_percentages range: [{pred_percentages.min():.4f}, {pred_percentages.max():.4f}]")
+    print(f"  DEBUG: true_percentages range: [{true_percentages.min():.4f}, {true_percentages.max():.4f}]")
+    
+    # Per-link metrics
+    # MAE and RMSE on percentages
+    mae_per_link = torch.abs(true_percentages - pred_percentages)
+    mse_per_link = (true_percentages - pred_percentages) ** 2
+    rmse_per_link = torch.sqrt(mse_per_link)  # Root Mean Squared Error
+    
+    print(f"  DEBUG: mae_per_link range: [{mae_per_link.min():.4f}, {mae_per_link.max():.4f}]")
+    print(f"  DEBUG: rmse_per_link range: [{rmse_per_link.min():.4f}, {rmse_per_link.max():.4f}]")
+    
+    # If batch indices are provided, compute graph-level aggregation
+    if batch_indices is not None:
+        unique_batches = torch.unique(batch_indices)
+        graph_mae = []
+        graph_rmse = []
+        
+        print(f"  DEBUG: Processing {len(unique_batches)} graphs in batch")
+        
+        for batch_id in unique_batches:
+            mask = (batch_id == batch_indices)
+            if mask.sum() > 0:
+                graph_mae_val = torch.mean(mae_per_link[mask])
+                graph_rmse_val = torch.sqrt(torch.mean(mse_per_link[mask]))  # RMSE per graph
+                graph_mae.append(graph_mae_val)
+                graph_rmse.append(graph_rmse_val)
+                print(f"    Graph {batch_id}: {mask.sum()} links, MAE: {graph_mae_val:.2f}%, RMSE: {graph_rmse_val:.2f}%")
+        
+        # Average across graphs
+        if graph_mae:
+            final_mae = torch.mean(torch.stack(graph_mae)).item()
+            final_rmse = torch.mean(torch.stack(graph_rmse)).item()
+            print(f"  DEBUG: Final graph-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+        else:
+            final_mae = torch.mean(mae_per_link).item()
+            final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
+            print(f"  DEBUG: Fallback to link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+    else:
+        # Fallback to simple averaging across all links
+        final_mae = torch.mean(mae_per_link).item()
+        final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
+        print(f"  DEBUG: No batch indices, using link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+    
+    return {
+        'mae': final_mae,
+        'rmse': final_rmse,
+        'pred_percentages': pred_percentages,
+        'true_percentages': true_percentages
+    }
+
 def validate_model_during_training(config: object, 
                                    model: nn.Module, 
                                    dataset: DataLoader, 
@@ -233,7 +337,7 @@ def validate_model_during_training(config: object,
                                    device: torch.device,
                                    scalers_train: dict) -> tuple:
     """
-    Validate the model during training, with support for mode stats predictions.
+    Validate the model during training, with support for mode stats predictions and log-space evaluation.
 
     Parameters:
     - config (object): Configuration object with flags and parameters.
@@ -244,7 +348,7 @@ def validate_model_during_training(config: object,
     - scalers_validation (dict): x and pos scalers for validation data.
 
     Returns:
-    - tuple: Validation metrics including loss, R^2, Spearman, and Pearson correlations.
+    - tuple: Validation metrics including log-space loss, percentage metrics, and correlations.
     """
     print("Starting validation...")
     model.eval()
@@ -254,11 +358,18 @@ def validate_model_during_training(config: object,
     node_predictions = []
     mode_stats_targets = []
     mode_stats_predictions = []
+    
+    # For percentage metrics
+    all_pred_cars_diff = []
+    all_true_cars_diff = []
+    all_base_volumes = []
+    all_batch_indices = []
 
     # TODO: Maybe add as a parameter later?
     # Separate loss for mode stats
     mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
     print('len dataset', len(dataset))
+    
     # Choose the appropriate inference mode
     with torch.inference_mode():
         for idx, data in tqdm(enumerate(dataset), total=len(dataset), desc="Validation", unit="batch"):
@@ -293,28 +404,100 @@ def validate_model_during_training(config: object,
 
             # Compute validation losses
             if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, x_unscaled, data.batch).item()
+                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
                 val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions, x_unscaled, data.batch).item()
+                val_loss += loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
                 print('val_loss', val_loss)
 
-            # Collect predictions and targets
+            # Collect predictions and targets for percentage metrics
+            if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
+                # Convert from log space to cars
+                pred_cars_diff = inverse_signed_log_transform(node_predicted)
+                true_cars_diff = inverse_signed_log_transform(targets_node_predictions)
+                base_volumes = data.unscaled_vol_base
+                batch_indices = data.batch  # Get batch indices for graph-level aggregation
+                
+                print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
+                print(f"DEBUG: Batch {idx} - unique batch IDs: {torch.unique(batch_indices)}")
+                
+                all_pred_cars_diff.append(pred_cars_diff)
+                all_true_cars_diff.append(true_cars_diff)
+                all_base_volumes.append(base_volumes)
+                all_batch_indices.append(batch_indices)
+
+            # Collect predictions and targets (in log space for correlation metrics)
             actual_node_targets.append(targets_node_predictions)
             node_predictions.append(node_predicted)
             num_batches += 1
+            
+            # Clear batch memory
+            del data, targets_node_predictions, node_predicted
+            if config.predict_mode_stats:
+                del targets_mode_stats, mode_stats_pred
+            torch.cuda.empty_cache()
     
     print("Validation completed!")
-    # Compute overall metrics
+    
+    # Compute log-space metrics (with memory cleanup)
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
+    
+    # Concatenate tensors for correlation metrics
     actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
+    
+    # Compute metrics
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
-    print(f"Validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    
+    print(f"Log-space validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    
+    # Clear large tensors to save memory
+    del actual_node_targets, node_predictions
+    torch.cuda.empty_cache()
+    
+    # Compute percentage metrics if base volumes are available (process in chunks to save memory)
+    percentage_metrics = None
+    if all_pred_cars_diff:
+        # Process in chunks to avoid memory explosion
+        print(f"Computing percentage metrics for {len(all_pred_cars_diff)} batches...")
+        
+        # Initialize accumulators
+        total_mae = 0.0
+        total_rmse = 0.0
+        total_samples = 0
+        
+        # Process each batch separately to avoid concatenating large tensors
+        for i, (pred_cars_diff, true_cars_diff, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff, all_true_cars_diff, all_base_volumes, all_batch_indices)):
+            print(f"\nDEBUG: Processing batch {i} for percentage metrics...")
+            batch_metrics = compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices)
+            batch_size = pred_cars_diff.shape[0]
+            
+            print(f"DEBUG: Batch {i} final metrics - MAE: {batch_metrics['mae']:.2f}%, RMSE: {batch_metrics['rmse']:.2f}%")
+            print(f"DEBUG: Batch {i} contributing {batch_size} samples to weighted average")
+            
+            total_mae += batch_metrics['mae'] * batch_size
+            total_rmse += batch_metrics['rmse'] * batch_size
+            total_samples += batch_size
+            
+            # Clear batch tensors to save memory
+            del pred_cars_diff, true_cars_diff, base_volumes, batch_indices
+            torch.cuda.empty_cache()
+        
+        # Compute weighted averages
+        if total_samples > 0:
+            percentage_metrics = {
+                'mae': total_mae / total_samples,
+                'rmse': total_rmse / total_samples
+            }
+            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
+        
+        # Clear the lists to save memory
+        del all_pred_cars_diff, all_true_cars_diff , all_base_volumes, all_batch_indices
+        torch.cuda.empty_cache()
     
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
@@ -325,11 +508,12 @@ def validate_model_during_training(config: object,
             r_squared,
             spearman_corr,
             pearson_corr,
+            percentage_metrics,
             val_loss_node_predictions,
             val_loss_mode_stats,
         )
     else:
-        return total_validation_loss, r_squared, spearman_corr, pearson_corr
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics
 
 def validate_model_during_training_eign(
         config: object,

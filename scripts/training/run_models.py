@@ -8,8 +8,8 @@ Example usage with default architecture, dropout, and most significant features 
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 
 Our use case:
-python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_F5_C9_I_r --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
-python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
+python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_F5_C9_INr --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25
+python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3 --use_nested_neighbor_loader True --neighbor_sizes 5,5,5,5,5 
 
 '''
 
@@ -21,7 +21,7 @@ import argparse
 
 import torch
 #from torchinfo import summary
-#os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -36,17 +36,17 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 dataset_path = os.path.join(project_root, 'data','inductive_data','training_data')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
-
-train_cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen']
-val_cities =['augsburg','rosenheim','schweinfurt','bamberg'] # Non empty implies inductive learning
-test_cities = ['nuernberg', 'ingolstadt'] # Non empty implies inductive learning
+#cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
+train_cities = ['schweinfurt','rosenheim']
+val_cities =[] # Non empty implies inductive learning
+test_cities = [] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
                         choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
-    parser.add_argument("--project_name", type=str, default="Inductive_Bavaria_LRZ_2",
+    parser.add_argument("--project_name", type=str, default="GNN_Transductive",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
@@ -57,14 +57,14 @@ def main():
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
                         'If not provided, defaults params will be used.') 
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
-    parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
+    parser.add_argument("--use_weighted_loss", type=str_to_bool, default=True, help="Whether to use weighted loss (based on vol_base_case) or not.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
-    parser.add_argument("--target_type", type=str, default="vol_car_percentage", help="Which target to use for training.", 
-                        choices=["vol_car", "vol_car_percentage"])
+    parser.add_argument("--target_type", type=str, default="vol_car_signed_log", help="Which target to use for training.", 
+                        choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--batch_size", type=int, default=2, help="Batch size for training.")
     parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
     parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
@@ -77,8 +77,8 @@ def main():
     #parameters for the GraphSAGE
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
-    parser.add_argument("--subgraphs_per_graph", type=int, default=3, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
-    parser.add_argument("--seed_size", type=int, default=128, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
+    parser.add_argument("--subgraphs_per_graph", type=int, default=2, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
+    parser.add_argument("--seed_size", type=int, default=10, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
     parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
                         choices=["neighbor_sampling", "random_walk"]) # TODO: New for GraphSAGE
     parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE

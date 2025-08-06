@@ -170,7 +170,7 @@ class BaseGNN(nn.Module, ABC):
                         print(f"DEBUG TRAIN MODE: targets_node_predictions.shape = {targets_node_predictions.shape}")
                         print(f"DEBUG TRAIN MODE: x_unscaled.shape = {data.x.shape}")
                         print(f"DEBUG TRAIN MODE: data.batch.shape = {data.batch.shape}")
-                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data, data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
@@ -182,7 +182,7 @@ class BaseGNN(nn.Module, ABC):
                         #print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
                         #print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
                         #print(f"DEBUG TRAIN: About to call loss_fct with data.x type={type(data.x)}, data.x={data.x if isinstance(data.x, int) else 'Tensor'}")
-                        train_loss = loss_fct(predicted, targets_node_predictions, data.x,data.batch)
+                        train_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
@@ -219,7 +219,7 @@ class BaseGNN(nn.Module, ABC):
                 
             # Validation step
             if config.predict_mode_stats:
-                val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
@@ -228,7 +228,7 @@ class BaseGNN(nn.Module, ABC):
                     scalers_train=scalers_train
                 )
                 # Epoch level logging
-                wandb.log({
+                log_dict = {
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
                     "lr": lr,
@@ -239,9 +239,19 @@ class BaseGNN(nn.Module, ABC):
                     "train_loss-mode_stats": epoch_train_loss_mode_stats / len(train_dl),
                     "val_loss-node_predictions": val_loss_node_predictions,
                     "val_loss-mode_stats": val_loss_mode_stats,
-                    "epoch":epoch})
+                    "epoch": epoch
+                }
+                
+                # Add percentage metrics if available
+                if percentage_metrics is not None:
+                    log_dict.update({
+                        "val_mae_percent": percentage_metrics['mae'],
+                        "val_rmse_percent": percentage_metrics['rmse']
+                    })
+                
+                wandb.log(log_dict)
             else:
-                val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
+                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
@@ -250,14 +260,24 @@ class BaseGNN(nn.Module, ABC):
                     scalers_train=scalers_train
                 )
                 # Epoch level logging
-                wandb.log({
+                log_dict = {
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
                     "lr": lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
-                    "epoch":epoch})
+                    "epoch": epoch
+                }
+                
+                # Add percentage metrics if available
+                if percentage_metrics is not None:
+                    log_dict.update({
+                        "val_mae_percent": percentage_metrics['mae'],
+                        "val_rmse_percent": percentage_metrics['rmse']
+                    })
+                
+                wandb.log(log_dict)
 
             print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
             

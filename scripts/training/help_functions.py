@@ -6,17 +6,19 @@ import joblib
 import subprocess
 from functools import partial
 from collections import Counter
-import tempfile
 
 import numpy as np
 from tqdm import tqdm
 import wandb
 from sklearn.preprocessing import StandardScaler
-
 import torch
+import psutil
+import gc
+
 from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRandomSampler
 from torch_geometric.data import Batch, Data
 from torch_geometric.loader import NeighborLoader
+from torch_geometric.utils import subgraph
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -186,10 +188,12 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     base_train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
                                 sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
-                                num_workers=4, prefetch_factor=4, pin_memory=True, 
-                                collate_fn=collate_without_scaler,  # MODIFIED
+                                num_workers=2, prefetch_factor=2, pin_memory=True, 
+                                collate_fn=collate_without_scaler,
                                 worker_init_fn=seed_worker,
                                 drop_last=False)
+    #print(f"Memory_per_graph: {estimate_average_graph_memory(base_train_loader, num_samples=100)} MB")
+    
     if use_nested_neighbor_loader:
         train_loader = nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
                                                          subgraphs_per_graph=subgraphs_per_graph, seed_size=seed_size,  
@@ -204,8 +208,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
                             shuffle=True if not use_weighted_sampling else None,
                             sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
-                            num_workers=4, pin_memory=True, 
-                            collate_fn=collate_without_scaler,  # MODIFIED
+                            num_workers=2, pin_memory=True, 
+                            collate_fn=collate_without_scaler,
                             worker_init_fn=seed_worker,
                             drop_last=False)
     
@@ -213,8 +217,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
                                 sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
-                                num_workers=4, 
-                                collate_fn=collate_without_scaler,  # MODIFIED
+                                num_workers=2, 
+                                collate_fn=collate_without_scaler,
                                 worker_init_fn=seed_worker,
                                 drop_last=False)
     
@@ -863,6 +867,22 @@ class NestedNeighborDataset(Dataset):
         keep_nodes = torch.randperm(subgraph.num_nodes)[:max_nodes]
         return self._create_subgraph_from_nodes(subgraph, keep_nodes)
     
+    def _extract_subgraph_edge_weights(self, subgraph: Data, original_graph: Data) -> torch.Tensor:
+        """Extract node weights (road segment weights) for subgraph nodes."""
+        
+        # Check if original graph has edge_weights
+        if not hasattr(original_graph, 'edge_weights') or original_graph.edge_weights is None:
+            raise ValueError(f"Original graph missing 'edge_weights' attribute. Available attributes: {list(original_graph.keys())}")
+        
+        # Get original node weights (road segment weights)
+        original_weights = original_graph.edge_weights
+        
+        # Check if subgraph has n_id for node mapping
+        if not hasattr(subgraph, 'n_id') or subgraph.n_id is None:
+            raise ValueError(f"Subgraph missing 'n_id' attribute. Available attributes: {list(subgraph.keys())}")
+        
+        return original_weights[subgraph.n_id]  # Direct node mapping
+    
     def _fallback_subgraph(self, graph: Data) -> Data:
         """Fallback subgraph for small graphs."""
         return graph.clone()
@@ -882,6 +902,9 @@ class NestedNeighborDataset(Dataset):
             graph=original_graph,
             subgraph_idx=mapping['subgraph_idx']
         )
+        
+        # Extract edge weights for subgraph (no re-normalization)
+        subgraph.edge_weights = self._extract_subgraph_edge_weights(subgraph, original_graph)
         
         # Apply feature filtering to the subgraph
         if hasattr(self, 'node_feature_filter') and self.node_feature_filter is not None:
@@ -919,3 +942,22 @@ def load_metadata_from_disk(data, metadata_path):
     data['city'].extend(city_data['city'][:100])
 
 
+def estimate_average_graph_memory(graph_loader, num_samples=5):
+    gc.collect()
+    torch.cuda.empty_cache()
+
+    process = psutil.Process()
+    mem_before = process.memory_info().rss
+
+    memory_usages = []
+    iterator = iter(graph_loader)
+
+    for _ in range(num_samples):
+        _ = next(iterator)  # Load one graph
+        mem_after = process.memory_info().rss
+        memory_usages.append(mem_after - mem_before)
+        mem_before = mem_after
+
+    avg_memory = sum(memory_usages) / len(memory_usages)
+    print(f"Average memory per graph: {avg_memory / (1024 ** 2):.2f} MB")
+    return avg_memory

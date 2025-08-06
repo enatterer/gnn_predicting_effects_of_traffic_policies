@@ -30,7 +30,7 @@ class GraphSAGE(BaseGNN):
                  in_channels: int = 5,
                  use_pos: bool = False,
                  out_channels: int = 1,
-                 hidden_channels: list[int] = [512, 256, 128],
+                 hidden_channels: list[int] = [256, 256, 256],
                  dropout: float = 0.3, 
                  use_dropout: bool = False,
                  predict_mode_stats: bool = False,
@@ -39,7 +39,7 @@ class GraphSAGE(BaseGNN):
                  use_graph_norm: bool = False,
                  use_residuals: bool = False,
                  #GraphSAGE specific parameters
-                 aggregator: str = 'mean',  # Options: 'max' | 'mean'
+                 aggregator: str = 'max',  # Options: 'max' | 'mean'
                  update_function: str = 'relu',  # Options: 'relu' | 'mlp'
                  mlp_hidden_dim: int = 1024):  # Hidden dim for learnable MLP update
                 
