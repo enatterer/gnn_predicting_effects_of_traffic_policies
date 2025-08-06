@@ -192,14 +192,14 @@ def add_destinations_to_gdf(gdf, df_eqasim_trips, normalization_type, normalize_
             gdf_extended['is_in_eqasim_trips'] = gdf_extended['link'].isin(all_trip_links).astype(int)
             
             # 5. Merge land use activity features
-            gdf_extended = gdf_extended.merge(df_land_use_activities, left_on='link', right_index=True, how='left').fillna(0)
+            gdf_extended = gdf_extended.merge(df_land_use_activities, left_on='link', right_index=True, how='left').fillna(0).infer_objects(copy=False)
 
             activity_destination_names = [f'{activity}_normalized' for activity in all_activities] + ['is_in_eqasim_trips']
     
     return gdf_extended, activity_destination_names
 
 def compute_target_tensor_only_edge_features(vol_base_case, gdf, column_name: str, normalization_type: str):
-    edge_car_volume_difference = gdf['vol_car'].values - vol_base_case
+    edge_car_volume_difference = gdf['vol_car'].values - vol_base_case #vol_base_case is already rounded to integer
     
     if column_name == 'vol_car':
         # Keep continuous values for training - round only at inference
@@ -232,11 +232,13 @@ def normalization_of_edge_features(data, normalization_type: str):
     if normalization_type == 'mean_std':
         std = np.std(data)
         if std == 0:
+            print('all values are same')
             return np.zeros_like(data)  # If all values are same, return zeros
         return (data - np.mean(data)) / std
     elif normalization_type == 'min_max':
         data_min, data_max = np.min(data), np.max(data)
         if data_max == data_min:
+            print('all values are same')
             return np.zeros_like(data)  # If all values are same, return zeros
         return (data - data_min) / (data_max - data_min)
     elif normalization_type == 'robust_normalization':
@@ -257,6 +259,8 @@ def normalization_of_edge_features(data, normalization_type: str):
         #    return np.zeros_like(signed_log)  # If all values are same, return zeros
         #return (signed_log - np.mean(signed_log)) / std
         return signed_log
+    elif normalization_type == 'none':
+        return data
     else:
         raise ValueError(f"Invalid normalization type: {normalization_type}")
 
