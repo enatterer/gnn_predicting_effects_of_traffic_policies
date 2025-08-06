@@ -8,7 +8,7 @@ Example usage with default architecture, dropout, and most significant features 
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 
 Our use case:
-python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 1 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
+python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_F5_C9_I_r --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
 python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3
 
 '''
@@ -37,16 +37,16 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 dataset_path = os.path.join(project_root, 'data','inductive_data','training_data')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 
-train_cities = ['schweinfurt','wuerzburg','aschaffenburg','regensburg','landshut','bamberg','bayreuth','erlangen','fuerth','ingolstadt','kempten','neuulm','augsburg','rosenheim','nuernberg','muenchen']
-val_cities =[] # Non empty implies inductive learning
-test_cities = [] # Non empty implies inductive learning
+train_cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen']
+val_cities =['augsburg','rosenheim','schweinfurt','bamberg'] # Non empty implies inductive learning
+test_cities = ['nuernberg', 'ingolstadt'] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
                         choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost"])  # Add more as you implement them
-    parser.add_argument("--project_name", type=str, default="Inductive_Bavaria_LRZ",
+    parser.add_argument("--project_name", type=str, default="Inductive_Bavaria_LRZ_2",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
     #parameters for the GraphSAGE
-    parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=True, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
+    parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
     parser.add_argument("--subgraphs_per_graph", type=int, default=3, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
     parser.add_argument("--seed_size", type=int, default=128, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
