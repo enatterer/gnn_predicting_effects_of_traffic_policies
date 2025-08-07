@@ -936,10 +936,10 @@ def load_metadata_from_disk(data, metadata_path):
 
     city_data = json.load(open(metadata_path, 'r'))
     
-    data['path'].extend(city_data['path'][:100])
-    data['policy_region'].extend(city_data['policy_region'][:100])
-    data['scenario'].extend(city_data['scenario'][:100])
-    data['city'].extend(city_data['city'][:100])
+    data['path'].extend(city_data['path'])
+    data['policy_region'].extend(city_data['policy_region'])
+    data['scenario'].extend(city_data['scenario'])
+    data['city'].extend(city_data['city'])
 
 
 def estimate_average_graph_memory(graph_loader, num_samples=5):
