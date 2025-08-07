@@ -8,7 +8,7 @@ Example usage with default architecture, dropout, and most significant features 
 `python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 
 Our use case:
-python run_models.py --gnn_arch trans_conv --unique_model_description trans_conv_F5_C9_INr --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25
+python run_models.py --gnn_arch gatv2 --unique_model_description trial13 --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25
 python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3 --use_nested_neighbor_loader True --neighbor_sizes 5,5,5,5,5 
 
 '''

@@ -44,14 +44,15 @@ class GNN_Loss:
             # Use edge_weights from data object if available, otherwise fall back to VOL_BASE_CASE
             if hasattr(data, 'edge_weights') and data.edge_weights is not None:
                 weights = data.edge_weights
-                print(f"Using edge_weights for loss weighting: shape={weights.shape}")
+                #print(f"Using edge_weights for loss weighting: shape={weights.shape}")
             else:
                 # Fallback to using VOL_BASE_CASE from features
+                print('WARNING: No edge weights found')
                 weights = data.x[:, EdgeFeatures.VOL_BASE_CASE]
                 print(f"Using VOL_BASE_CASE for loss weighting: shape={weights.shape}")
             
             if batch is not None:
-                print('batch is not None - handling multiple graphs in batch')
+                #print('batch is not None - handling multiple graphs in batch')
                 # Use batch information to handle variable graph sizes
                 unique_batch_ids = torch.unique(batch)
                 normalized_weights = torch.zeros_like(weights)
@@ -249,7 +250,7 @@ def inverse_signed_log_transform(y_log):
 
 def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices=None, epsilon=1.0):
     """
-    Compute percentage-based metrics after converting from log space.
+    Compute percentage-based metrics of a batch after converting from log space.
     
     Args:
         pred_cars (torch.Tensor): Predicted volume changes in cars
@@ -261,14 +262,16 @@ def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, bat
     Returns:
         dict: Dictionary with percentage metrics
     """
-    print(f"  DEBUG: Input shapes - pred_cars: {pred_cars_diff.shape}, true_cars: {true_cars_diff.shape}, base_volumes: {base_volumes.shape}")
-    if batch_indices is not None:
-        print(f"  DEBUG: batch_indices shape: {batch_indices.shape}, unique batches: {torch.unique(batch_indices)}")
-    
+    #print(f"  DEBUG: Input shapes - pred_cars: {pred_cars_diff.shape}, true_cars: {true_cars_diff.shape}, base_volumes: {base_volumes.shape}")
+    if batch_indices is None:
+        print(f"  WARNING: Batch Indices not found")
+    else:
+        #print(f"  DEBUG: batch_indices shape: {batch_indices.shape}, unique batches: {torch.unique(batch_indices)}")
+        pass
     # Per-link epsilon (no clipping)
     base_with_epsilon = torch.maximum(base_volumes, torch.tensor(epsilon, device=base_volumes.device))
-    print(f"  DEBUG: base_volumes range: [{base_volumes.min():.4f}, {base_volumes.max():.4f}]")
-    print(f"  DEBUG: base_with_epsilon range: [{base_with_epsilon.min():.4f}, {base_with_epsilon.max():.4f}]")
+    #print(f"  DEBUG: base_volumes range: [{base_volumes.min():.4f}, {base_volumes.max():.4f}]")
+    #print(f"  DEBUG: base_with_epsilon range: [{base_with_epsilon.min():.4f}, {base_with_epsilon.max():.4f}]")
     
     # Per-link percentages (convert to percentage)
     # Ensure base_with_epsilon has the same shape as pred_cars/true_cars
@@ -277,10 +280,10 @@ def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, bat
     pred_percentages = (pred_cars_diff / base_with_epsilon) * 100
     true_percentages = (true_cars_diff / base_with_epsilon) * 100
     
-    print(f"  DEBUG: pred_cars range: [{pred_cars_diff.min():.4f}, {pred_cars_diff.max():.4f}]")
-    print(f"  DEBUG: true_cars range: [{true_cars_diff.min():.4f}, {true_cars_diff.max():.4f}]")
-    print(f"  DEBUG: pred_percentages range: [{pred_percentages.min():.4f}, {pred_percentages.max():.4f}]")
-    print(f"  DEBUG: true_percentages range: [{true_percentages.min():.4f}, {true_percentages.max():.4f}]")
+    #print(f"  DEBUG: pred_cars range: [{pred_cars_diff.min():.4f}, {pred_cars_diff.max():.4f}]")
+    #print(f"  DEBUG: true_cars range: [{true_cars_diff.min():.4f}, {true_cars_diff.max():.4f}]")
+    #print(f"  DEBUG: pred_percentages range: [{pred_percentages.min():.4f}, {pred_percentages.max():.4f}]")
+    #print(f"  DEBUG: true_percentages range: [{true_percentages.min():.4f}, {true_percentages.max():.4f}]")
     
     # Per-link metrics
     # MAE and RMSE on percentages
@@ -288,8 +291,8 @@ def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, bat
     mse_per_link = (true_percentages - pred_percentages) ** 2
     rmse_per_link = torch.sqrt(mse_per_link)  # Root Mean Squared Error
     
-    print(f"  DEBUG: mae_per_link range: [{mae_per_link.min():.4f}, {mae_per_link.max():.4f}]")
-    print(f"  DEBUG: rmse_per_link range: [{rmse_per_link.min():.4f}, {rmse_per_link.max():.4f}]")
+    #print(f"  DEBUG: mae_per_link range: [{mae_per_link.min():.4f}, {mae_per_link.max():.4f}]")
+    #print(f"  DEBUG: rmse_per_link range: [{rmse_per_link.min():.4f}, {rmse_per_link.max():.4f}]")
     
     # If batch indices are provided, compute graph-level aggregation
     if batch_indices is not None:
@@ -297,7 +300,7 @@ def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, bat
         graph_mae = []
         graph_rmse = []
         
-        print(f"  DEBUG: Processing {len(unique_batches)} graphs in batch")
+        #print(f"  DEBUG: Processing {len(unique_batches)} graphs in batch")
         
         for batch_id in unique_batches:
             mask = (batch_id == batch_indices)
@@ -306,22 +309,22 @@ def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, bat
                 graph_rmse_val = torch.sqrt(torch.mean(mse_per_link[mask]))  # RMSE per graph
                 graph_mae.append(graph_mae_val)
                 graph_rmse.append(graph_rmse_val)
-                print(f"    Graph {batch_id}: {mask.sum()} links, MAE: {graph_mae_val:.2f}%, RMSE: {graph_rmse_val:.2f}%")
+                #print(f"Graph {batch_id}: {mask.sum()} links, MAE: {graph_mae_val:.2f}%, RMSE: {graph_rmse_val:.2f}%")
         
         # Average across graphs
-        if graph_mae:
+        if graph_mae: #averages the average MAE and average RMSE across all graphs in the batch (graph averaged metrics)
             final_mae = torch.mean(torch.stack(graph_mae)).item()
             final_rmse = torch.mean(torch.stack(graph_rmse)).item()
-            print(f"  DEBUG: Final graph-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
-        else:
+            #print(f" Final graph-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+        else: #averages the average MAE and average RMSE across all links in the batch (link averaged metrics)
             final_mae = torch.mean(mae_per_link).item()
             final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
-            print(f"  DEBUG: Fallback to link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+            print(f" Fallback to link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
     else:
         # Fallback to simple averaging across all links
         final_mae = torch.mean(mae_per_link).item()
         final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
-        print(f"  DEBUG: No batch indices, using link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
+        print(f" No batch indices, using link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
     
     return {
         'mae': final_mae,
@@ -352,12 +355,12 @@ def validate_model_during_training(config: object,
     """
     print("Starting validation...")
     model.eval()
-    val_loss = 0
+    val_loss = 0 #for log space loss
     num_batches = 0
-    actual_node_targets = []
-    node_predictions = []
-    mode_stats_targets = []
-    mode_stats_predictions = []
+    actual_node_targets = [] #for log space loss
+    node_predictions = [] #for log space loss
+    mode_stats_targets = [] #for mode stats loss
+    mode_stats_predictions = [] #for mode stats loss
     
     # For percentage metrics
     all_pred_cars_diff = []
@@ -393,9 +396,7 @@ def validate_model_during_training(config: object,
             if config.predict_mode_stats:
                 node_predicted, mode_stats_pred = model(data)
             else:
-                print('debug')
                 node_predicted = model(data)
-                print('node_predicted', node_predicted.shape)
 
             # # Example MC Dropout Prediction, if to be used later. Use with torch.no_grad().
             # mean_prediction, uncertainty = mc_dropout_predict(model, data, num_samples=50, device=device)
@@ -421,8 +422,8 @@ def validate_model_during_training(config: object,
                 base_volumes = data.unscaled_vol_base
                 batch_indices = data.batch  # Get batch indices for graph-level aggregation
                 
-                print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
-                print(f"DEBUG: Batch {idx} - unique batch IDs: {torch.unique(batch_indices)}")
+                #print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
+                #print(f"DEBUG: Batch {idx} - unique batch IDs: {torch.unique(batch_indices)}")
                 
                 all_pred_cars_diff.append(pred_cars_diff)
                 all_true_cars_diff.append(true_cars_diff)
@@ -472,12 +473,12 @@ def validate_model_during_training(config: object,
         
         # Process each batch separately to avoid concatenating large tensors
         for i, (pred_cars_diff, true_cars_diff, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff, all_true_cars_diff, all_base_volumes, all_batch_indices)):
-            print(f"\nDEBUG: Processing batch {i} for percentage metrics...")
+            #print(f"\nDEBUG: Processing batch {i} for percentage metrics...")
             batch_metrics = compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices)
             batch_size = pred_cars_diff.shape[0]
             
-            print(f"DEBUG: Batch {i} final metrics - MAE: {batch_metrics['mae']:.2f}%, RMSE: {batch_metrics['rmse']:.2f}%")
-            print(f"DEBUG: Batch {i} contributing {batch_size} samples to weighted average")
+            #print(f"DEBUG: Batch {i} final metrics - MAE: {batch_metrics['mae']:.2f}%, RMSE: {batch_metrics['rmse']:.2f}%")
+            #print(f"DEBUG: Batch {i} contributing {batch_size} samples to weighted average")
             
             total_mae += batch_metrics['mae'] * batch_size
             total_rmse += batch_metrics['rmse'] * batch_size
