@@ -34,7 +34,7 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
-dataset_path = os.path.join(project_root, 'data','inductive_data','training_data')
+dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
 train_cities = ['schweinfurt','rosenheim']
