@@ -11,4 +11,3 @@ inductive_gnn_data_results/
 data_new/
 data/
 *.log
-*.py
