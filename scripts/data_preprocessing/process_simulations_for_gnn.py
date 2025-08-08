@@ -54,7 +54,7 @@ use_linegraph = True # Flag to use line graph transformation
 #all_cities = ['rosenheim','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
 #cities_1=['nuernberg', 'augsburg', 'muenchen','schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten','landshut', 'ingolstadt', 'regensburg', 'neuulm',rosenheim]
 #cities_rest=[]
-all_cities = ['landshut', 'ingolstadt', 'regensburg', 'rosenheim']
+all_cities = ['landshut', 'ingolstadt', 'regensburg' 'rosenheim']
 #target_feature = 'vol_car_percentage' #other options: 'vol_car'
 #target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max','none'
 x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
@@ -378,7 +378,7 @@ def get_reduced_capacity_links(city, policy_region, scenario, project_root):
 
 # Read all network data into a dictionary of GeoDataFrames
 # For paris, please use the flag 'use_destination_activity' as False
-def compute_result_dic(basecase_links, networks, use_destination_activity, activity_destination_names):
+def compute_result_dic(basecase_links, networks, use_destination_activity, activity_destination_names=None):
     
     result_dic_output_links = {}
     result_dic_eqasim_trips = {}
@@ -393,6 +393,15 @@ def compute_result_dic(basecase_links, networks, use_destination_activity, activ
             df_output_links.drop(columns=['geometry'], inplace=True)
             # first include only the links that are in the cleaned basecase_links
             df_output_links = df_output_links[df_output_links['link'].isin(basecase_links['link'])]
+            
+            # Reorder simulation data to match base case ordering
+            # Create a mapping from link ID to base case index
+            link_to_index = {link: idx for idx, link in enumerate(basecase_links['link'])}
+            # Sort simulation data by base case ordering
+            df_output_links['base_order'] = df_output_links['link'].map(link_to_index)
+            df_output_links = df_output_links.sort_values('base_order').reset_index(drop=True)
+            df_output_links = df_output_links.drop(columns=['base_order'])
+            
             gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=df_output_links, column_to_extend='highway', new_column_name='highway')
             gdf_extended = extend_geodataframe(gdf_base=basecase_links, gdf_to_extend=gdf_extended, column_to_extend='vol_car', new_column_name='vol_car_base_case')
             if use_destination_activity:
@@ -888,7 +897,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
 def main():
     
     # Create the result base path
-    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data')
+    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data','kreisfreistadt')
     os.makedirs(result_base_path, exist_ok=True)
     
     for city in all_cities:
