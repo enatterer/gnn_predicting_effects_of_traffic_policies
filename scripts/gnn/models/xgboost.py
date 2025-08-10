@@ -117,7 +117,8 @@ class XGBoostModel(BaseGNN):
             early_stopping: object = None, # Unused, but kept for compatibility
             model_save_path: str = None,
             scalers_train: dict = None, # Unused, but kept for compatibility
-            scalers_validation: dict = None) -> tuple: # Unused, but kept for compatibility
+            scalers_validation: dict = None,
+            target_normalization: bool = False) -> tuple: # Unused, but kept for compatibility
         """
         Custom training method for XGBoost that converts PyTorch data to XGBoost format.
         """
