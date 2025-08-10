@@ -41,8 +41,8 @@ from data_preprocessing.help_functions import *
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 ######control center#######
-
-all_cities = ['rosenheim']
+cities_to_process = ['muenchen','neuulm','rosenheim','schweinfurt','kempten','ingolstadt','landshut','regensburg','bamberg','bayreuth','erlangen','fuerth','wuerzburg']
+all_cities = ['augsburg','nuernberg','aschaffenburg']
 
 is_in_stadt=True #if true, include only the edges that are in the stadt, else include edges in stadt and landkreis
 batch_size = 256 # Do processing in batches to avoid memory issues
@@ -544,7 +544,7 @@ def process_result_dic_eign(city,
             data.edge_is_directed = edge_is_directed_base #shape: (num_edges,)
             
             # Add separate data attributes (using original unnormalized values)
-            data.edge_weights = torch.tensor(compute_edge_weights(base_features["vol_base_case"]), dtype=torch.float32) 
+            data.edge_weights = torch.tensor(compute_edge_weights(base_features["vol_base_case"]), dtype=torch.float32)  #shape: (num_edges,)
             data.unscaled_vol_base = base_features["vol_base_case"].float() 
             
             # Add metadata attributes
