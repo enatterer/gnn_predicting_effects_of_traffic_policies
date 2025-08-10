@@ -57,9 +57,10 @@ def main():
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
                         'If not provided, defaults params will be used.') 
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
-    parser.add_argument("--use_weighted_loss", type=str_to_bool, default=True, help="Whether to use weighted loss (based on vol_base_case) or not.")
+    parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
+    parser.add_argument("--target_normalization", type=str_to_bool, default=False, help="Whether targets are normalized during preprocessing.")
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
-    parser.add_argument("--target_type", type=str, default="vol_car_signed_log", help="Which target to use for training.", 
+    parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
@@ -184,7 +185,8 @@ def main():
                                                              device=device,
                                                              early_stopping=early_stopping,
                                                              model_save_path=model_save_path,
-                                                             scalers_train=scalers_train)
+                                                             scalers_train=scalers_train,
+                                                             target_normalization=config.target_normalization)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
