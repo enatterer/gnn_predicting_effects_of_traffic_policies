@@ -615,10 +615,16 @@ def validate_model_during_training_eign(
                 print('val_loss', val_loss)
             
             if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
-                pred_cars_diff_signed = inverse_signed_log_transform(predicted_signed)
-                pred_cars_diff_unsigned = inverse_signed_log_transform(predicted_unsigned)
-                true_cars_diff_signed = inverse_signed_log_transform(targets_node_predictions_signed)
-                true_cars_diff_unsigned = inverse_signed_log_transform(targets_node_predictions_unsigned)
+                if config.target_normalization:
+                    pred_cars_diff_signed = inverse_signed_log_transform(predicted_signed)
+                    pred_cars_diff_unsigned = inverse_signed_log_transform(predicted_unsigned)
+                    true_cars_diff_signed = inverse_signed_log_transform(targets_node_predictions_signed)
+                    true_cars_diff_unsigned = inverse_signed_log_transform(targets_node_predictions_unsigned)
+                else:
+                    pred_cars_diff_signed = predicted_signed
+                    pred_cars_diff_unsigned = predicted_unsigned
+                    true_cars_diff_signed = targets_node_predictions_signed
+                    true_cars_diff_unsigned = targets_node_predictions_unsigned
                 base_volumes = data.unscaled_vol_base
                 batch_indices = data.batch
                 
@@ -682,6 +688,7 @@ def validate_model_during_training_eign(
         # Clear the lists to save memory
         del all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
         torch.cuda.empty_cache()
+        
     elif all_pred_cars_diff_unsigned:
         # Process in chunks to avoid memory explosion
         print(f"Computing percentage metrics for {len(all_pred_cars_diff_unsigned)} batches (unsigned)...")
@@ -713,7 +720,7 @@ def validate_model_during_training_eign(
         # Clear the lists to save memory
         del all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
         torch.cuda.empty_cache()
-    
+        
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
         raise NotImplementedError("EIGN model does not support mode stats prediction.")
