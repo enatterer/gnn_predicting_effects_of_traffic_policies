@@ -130,7 +130,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
-                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy):
+                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
