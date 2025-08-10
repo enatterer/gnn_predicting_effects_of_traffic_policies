@@ -64,7 +64,6 @@ class EIGN(BaseGNN):
         num_blocks: int = 4,
         signed_activation_fn=F.tanh,
         unsigned_activation_fn=F.relu,
-        target_normalization: bool = True, # True if the targets have been normalized during preprocessing
         **kwargs_block,
     ):
         super().__init__(
@@ -87,7 +86,6 @@ class EIGN(BaseGNN):
         self.out_channels_unsigned = out_channels_unsigned
         self.signed_activation_fn = signed_activation_fn
         self.unsigned_activation_fn = unsigned_activation_fn
-        self.target_normalization = target_normalization
 
         if self.log_to_wandb:
             wandb.config.update({'in_channels_signed': in_channels_signed,
@@ -99,7 +97,7 @@ class EIGN(BaseGNN):
                                  'num_blocks': num_blocks,
                                  'signed_activation_fn': signed_activation_fn.__name__,
                                  'unsigned_activation_fn': unsigned_activation_fn.__name__,
-                                 'target_normalization': target_normalization},
+                                },
                                 allow_val_change=True)
 
         self.blocks = nn.ModuleList()
@@ -203,6 +201,7 @@ class EIGN(BaseGNN):
         scalers_train: dict = None,
         scalers_validation: dict = None,
         use_signed: bool = True, # change this to False to use unsigned targets in the loss function
+        target_normalization: bool = False, # Added to match base_gnn.py signature
     ) -> tuple:
         """
         Overriding train_model method from base_gnn
@@ -362,9 +361,9 @@ class EIGN(BaseGNN):
                     validate_model_during_training_eign(
                         config=config,
                         model=self,
+                        device=device,
                         dataset=valid_dl,
                         loss_func=loss_fct,
-                        device=device,
                         scalers_validation=scalers_validation,
                         use_signed=use_signed,
                     )
