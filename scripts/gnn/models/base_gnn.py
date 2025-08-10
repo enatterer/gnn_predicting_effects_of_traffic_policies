@@ -80,7 +80,8 @@ class BaseGNN(nn.Module, ABC):
             early_stopping: object = None, 
             model_save_path: str = None,
             scalers_train: dict = None,
-            scalers_validation: dict = None) -> tuple:
+            scalers_validation: dict = None,
+            target_normalization: bool = False) -> tuple:
         
         if config is None:
             raise ValueError("Config cannot be None")
