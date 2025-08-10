@@ -6,7 +6,7 @@ Compute k-hop receptive fields for either individual seeds or one big set of see
 or perform layer-wise neighbor sampling (“fanouts”) à la GraphSAGE.
 
 example usage:
-python receptive_fields.py /home/abasu/gnn_predicting_effects_of_traffic_policies/data/inductive_data/training_data/aschaffenburg/000001.pt -k 3 --f 5 5 5 --n 128
+python receptive_fields.py /home/abasu/gnn_predicting_effects_of_traffic_policies/data/inductive_data/training_data/kreisfreistadt/aschaffenburg/000001.pt -k 5 --f 3 3 3 3 3 --n 30
 """
 
 import torch
