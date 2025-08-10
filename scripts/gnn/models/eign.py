@@ -37,7 +37,6 @@ from gnn.models.block import (
 from gnn.help_functions import (
     validate_model_during_training_eign,
     LinearWarmupCosineDecayScheduler,
-    select_target_tensor,
 )
 
 
@@ -65,6 +64,7 @@ class EIGN(BaseGNN):
         num_blocks: int = 4,
         signed_activation_fn=F.tanh,
         unsigned_activation_fn=F.relu,
+        target_normalization: bool = True, # True if the targets have been normalized during preprocessing
         **kwargs_block,
     ):
         super().__init__(
@@ -76,11 +76,18 @@ class EIGN(BaseGNN):
             dtype=dtype,
             log_to_wandb=log_to_wandb
         )
+        
+        # Create dropout layer like other models
+        if self.use_dropout:
+            self.dropout_layer = nn.Dropout(self.dropout)
+        else:
+            self.dropout_layer = nn.Identity()
 
         self.out_channels_signed = out_channels_signed
         self.out_channels_unsigned = out_channels_unsigned
         self.signed_activation_fn = signed_activation_fn
         self.unsigned_activation_fn = unsigned_activation_fn
+        self.target_normalization = target_normalization
 
         if self.log_to_wandb:
             wandb.config.update({'in_channels_signed': in_channels_signed,
@@ -91,7 +98,8 @@ class EIGN(BaseGNN):
                                  'hidden_channels_unsigned': hidden_channels_unsigned,
                                  'num_blocks': num_blocks,
                                  'signed_activation_fn': signed_activation_fn.__name__,
-                                 'unsigned_activation_fn': unsigned_activation_fn.__name__},
+                                 'unsigned_activation_fn': unsigned_activation_fn.__name__,
+                                 'target_normalization': target_normalization},
                                 allow_val_change=True)
 
         self.blocks = nn.ModuleList()
@@ -166,10 +174,10 @@ class EIGN(BaseGNN):
 
             if x_signed is not None:
                 x_signed = self.signed_activation_fn(x_signed)
-                x_signed = self.dropout(x_signed)
+                x_signed = self.dropout_layer(x_signed)
             if x_unsigned is not None:
                 x_unsigned = self.unsigned_activation_fn(x_unsigned)
-                x_unsigned = self.dropout(x_unsigned)
+                x_unsigned = self.dropout_layer(x_unsigned)
 
         if self.out_channels_signed:
             x_signed = self.signed_head(x_signed)
@@ -194,7 +202,7 @@ class EIGN(BaseGNN):
         model_save_path: str = None,
         scalers_train: dict = None,
         scalers_validation: dict = None,
-        use_signed: bool = False,
+        use_signed: bool = True,
     ) -> tuple:
         """
         Overriding train_model method from base_gnn
@@ -210,10 +218,35 @@ class EIGN(BaseGNN):
         best_val_loss = float("inf")
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
+        
+        # Define WandB Logging Metrics
+        from training.help_functions import setup_wandb_metrics
+        setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
 
-        for epoch in range(config.num_epochs):
+        if config.continue_training:
+
+            # Load checkpoint
+            checkpoint = torch.load(config.base_checkpoint_path)
+            
+            self.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            if 'scaler_state_dict' in checkpoint:
+                scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            
+            best_val_loss = checkpoint['best_val_loss']
+            start_epoch = checkpoint['epoch'] + 1
+            
+            print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
+
+        for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
             super().train()
             optimizer.zero_grad()
+            # Total loss
+            epoch_train_loss = 0
+            epoch_train_loss_node_predictions = 0
+            epoch_train_loss_mode_stats = 0
+
+            print(f"Starting training loop with {len(train_dl)} batches")
             for idx, data in tqdm(
                 enumerate(train_dl),
                 total=len(train_dl),
@@ -226,24 +259,15 @@ class EIGN(BaseGNN):
 
                 # Ensure data is in float32
                 data = data.to(device)
-                #TODO: check if this is correct
-                targets_node_predictions_signed = data.y_signed.to(torch.float32) if hasattr(data, 'y_signed') else None
-                targets_node_predictions_unsigned = select_target_tensor(data, getattr(config, 'target_type', 'default')).to(torch.float32)
+                targets_node_predictions_signed = data.y_signed.to(torch.float32)
+                targets_node_predictions_unsigned = data.y.to(torch.float32)
 
-                # Handle scalers - they may be None if features are pre-normalized
-                if scalers_train is not None and "x_scaler" in scalers_train:
-                    x_unscaled = scalers_train["x_scaler"].inverse_transform(
-                        data.x.detach().clone().cpu().numpy()
-                    )
-                else:
-                    x_unscaled = data.x.detach().clone().cpu().numpy()
-                
-                if scalers_train is not None and "x_signed_scaler" in scalers_train:
-                    x_unscaled_signed = scalers_train["x_signed_scaler"].inverse_transform(
-                        data.x_signed.detach().clone().cpu().numpy()
-                    )
-                else:
-                    x_unscaled_signed = data.x_signed.detach().clone().cpu().numpy() if hasattr(data, 'x_signed') else None
+                #x_unscaled = scalers_train["x_scaler"].inverse_transform(
+                #    data.x.detach().clone().cpu().numpy()
+                #)
+                #x_unscaled_signed = scalers_train["x_signed_scaler"].inverse_transform(
+                #    data.x_signed.detach().clone().cpu().numpy()
+                #)
 
                 if config.predict_mode_stats:
                     raise NotImplementedError(
@@ -276,21 +300,26 @@ class EIGN(BaseGNN):
                         predicted_signed = predicted_signed.to(torch.float32)
                         predicted_unsigned = predicted_unsigned.to(torch.float32)
 
-                        if use_signed and x_unscaled_signed is not None:
-                            loss_signed = loss_fct(
-                                predicted_signed,
-                                targets_node_predictions_signed,
-                                torch.tensor(x_unscaled_signed, dtype=torch.float32, device=device),
-                            )
-                            train_loss = loss_signed
-                        else:
-                            loss_unsigned = loss_fct(
-                                predicted_unsigned,
-                                targets_node_predictions_unsigned,
-                                torch.tensor(x_unscaled, dtype=torch.float32, device=device),
-                            )
-                            train_loss = loss_unsigned
+                        loss_signed = loss_fct(
+                            predicted_signed,
+                            targets_node_predictions_signed,
+                            data,
+                            data.batch
+                        ) # TODO: NOT using x_unscaled_signed because we dont have scaler in Bavarian Usecase
 
+                        loss_unsigned = loss_fct(
+                            predicted_unsigned,
+                            targets_node_predictions_unsigned,
+                            data,
+                            data.batch # TODO: NOT using x_unscaled because we dont have scaler in Bavarian Usecase
+                        )
+
+                        train_loss = loss_signed if use_signed else loss_unsigned
+                # Total loss
+                epoch_train_loss += train_loss.item()
+                if config.predict_mode_stats:
+                    print("Predicting mode stats is not implemented yet.")
+                
                 # Backward pass
                 train_loss = train_loss.to(dtype=torch.float32)
                 scaler.scale(train_loss).backward()
@@ -313,10 +342,8 @@ class EIGN(BaseGNN):
                     else:
                         wandb.log(
                             {
-                                "train_loss": train_loss.item(),
-                                "train_loss_signed": loss_signed.item(),
-                                "train_loss_unsigned": loss_unsigned.item(),
-                                "epoch": epoch,
+                                "batch_train_loss": train_loss.item(),
+                                "batch_step": step,
                             }
                         )
 
@@ -331,7 +358,7 @@ class EIGN(BaseGNN):
                     "Predicting mode stats is not implemented yet."
                 )
             else:
-                val_loss, r_squared, spearman_corr, pearson_corr = (
+                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics = (
                     validate_model_during_training_eign(
                         config=config,
                         model=self,
@@ -342,16 +369,23 @@ class EIGN(BaseGNN):
                         use_signed=use_signed,
                     )
                 )
-                wandb.log(
-                    {
-                        "val_loss": val_loss,
-                        "epoch": epoch,
-                        "lr": lr,
-                        "r^2": r_squared,
-                        "spearman": spearman_corr,
-                        "pearson": pearson_corr,
-                    }
-                )
+                # Epoch level logging
+                log_dict = {
+                    "val_loss": val_loss,
+                    "train_loss": epoch_train_loss / len(train_dl),
+                    "lr": lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr,
+                    "epoch": epoch
+                }
+                if percentage_metrics is not None:
+                    log_dict.update({
+                        "val_mae_percent": percentage_metrics['mae'],
+                        "val_rmse_percent": percentage_metrics['rmse']
+                    })
+                
+                wandb.log(log_dict)
 
             print(
                 f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}"
