@@ -10,7 +10,7 @@ Example usage with default architecture, dropout, and most significant features 
 Our use case:
 python run_models.py --gnn_arch gatv2 --unique_model_description trial13 --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25
 python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3 --use_nested_neighbor_loader True --neighbor_sizes 5,5,5,5,5 
-
+python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsigned --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 
 '''
 
 
@@ -34,7 +34,6 @@ from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, comput
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 # Please adjust as needed
-dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
 train_cities = ['schweinfurt','rosenheim']
@@ -42,6 +41,7 @@ val_cities =[] # Non empty implies inductive learning
 test_cities = [] # Non empty implies inductive learning
     
 def main():
+    
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
@@ -92,6 +92,13 @@ def main():
     
     set_random_seeds()
     
+    if args['gnn_arch'] == "eign":
+        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data_eign','kreisfreistadt')
+        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive_eign') # for saving results
+    else:
+        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
+        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
+    
     try:
         
         # Continue with GPU setup and model training
@@ -141,7 +148,8 @@ def main():
                                                                              seed_size=args['seed_size'],
                                                                              sampling_strategy=args['sampling_strategy'],
                                                                              min_subgraph_nodes=args['min_subgraph_nodes'],
-                                                                             max_subgraph_nodes=args['max_subgraph_nodes'])
+                                                                             max_subgraph_nodes=args['max_subgraph_nodes'],
+                                                                             is_eign=(args['gnn_arch'] == "eign"))
         
         # Create WandB config
         config = setup_wandb(args)
