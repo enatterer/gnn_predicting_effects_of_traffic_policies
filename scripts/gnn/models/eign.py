@@ -202,7 +202,7 @@ class EIGN(BaseGNN):
         model_save_path: str = None,
         scalers_train: dict = None,
         scalers_validation: dict = None,
-        use_signed: bool = True,
+        use_signed: bool = True, # change this to False to use unsigned targets in the loss function
     ) -> tuple:
         """
         Overriding train_model method from base_gnn
