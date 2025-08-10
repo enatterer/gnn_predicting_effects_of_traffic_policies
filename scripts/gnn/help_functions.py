@@ -247,91 +247,66 @@ def inverse_signed_log_transform(y_log):
     sign = torch.sign(y_log)
     abs_y = torch.abs(y_log)
     return sign * (torch.exp(abs_y) - 1)
-
+    
 def compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices=None, epsilon=1.0):
     """
     Compute percentage-based metrics of a batch after converting from log space.
     
     Args:
-        pred_cars (torch.Tensor): Predicted volume changes in cars
-        true_cars (torch.Tensor): True volume changes in cars  
+        pred_cars_diff (torch.Tensor): Predicted volume changes in cars
+        true_cars_diff (torch.Tensor): True volume changes in cars  
         base_volumes (torch.Tensor): Base volumes in cars
         batch_indices (torch.Tensor): Batch indices for each node (for graph-level aggregation)
         epsilon (float): Small value to avoid division by zero
         
     Returns:
-        dict: Dictionary with percentage metrics
+        dict: Dictionary with percentage metrics including sum_abs_pct, sum_sq_pct, and n for aggregation
     """
-    #print(f"  DEBUG: Input shapes - pred_cars: {pred_cars_diff.shape}, true_cars: {true_cars_diff.shape}, base_volumes: {base_volumes.shape}")
-    if batch_indices is None:
-        print(f"  WARNING: Batch Indices not found")
-    else:
-        #print(f"  DEBUG: batch_indices shape: {batch_indices.shape}, unique batches: {torch.unique(batch_indices)}")
-        pass
-    # Per-link epsilon (no clipping)
-    base_with_epsilon = torch.maximum(base_volumes, torch.tensor(epsilon, device=base_volumes.device))
-    #print(f"  DEBUG: base_volumes range: [{base_volumes.min():.4f}, {base_volumes.max():.4f}]")
-    #print(f"  DEBUG: base_with_epsilon range: [{base_with_epsilon.min():.4f}, {base_with_epsilon.max():.4f}]")
-    
-    # Per-link percentages (convert to percentage)
-    # Ensure base_with_epsilon has the same shape as pred_cars/true_cars
-    base_with_epsilon = base_with_epsilon.unsqueeze(-1) if len(base_with_epsilon.shape) == 1 else base_with_epsilon
-    
-    pred_percentages = (pred_cars_diff / base_with_epsilon) * 100
-    true_percentages = (true_cars_diff / base_with_epsilon) * 100
-    
-    #print(f"  DEBUG: pred_cars range: [{pred_cars_diff.min():.4f}, {pred_cars_diff.max():.4f}]")
-    #print(f"  DEBUG: true_cars range: [{true_cars_diff.min():.4f}, {true_cars_diff.max():.4f}]")
-    #print(f"  DEBUG: pred_percentages range: [{pred_percentages.min():.4f}, {pred_percentages.max():.4f}]")
-    #print(f"  DEBUG: true_percentages range: [{true_percentages.min():.4f}, {true_percentages.max():.4f}]")
-    
-    # Per-link metrics
-    # MAE and RMSE on percentages
-    mae_per_link = torch.abs(true_percentages - pred_percentages)
-    mse_per_link = (true_percentages - pred_percentages) ** 2
-    rmse_per_link = torch.sqrt(mse_per_link)  # Root Mean Squared Error
-    
-    #print(f"  DEBUG: mae_per_link range: [{mae_per_link.min():.4f}, {mae_per_link.max():.4f}]")
-    #print(f"  DEBUG: rmse_per_link range: [{rmse_per_link.min():.4f}, {rmse_per_link.max():.4f}]")
-    
-    # If batch indices are provided, compute graph-level aggregation
+    # Stable denominator
+    den = torch.clamp(base_volumes.abs(), min=epsilon)
+    if den.dim() == 1:
+        den = den.unsqueeze(-1)
+
+    # Percent errors per node
+    diff = true_cars_diff - pred_cars_diff
+    ae_pct = (diff.abs() / den) * 100.0
+    se_pct = ((diff / den) ** 2) * (100.0 ** 2)  # square of percent error
+
+    # Node-weighted (global) metrics for this batch
+    n = ae_pct.numel()
+    mae_pct = ae_pct.mean().item()
+    rmse_pct = se_pct.mean().sqrt().item()
+
+    out = {
+        "mae": mae_pct,
+        "rmse": rmse_pct,
+        "sum_abs_pct": ae_pct.sum().item(),
+        "sum_sq_pct": se_pct.sum().item(),
+        "n": n,
+    }
+
+    # Optional per-graph (node-weighted) metrics
     if batch_indices is not None:
         unique_batches = torch.unique(batch_indices)
-        graph_mae = []
-        graph_rmse = []
-        
-        #print(f"  DEBUG: Processing {len(unique_batches)} graphs in batch")
-        
-        for batch_id in unique_batches:
-            mask = (batch_id == batch_indices)
-            if mask.sum() > 0:
-                graph_mae_val = torch.mean(mae_per_link[mask])
-                graph_rmse_val = torch.sqrt(torch.mean(mse_per_link[mask]))  # RMSE per graph
-                graph_mae.append(graph_mae_val)
-                graph_rmse.append(graph_rmse_val)
-                #print(f"Graph {batch_id}: {mask.sum()} links, MAE: {graph_mae_val:.2f}%, RMSE: {graph_rmse_val:.2f}%")
-        
-        # Average across graphs
-        if graph_mae: #averages the average MAE and average RMSE across all graphs in the batch (graph averaged metrics)
-            final_mae = torch.mean(torch.stack(graph_mae)).item()
-            final_rmse = torch.mean(torch.stack(graph_rmse)).item()
-            #print(f" Final graph-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
-        else: #averages the average MAE and average RMSE across all links in the batch (link averaged metrics)
-            final_mae = torch.mean(mae_per_link).item()
-            final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
-            print(f" Fallback to link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
-    else:
-        # Fallback to simple averaging across all links
-        final_mae = torch.mean(mae_per_link).item()
-        final_rmse = torch.sqrt(torch.mean(mse_per_link)).item()
-        print(f" No batch indices, using link-averaged metrics - MAE: {final_mae:.2f}%, RMSE: {final_rmse:.2f}%")
-    
-    return {
-        'mae': final_mae,
-        'rmse': final_rmse,
-        'pred_percentages': pred_percentages,
-        'true_percentages': true_percentages
-    }
+        graph_mae_vals = []
+        graph_rmse_vals = []
+        graph_sizes = []
+
+        for bid in unique_batches:
+            m = (batch_indices == bid)
+            if m.any():
+                graph_sizes.append(int(m.sum().item()))
+                graph_mae_vals.append(ae_pct[m].mean())
+                graph_rmse_vals.append(se_pct[m].mean().sqrt())
+
+        if graph_mae_vals:
+            graph_mae_t = torch.stack(graph_mae_vals)
+            graph_rmse_t = torch.stack(graph_rmse_vals)
+            # equal-graph weighting (if you want node-weighted, weight by graph_sizes)
+            out["graph_mae_mean"] = graph_mae_t.mean().item()
+            out["graph_rmse_mean"] = graph_rmse_t.mean().item()
+
+    return out
 
 def validate_model_during_training(config: object, 
                                    model: nn.Module, 
@@ -413,13 +388,19 @@ def validate_model_during_training(config: object,
             else:
                 val_loss += loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
                 print('val_loss', val_loss)
-
+                
             # Collect predictions and targets for percentage metrics
             if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
+                if config.target_normalization:
                 # Convert from log space to cars
-                pred_cars_diff = inverse_signed_log_transform(node_predicted)
-                true_cars_diff = inverse_signed_log_transform(targets_node_predictions)
-                base_volumes = data.unscaled_vol_base
+                    pred_cars_diff = inverse_signed_log_transform(node_predicted)
+                    true_cars_diff = inverse_signed_log_transform(targets_node_predictions)
+                    base_volumes = data.unscaled_vol_base
+                else:
+                    pred_cars_diff = node_predicted
+                    true_cars_diff = targets_node_predictions
+                    base_volumes = data.unscaled_vol_base
+                    
                 batch_indices = data.batch  # Get batch indices for graph-level aggregation
                 
                 #print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
@@ -454,45 +435,40 @@ def validate_model_during_training(config: object,
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
     
-    print(f"Log-space validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    print(f"Target-space validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
     
     # Clear large tensors to save memory
     del actual_node_targets, node_predictions
     torch.cuda.empty_cache()
     
-    # Compute percentage metrics if base volumes are available (process in chunks to save memory)
+    # Compute percentage metrics if base volumes are available
     percentage_metrics = None
     if all_pred_cars_diff:
         # Process in chunks to avoid memory explosion
         print(f"Computing percentage metrics for {len(all_pred_cars_diff)} batches...")
         
         # Initialize accumulators
-        total_mae = 0.0
-        total_rmse = 0.0
-        total_samples = 0
+        total_abs_pct_sum = 0.0
+        total_sq_pct_sum = 0.0
+        total_n = 0
         
         # Process each batch separately to avoid concatenating large tensors
         for i, (pred_cars_diff, true_cars_diff, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff, all_true_cars_diff, all_base_volumes, all_batch_indices)):
-            #print(f"\nDEBUG: Processing batch {i} for percentage metrics...")
             batch_metrics = compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices)
-            batch_size = pred_cars_diff.shape[0]
             
-            #print(f"DEBUG: Batch {i} final metrics - MAE: {batch_metrics['mae']:.2f}%, RMSE: {batch_metrics['rmse']:.2f}%")
-            #print(f"DEBUG: Batch {i} contributing {batch_size} samples to weighted average")
-            
-            total_mae += batch_metrics['mae'] * batch_size
-            total_rmse += batch_metrics['rmse'] * batch_size
-            total_samples += batch_size
+            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
+            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
+            total_n += batch_metrics["n"]
             
             # Clear batch tensors to save memory
             del pred_cars_diff, true_cars_diff, base_volumes, batch_indices
             torch.cuda.empty_cache()
         
-        # Compute weighted averages
-        if total_samples > 0:
+        # Global (node-weighted) metrics across the whole val set
+        if total_n > 0:
             percentage_metrics = {
-                'mae': total_mae / total_samples,
-                'rmse': total_rmse / total_samples
+                "mae": total_abs_pct_sum / total_n,
+                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
             }
             print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
         
@@ -662,26 +638,27 @@ def validate_model_during_training_eign(
         print(f"Computing percentage metrics for {len(all_pred_cars_diff_signed)} batches (signed)...")
         
         # Initialize accumulators
-        total_mae = 0.0
-        total_rmse = 0.0
-        total_samples = 0
+        total_abs_pct_sum = 0.0
+        total_sq_pct_sum = 0.0
+        total_n = 0
         
         # Process each batch separately to avoid concatenating large tensors
-        for i, (pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
+        for i, (pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
             batch_metrics = compute_percentage_metrics(pred_cars_diff_signed, true_cars_diff_signed, base_volumes, batch_indices)
-            batch_size = pred_cars_diff_signed.shape[0]
             
-            total_mae += batch_metrics['mae'] * batch_size
-            total_rmse += batch_metrics['rmse'] * batch_size
-            total_samples += batch_size
+            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
+            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
+            total_n += batch_metrics["n"]
             
             # Clear batch tensors to save memory
             del pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices
             torch.cuda.empty_cache()
-        if total_samples > 0:
+        
+        # Global (node-weighted) metrics across the whole val set
+        if total_n > 0:
             percentage_metrics = {
-                'mae': total_mae / total_samples,
-                'rmse': total_rmse / total_samples
+                "mae": total_abs_pct_sum / total_n,
+                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
             }
             print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
     
@@ -694,26 +671,27 @@ def validate_model_during_training_eign(
         print(f"Computing percentage metrics for {len(all_pred_cars_diff_unsigned)} batches (unsigned)...")
         
         # Initialize accumulators
-        total_mae = 0.0
-        total_rmse = 0.0
-        total_samples = 0
+        total_abs_pct_sum = 0.0
+        total_sq_pct_sum = 0.0
+        total_n = 0
         
         # Process each batch separately to avoid concatenating large tensors
         for i, (pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
             batch_metrics = compute_percentage_metrics(pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices)
-            batch_size = pred_cars_diff_unsigned.shape[0]
             
-            total_mae += batch_metrics['mae'] * batch_size
-            total_rmse += batch_metrics['rmse'] * batch_size
-            total_samples += batch_size
+            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
+            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
+            total_n += batch_metrics["n"]
             
             # Clear batch tensors to save memory
             del pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices
             torch.cuda.empty_cache()
-        if total_samples > 0:
+        
+        # Global (node-weighted) metrics across the whole val set
+        if total_n > 0:
             percentage_metrics = {
-                'mae': total_mae / total_samples,
-                'rmse': total_rmse / total_samples
+                "mae": total_abs_pct_sum / total_n,
+                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
             }
             print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")      
             
