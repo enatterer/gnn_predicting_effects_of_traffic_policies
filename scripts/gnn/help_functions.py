@@ -531,13 +531,21 @@ def validate_model_during_training_eign(
     actual_node_targets = []
     node_predictions = []
 
+    # For percentage metrics
+    all_pred_cars_diff_signed = []
+    all_pred_cars_diff_unsigned = []
+    all_true_cars_diff_signed = []
+    all_true_cars_diff_unsigned = []
+    all_base_volumes = []
+    all_batch_indices = []
+
     # Choose the appropriate inference mode
     with torch.inference_mode():
         for idx, data in tqdm(enumerate(dataset), total=len(dataset), desc="EIGN Validation", unit="batch"):
             data = data.to(device)
             
             targets_node_predictions_signed = data.y_signed if hasattr(data, 'y_signed') else None
-            targets_node_predictions_unsigned = select_target_tensor(data, config.target_type)
+            targets_node_predictions_unsigned = data.y if hasattr(data, 'y') else None
             
             # Check if scalers are available (they may be None if features are pre-normalized)
             if scalers_validation is not None and "x_scaler" in scalers_validation:
@@ -548,14 +556,14 @@ def validate_model_during_training_eign(
                 x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
             else:
                 # Features are already normalized during preprocessing, use them directly
-                x_unscaled = data.x
+                x_unscaled = data
             
             if scalers_validation is not None and "x_signed_scaler" in scalers_validation:
                 x_signed_unscaled = scalers_validation["x_signed_scaler"].inverse_transform(
                     data.x_signed.detach().clone().cpu().numpy())
             else:
                 # Use x_signed directly if no scaler available
-                x_signed_unscaled = data.x_signed.detach().clone().cpu().numpy() if hasattr(data, 'x_signed') else None
+                x_signed_unscaled = data
 
             # Standard Forward Pass
             if config.predict_mode_stats:
@@ -592,17 +600,35 @@ def validate_model_during_training_eign(
                     batch_loss = loss_func(
                         predicted_signed,
                         targets_node_predictions_signed,
-                        torch.tensor(x_signed_unscaled, dtype=torch.float32, device=device),
+                        x_signed_unscaled,
+                        data.batch
                     ).item()
                 else:
                     batch_loss = loss_func(
                         predicted_unsigned,
                         targets_node_predictions_unsigned,
                         x_unscaled,
+                        data.batch
                     ).item()
 
                 val_loss += batch_loss
-
+                print('val_loss', val_loss)
+            
+            if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
+                pred_cars_diff_signed = inverse_signed_log_transform(predicted_signed)
+                pred_cars_diff_unsigned = inverse_signed_log_transform(predicted_unsigned)
+                true_cars_diff_signed = inverse_signed_log_transform(targets_node_predictions_signed)
+                true_cars_diff_unsigned = inverse_signed_log_transform(targets_node_predictions_unsigned)
+                base_volumes = data.unscaled_vol_base
+                batch_indices = data.batch
+                
+                all_pred_cars_diff_signed.append(pred_cars_diff_signed)
+                all_pred_cars_diff_unsigned.append(pred_cars_diff_unsigned)
+                all_true_cars_diff_signed.append(true_cars_diff_signed)
+                all_true_cars_diff_unsigned.append(true_cars_diff_unsigned)
+                all_base_volumes.append(base_volumes)
+                all_batch_indices.append(batch_indices)
+             
             # Collect predictions and targets
             if use_signed:
                 actual_node_targets.append(targets_node_predictions_signed)
@@ -621,13 +647,78 @@ def validate_model_during_training_eign(
     spearman_corr, pearson_corr = compute_spearman_pearson(
         node_predictions, actual_node_targets
     )
-    print(f"EIGN validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    print(f"EIGN validation metrics (normalized space): Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
 
+    # Compute percentage metrics if base volumes are available (process in chunks to save memory)
+    percentage_metrics = None
+    if all_pred_cars_diff_signed:
+        # Process in chunks to avoid memory explosion
+        print(f"Computing percentage metrics for {len(all_pred_cars_diff_signed)} batches (signed)...")
+        
+        # Initialize accumulators
+        total_mae = 0.0
+        total_rmse = 0.0
+        total_samples = 0
+        
+        # Process each batch separately to avoid concatenating large tensors
+        for i, (pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
+            batch_metrics = compute_percentage_metrics(pred_cars_diff_signed, true_cars_diff_signed, base_volumes, batch_indices)
+            batch_size = pred_cars_diff_signed.shape[0]
+            
+            total_mae += batch_metrics['mae'] * batch_size
+            total_rmse += batch_metrics['rmse'] * batch_size
+            total_samples += batch_size
+            
+            # Clear batch tensors to save memory
+            del pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices
+            torch.cuda.empty_cache()
+        if total_samples > 0:
+            percentage_metrics = {
+                'mae': total_mae / total_samples,
+                'rmse': total_rmse / total_samples
+            }
+            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
+    
+        # Clear the lists to save memory
+        del all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
+        torch.cuda.empty_cache()
+    elif all_pred_cars_diff_unsigned:
+        # Process in chunks to avoid memory explosion
+        print(f"Computing percentage metrics for {len(all_pred_cars_diff_unsigned)} batches (unsigned)...")
+        
+        # Initialize accumulators
+        total_mae = 0.0
+        total_rmse = 0.0
+        total_samples = 0
+        
+        # Process each batch separately to avoid concatenating large tensors
+        for i, (pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
+            batch_metrics = compute_percentage_metrics(pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices)
+            batch_size = pred_cars_diff_unsigned.shape[0]
+            
+            total_mae += batch_metrics['mae'] * batch_size
+            total_rmse += batch_metrics['rmse'] * batch_size
+            total_samples += batch_size
+            
+            # Clear batch tensors to save memory
+            del pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices
+            torch.cuda.empty_cache()
+        if total_samples > 0:
+            percentage_metrics = {
+                'mae': total_mae / total_samples,
+                'rmse': total_rmse / total_samples
+            }
+            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")      
+            
+        # Clear the lists to save memory
+        del all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
+        torch.cuda.empty_cache()
+    
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
         raise NotImplementedError("EIGN model does not support mode stats prediction.")
     else:
-        return total_validation_loss, r_squared, spearman_corr, pearson_corr
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics
 
 def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     """
