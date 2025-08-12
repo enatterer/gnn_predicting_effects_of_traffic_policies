@@ -16,7 +16,7 @@ class GraphDataset(Dataset):
     def __len__(self):
         return len(self.paths)
 
-    @lru_cache(maxsize=8192)
+    @lru_cache(maxsize=4500)
     def get(self, idx):
         data = torch.load(self.paths[idx])
         return data
