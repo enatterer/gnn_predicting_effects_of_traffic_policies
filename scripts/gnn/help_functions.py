@@ -326,7 +326,7 @@ def validate_model_during_training(config: object,
     - scalers_validation (dict): x and pos scalers for validation data.
 
     Returns:
-    - tuple: Validation metrics including log-space loss, percentage metrics, and correlations.
+    - tuple: Validation metrics including log-space loss and correlations.
     """
     print("Starting validation...")
     model.eval()
@@ -337,7 +337,7 @@ def validate_model_during_training(config: object,
     mode_stats_targets = [] #for mode stats loss
     mode_stats_predictions = [] #for mode stats loss
     
-    # For percentage metrics
+    # For percentage metrics (removed downstream)
     all_pred_cars_diff = []
     all_true_cars_diff = []
     all_base_volumes = []
@@ -389,10 +389,10 @@ def validate_model_during_training(config: object,
                 val_loss += loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
                 print('val_loss', val_loss)
                 
-            # Collect predictions and targets for percentage metrics
+            # Collect predictions and targets for potential percentage metrics (kept for future use)
             if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
                 if config.target_normalization:
-                # Convert from log space to cars
+                    # Convert from log space to cars
                     pred_cars_diff = inverse_signed_log_transform(node_predicted)
                     true_cars_diff = inverse_signed_log_transform(targets_node_predictions)
                     base_volumes = data.unscaled_vol_base
@@ -400,7 +400,7 @@ def validate_model_during_training(config: object,
                     pred_cars_diff = node_predicted
                     true_cars_diff = targets_node_predictions
                     base_volumes = data.unscaled_vol_base
-                    
+                
                 batch_indices = data.batch  # Get batch indices for graph-level aggregation
                 
                 #print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
@@ -441,40 +441,7 @@ def validate_model_during_training(config: object,
     del actual_node_targets, node_predictions
     torch.cuda.empty_cache()
     
-    # Compute percentage metrics if base volumes are available
-    percentage_metrics = None
-    if all_pred_cars_diff:
-        # Process in chunks to avoid memory explosion
-        print(f"Computing percentage metrics for {len(all_pred_cars_diff)} batches...")
-        
-        # Initialize accumulators
-        total_abs_pct_sum = 0.0
-        total_sq_pct_sum = 0.0
-        total_n = 0
-        
-        # Process each batch separately to avoid concatenating large tensors
-        for i, (pred_cars_diff, true_cars_diff, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff, all_true_cars_diff, all_base_volumes, all_batch_indices)):
-            batch_metrics = compute_percentage_metrics(pred_cars_diff, true_cars_diff, base_volumes, batch_indices)
-            
-            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
-            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
-            total_n += batch_metrics["n"]
-            
-            # Clear batch tensors to save memory
-            del pred_cars_diff, true_cars_diff, base_volumes, batch_indices
-            torch.cuda.empty_cache()
-        
-        # Global (node-weighted) metrics across the whole val set
-        if total_n > 0:
-            percentage_metrics = {
-                "mae": total_abs_pct_sum / total_n,
-                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
-            }
-            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
-        
-        # Clear the lists to save memory
-        del all_pred_cars_diff, all_true_cars_diff , all_base_volumes, all_batch_indices
-        torch.cuda.empty_cache()
+    # Removed percentage metrics aggregation and logging
     
     # Handle mode stats results if enabled
     if config.predict_mode_stats:
@@ -485,12 +452,13 @@ def validate_model_during_training(config: object,
             r_squared,
             spearman_corr,
             pearson_corr,
-            percentage_metrics,
+            # removed percentage_metrics
             val_loss_node_predictions,
             val_loss_mode_stats,
         )
     else:
-        return total_validation_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr
+
 
 def validate_model_during_training_eign(
         config: object,
@@ -507,7 +475,7 @@ def validate_model_during_training_eign(
     actual_node_targets = []
     node_predictions = []
 
-    # For percentage metrics
+    # For percentage metrics (kept buffers, but not used for global aggregation)
     all_pred_cars_diff_signed = []
     all_pred_cars_diff_unsigned = []
     all_true_cars_diff_signed = []
@@ -544,9 +512,7 @@ def validate_model_during_training_eign(
             # Standard Forward Pass
             if config.predict_mode_stats:
                 raise NotImplementedError(
-                    "EIGN model does not support mode stats prediction."
-                )
-            
+                    "EIGN model does not support mode stats prediction.")
             else:
                 eign_output = model(
                     x_unsigned=(
@@ -569,8 +535,7 @@ def validate_model_during_training_eign(
             # Compute validation losses
             if config.predict_mode_stats:
                 raise NotImplementedError(
-                    "EIGN model does not support mode stats prediction."
-                )
+                    "EIGN model does not support mode stats prediction.")
             else:
                 if use_signed and x_signed_unscaled is not None:
                     batch_loss = loss_func(
@@ -589,7 +554,8 @@ def validate_model_during_training_eign(
 
                 val_loss += batch_loss
                 print('val_loss', val_loss)
-            
+                
+            # Collect predictions and targets for potential percentage metrics (kept for future use)
             if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
                 if config.target_normalization:
                     pred_cars_diff_signed = inverse_signed_log_transform(predicted_signed)
@@ -631,79 +597,12 @@ def validate_model_during_training_eign(
     )
     print(f"EIGN validation metrics (normalized space): Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
 
-    # Compute percentage metrics if base volumes are available (process in chunks to save memory)
-    percentage_metrics = None
-    if all_pred_cars_diff_signed:
-        # Process in chunks to avoid memory explosion
-        print(f"Computing percentage metrics for {len(all_pred_cars_diff_signed)} batches (signed)...")
-        
-        # Initialize accumulators
-        total_abs_pct_sum = 0.0
-        total_sq_pct_sum = 0.0
-        total_n = 0
-        
-        # Process each batch separately to avoid concatenating large tensors
-        for i, (pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
-            batch_metrics = compute_percentage_metrics(pred_cars_diff_signed, true_cars_diff_signed, base_volumes, batch_indices)
-            
-            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
-            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
-            total_n += batch_metrics["n"]
-            
-            # Clear batch tensors to save memory
-            del pred_cars_diff_signed, pred_cars_diff_unsigned, true_cars_diff_signed, true_cars_diff_unsigned, base_volumes, batch_indices
-            torch.cuda.empty_cache()
-        
-        # Global (node-weighted) metrics across the whole val set
-        if total_n > 0:
-            percentage_metrics = {
-                "mae": total_abs_pct_sum / total_n,
-                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
-            }
-            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")
+    # Removed percentage metrics aggregation and logging
     
-        # Clear the lists to save memory
-        del all_pred_cars_diff_signed, all_pred_cars_diff_unsigned, all_true_cars_diff_signed, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
-        torch.cuda.empty_cache()
-        
-    elif all_pred_cars_diff_unsigned:
-        # Process in chunks to avoid memory explosion
-        print(f"Computing percentage metrics for {len(all_pred_cars_diff_unsigned)} batches (unsigned)...")
-        
-        # Initialize accumulators
-        total_abs_pct_sum = 0.0
-        total_sq_pct_sum = 0.0
-        total_n = 0
-        
-        # Process each batch separately to avoid concatenating large tensors
-        for i, (pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices) in enumerate(zip(all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices)):
-            batch_metrics = compute_percentage_metrics(pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices)
-            
-            total_abs_pct_sum += batch_metrics["sum_abs_pct"]
-            total_sq_pct_sum += batch_metrics["sum_sq_pct"]
-            total_n += batch_metrics["n"]
-            
-            # Clear batch tensors to save memory
-            del pred_cars_diff_unsigned, true_cars_diff_unsigned, base_volumes, batch_indices
-            torch.cuda.empty_cache()
-        
-        # Global (node-weighted) metrics across the whole val set
-        if total_n > 0:
-            percentage_metrics = {
-                "mae": total_abs_pct_sum / total_n,
-                "rmse": (total_sq_pct_sum / total_n) ** 0.5,
-            }
-            print(f"Percentage metrics: MAE={percentage_metrics['mae']:.2f}%, RMSE={percentage_metrics['rmse']:.2f}%")      
-            
-        # Clear the lists to save memory
-        del all_pred_cars_diff_unsigned, all_true_cars_diff_unsigned, all_base_volumes, all_batch_indices
-        torch.cuda.empty_cache()
-        
-    # Handle mode stats results if enabled
     if config.predict_mode_stats:
         raise NotImplementedError("EIGN model does not support mode stats prediction.")
     else:
-        return total_validation_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr
 
 def compute_spearman_pearson(preds, targets, is_np=False) -> tuple:
     """
