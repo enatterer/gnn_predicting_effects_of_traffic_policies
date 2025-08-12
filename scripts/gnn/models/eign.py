@@ -357,7 +357,7 @@ class EIGN(BaseGNN):
                     "Predicting mode stats is not implemented yet."
                 )
             else:
-                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics = (
+                val_loss, r_squared, spearman_corr, pearson_corr = (
                     validate_model_during_training_eign(
                         config=config,
                         model=self,
@@ -378,11 +378,6 @@ class EIGN(BaseGNN):
                     "pearson": pearson_corr,
                     "epoch": epoch
                 }
-                if percentage_metrics is not None:
-                    log_dict.update({
-                        "val_mae_percent": percentage_metrics['mae'],
-                        "val_rmse_percent": percentage_metrics['rmse']
-                    })
                 
                 wandb.log(log_dict)
 
