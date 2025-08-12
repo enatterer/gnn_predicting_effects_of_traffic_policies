@@ -220,7 +220,7 @@ class BaseGNN(nn.Module, ABC):
                 
             # Validation step
             if config.predict_mode_stats:
-                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
@@ -243,16 +243,9 @@ class BaseGNN(nn.Module, ABC):
                     "epoch": epoch
                 }
                 
-                # Add percentage metrics if available
-                if percentage_metrics is not None:
-                    log_dict.update({
-                        "val_mae_percent": percentage_metrics['mae'],
-                        "val_rmse_percent": percentage_metrics['rmse']
-                    })
-                
                 wandb.log(log_dict)
             else:
-                val_loss, r_squared, spearman_corr, pearson_corr, percentage_metrics = validate_model_during_training(
+                val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
@@ -270,13 +263,6 @@ class BaseGNN(nn.Module, ABC):
                     "pearson": pearson_corr,
                     "epoch": epoch
                 }
-                
-                # Add percentage metrics if available
-                if percentage_metrics is not None:
-                    log_dict.update({
-                        "val_mae_percent": percentage_metrics['mae'],
-                        "val_rmse_percent": percentage_metrics['rmse']
-                    })
                 
                 wandb.log(log_dict)
 
