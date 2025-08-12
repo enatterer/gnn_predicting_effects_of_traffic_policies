@@ -41,8 +41,8 @@ from data_preprocessing.help_functions import *
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 ######control center#######
-cities_to_process = ['muenchen','neuulm','rosenheim','schweinfurt','kempten','ingolstadt','landshut','regensburg','bamberg','bayreuth','erlangen','fuerth','wuerzburg']
-all_cities = ['augsburg','nuernberg','aschaffenburg']
+cities_to_process = ['augsburg','nuernberg','aschaffenburg','muenchen','neuulm','rosenheim','schweinfurt','kempten','ingolstadt','landshut','regensburg','bamberg','bayreuth','erlangen','fuerth','wuerzburg']
+all_cities = ['erlangen','fuerth','wuerzburg']
 
 is_in_stadt=True #if true, include only the edges that are in the stadt, else include edges in stadt and landkreis
 batch_size = 256 # Do processing in batches to avoid memory issues
@@ -60,7 +60,7 @@ use_destination_activity = True # Flag to use destination activity as edge featu
 #target_feature = 'vol_car_percentage' #other options: 'vol_car'
 #target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max','none'
 x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
-target_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max', 'signed_log_normalization', 'none'
+target_normalization_type = 'none' #other options: 'mean_std', 'min_max', 'signed_log_normalization', 'none'
 ############################
 
 # Get the absolute path to the project root
@@ -437,6 +437,18 @@ def process_result_dic_eign(city,
                 normalization_of_edge_features(net_flow_change.numpy(), target_normalization_type), 
                 dtype=torch.float
             )
+            # calculating percentage change in car vol change
+            net_base_flow = net_flow_base.to(torch.float)
+            denom = torch.where(net_base_flow == 0, torch.ones_like(net_base_flow), net_base_flow)
+            net_flow_change_percentage = net_flow_change.to(torch.float) / denom
+
+            net_flow_change_percentage_normalized = torch.tensor(
+                normalization_of_edge_features(
+                    net_flow_change_percentage.cpu().numpy(),
+                    target_normalization_type
+                ),
+                dtype=torch.float
+) 
 
             # Calculate unsigned features changes
             vol_change = sim_features["vol_base_case"] - base_features["vol_base_case"]
@@ -444,6 +456,19 @@ def process_result_dic_eign(city,
                 normalization_of_edge_features(vol_change.numpy(), target_normalization_type), 
                 dtype=torch.float
             )
+            # calculating percentage change in car vol change
+            base_vol = base_features['vol_base_case'].to(torch.float)
+            denominator = torch.where(base_vol == 0, torch.ones_like(base_vol), base_vol)
+            vol_change_percentage = vol_change.to(torch.float) / denominator
+
+            vol_change_percentage_normalized = torch.tensor(
+                normalization_of_edge_features(
+                    vol_change_percentage.cpu().numpy(),
+                    target_normalization_type
+                ),
+                dtype=torch.float
+            )
+            
             capacity_change = (
                 sim_features["capacity_base_case"] - base_features["capacity_base_case"]
             )
@@ -537,10 +562,11 @@ def process_result_dic_eign(city,
             data.x = edge_tensor
             data.x_signed = edge_tensor_signed #shape: (num_edges, 1)
             data.pos = stacked_edge_geometries_tensor
-            data.y = vol_change_normalized.unsqueeze(1)  # TODO:Volume change as target (need to use normalization tactics here)
-            data.y_signed = net_flow_change_normalized.unsqueeze( # TODO: also think about normalization techniques here
-                1
-            )  # Net flow change as signed target
+            data.y = vol_change_normalized.unsqueeze(1)  
+            data.y_percentage = vol_change_percentage_normalized.unsqueeze(1)
+            data.y_signed = net_flow_change_normalized.unsqueeze(1)  # Net flow change as signed target
+            data.y_signed_percentage = net_flow_change_percentage_normalized.unsqueeze(1)
+            
             data.edge_is_directed = edge_is_directed_base #shape: (num_edges,)
             
             # Add separate data attributes (using original unnormalized values)
@@ -621,11 +647,22 @@ def process_result_dic_eign(city,
                     # Print target statistics
                     target_values_vol_change = data.y.numpy()
                     target_values_net_flow_change = data.y_signed.numpy()
-                    print(f"\n--- Target Statistics ---")
-                    print(f"Target (vol_change [normalization: {target_normalization_type}]): mean={target_values_vol_change.mean():.4f}, std={target_values_vol_change.std():.4f}, "
+                    target_values_vol_change_pct = data.y_percentage.numpy()
+                    target_values_net_flow_change_pct = data.y_signed_percentage.numpy()
+
+                    print("\n--- Target Statistics ---")
+                    print(f"Target (vol_change [{target_normalization_type}]): "
+                        f"mean={target_values_vol_change.mean():.4f}, std={target_values_vol_change.std():.4f}, "
                         f"min={target_values_vol_change.min():.4f}, max={target_values_vol_change.max():.4f}")
-                    print(f"Target (net_flow_change [normalization: {target_normalization_type}]): mean={target_values_net_flow_change.mean():.4f}, std={target_values_net_flow_change.std():.4f}, "
+                    print(f"Target (net_flow_change [{target_normalization_type}]): "
+                        f"mean={target_values_net_flow_change.mean():.4f}, std={target_values_net_flow_change.std():.4f}, "
                         f"min={target_values_net_flow_change.min():.4f}, max={target_values_net_flow_change.max():.4f}")
+                    print(f"Target (vol_change_percentage [{target_normalization_type}]): "
+                        f"mean={target_values_vol_change_pct.mean():.4f}, std={target_values_vol_change_pct.std():.4f}, "
+                        f"min={target_values_vol_change_pct.min():.4f}, max={target_values_vol_change_pct.max():.4f}")
+                    print(f"Target (net_flow_change_percentage [{target_normalization_type}]): "
+                        f"mean={target_values_net_flow_change_pct.mean():.4f}, std={target_values_net_flow_change_pct.std():.4f}, "
+                        f"min={target_values_net_flow_change_pct.min():.4f}, max={target_values_net_flow_change_pct.max():.4f}")
                     
                     
                     # Check for NaN or Inf values
@@ -658,6 +695,18 @@ def process_result_dic_eign(city,
                         print("WARNING: NaN values found in edge_weights!")
                     if torch.isinf(data.edge_weights).any():
                         print("WARNING: Inf values found in edge_weights!")
+                        
+                    if hasattr(data, "y_percentage"):
+                        if torch.isnan(data.y_percentage).any():
+                            print("WARNING: NaN values found in y_percentage!")
+                        if torch.isinf(data.y_percentage).any():
+                            print("WARNING: Inf values found in y_percentage!")
+
+                    if hasattr(data, "y_signed_percentage"):
+                        if torch.isnan(data.y_signed_percentage).any():
+                            print("WARNING: NaN values found in y_signed_percentage!")
+                        if torch.isinf(data.y_signed_percentage).any():
+                            print("WARNING: Inf values found in y_signed_percentage!")
                     
                     print("=" * 50)
             else:
@@ -734,7 +783,10 @@ def validate_data_eign(data: Data) -> bool:
             f"Invalid shape for data.edge_is_directed: expected ({num_edges},), got {data.edge_is_directed.shape}"
         )
         return False
-
+    if hasattr(data, "y_percentage") and data.y_percentage.shape != (data.edge_index.shape[1], 1):
+        print(f"WARNING: y_percentage shape mismatch: {data.y_percentage.shape}")
+    if hasattr(data, "y_signed_percentage") and data.y_signed_percentage.shape != (data.edge_index.shape[1], 1):
+        print(f"WARNING: y_signed_percentage shape mismatch: {data.y_signed_percentage.shape}")
     return True
 
 def process_single_city(city, project_root, result_path, use_destination_activity, use_allowed_modes):
