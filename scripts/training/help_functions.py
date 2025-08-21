@@ -37,6 +37,7 @@ from gnn.models.fc_nn import FC_NN
 from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.xgboost import XGBoostModel
+from gnn.models.trans_encoder import TransEncoder
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 #####control center parameters#####
@@ -656,6 +657,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     
     elif gnn_arch == "xgboost":
         return XGBoostModel(**common_kwargs, **model_kwargs)
+    elif gnn_arch == "trans_encoder":
+        return TransEncoder(**common_kwargs, **model_kwargs).to(device)
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")
 
