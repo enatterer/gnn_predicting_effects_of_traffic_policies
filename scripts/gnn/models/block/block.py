@@ -46,7 +46,7 @@ class EIGNBlock(nn.Module):
         self.signed_activation_fn = signed_activation_fn
         self.unsigned_activation_fn = unsigned_activation_fn
 
-        # Fusion can only be used once we somehow obtain signed and unsignedariant inputs of the same size
+        # Fusion can only be used once we somehow obtain signed and unsigned variant inputs of the same size
         self.use_fusion = (
             use_fusion
             and (
