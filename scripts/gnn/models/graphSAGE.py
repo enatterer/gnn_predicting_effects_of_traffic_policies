@@ -68,6 +68,10 @@ class GraphSAGE(BaseGNN):
         self.use_residuals = use_residuals
         self.use_pos = use_pos
 
+        # Adjust input channels if using position features
+        if self.use_pos:
+            self.in_channels += 6  # Add 6 for start, end, midpoint coordinates (3 points × 2 coords each)
+
         if self.log_to_wandb:
             wandb.config.update({
                 'hidden_channels': hidden_channels,
@@ -137,7 +141,18 @@ class GraphSAGE(BaseGNN):
         if self.use_pos:
             if hasattr(data, 'pos'):
                 pos = data.pos.to(self.dtype)
-                # Concatenate position features if available
+                # Handle different position tensor shapes
+                if len(pos.shape) == 3:
+                    # Shape is [N, 3, 2] - flatten to get all 6 coordinates
+                    # This gives us [start_x, start_y, end_x, end_y, mid_x, mid_y] for each node
+                    pos = pos.view(pos.shape[0], -1)  # Shape becomes [N, 6]
+                elif len(pos.shape) == 2:
+                    # Shape is already [N, features] - use as is
+                    pass
+                else:
+                    raise ValueError(f"Unexpected position tensor shape: {pos.shape}")
+                
+                # Now concatenate - both should be 2D tensors
                 x = torch.cat([x, pos], dim=-1)
             else:
                 raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
