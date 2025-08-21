@@ -28,7 +28,7 @@ class GraphSAGE(BaseGNN):
     """
     def __init__(self, 
                  in_channels: int = 5,
-                 use_pos: bool = False,
+                 use_pos: bool = True,
                  out_channels: int = 1,
                  hidden_channels: list[int] = [256, 512, 1024, 512, 256],
                  dropout: float = 0.3, 
