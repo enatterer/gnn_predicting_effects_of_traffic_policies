@@ -791,6 +791,10 @@ class NestedNeighborDataset(Dataset):
         
         # Get first subgraph from the loader
         for subgraph in neigh_loader:
+            # NeighborLoader already properly subsets node features, but double-check pos
+            if hasattr(subgraph, 'pos') and hasattr(subgraph, 'n_id'):
+                # n_id contains mapping from subgraph nodes to original nodes
+                subgraph.pos = graph.pos[subgraph.n_id]
             return subgraph
     
     def _random_walk_subgraph(self, graph: Data, walk_length: int = 10, num_walks: int = 3) -> Data:
@@ -846,18 +850,28 @@ class NestedNeighborDataset(Dataset):
             num_nodes=graph.num_nodes
         )
         
-        # Create new data object
+        # Create new data object with properly subsetted features
         subgraph_data = Data(
             x=graph.x[subset] if graph.x is not None else None,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            y=graph.y if hasattr(graph, 'y') else None,
         )
         
-        # Copy other attributes if they exist
+        # Handle positional features - subset them properly
+        if hasattr(graph, 'pos') and graph.pos is not None:
+            subgraph_data.pos = graph.pos[subset]  # Only keep positions of selected nodes
+        
+        # Handle target values - subset them properly 
+        if hasattr(graph, 'y') and graph.y is not None:
+            subgraph_data.y = graph.y[subset]  # Only keep targets of selected nodes
+        
+        # Copy other attributes selectively (avoid copying node-level attributes)
+        node_level_attrs = {'x', 'edge_index', 'edge_attr', 'y', 'pos', 'num_nodes', 'num_edges'}
         for key, value in graph.items():
-            if key not in ['x', 'edge_index', 'edge_attr', 'y', 'num_nodes', 'num_edges']:
-                setattr(subgraph_data, key, value)
+            if key not in node_level_attrs:
+                # Only copy graph-level attributes, not node-level ones
+                if not torch.is_tensor(value) or value.size(0) != graph.num_nodes:
+                    setattr(subgraph_data, key, value)
         
         return subgraph_data
     
