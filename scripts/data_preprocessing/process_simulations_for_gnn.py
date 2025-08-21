@@ -639,7 +639,7 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
         # Store multiple target options
         #data.y = compute_target_tensor_only_edge_features(vol_base_case, gdf, target_feature, target_feature_normalization_type)
         
-        # Additional target options - you can add more as needed
+        # Additional target variable options
         data.y_abs_vol_car=compute_target_tensor_only_edge_features(vol_base_case, gdf, 'vol_car', 'none') #no normalization
         data.y_abs_vol_car_percentage=compute_target_tensor_only_edge_features(vol_base_case, gdf, 'vol_car_percentage', 'none') #no normalization
         data.y_vol_car_signed_log = compute_target_tensor_only_edge_features(vol_base_case, gdf, 'vol_car', 'signed_log_normalization') #signed_log_normalization
