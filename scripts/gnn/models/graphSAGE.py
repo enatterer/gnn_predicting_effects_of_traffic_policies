@@ -134,6 +134,14 @@ class GraphSAGE(BaseGNN):
         x = data.x.to(self.dtype)
         edge_index = data.edge_index
         
+        if self.use_pos:
+            if hasattr(data, 'pos'):
+                pos = data.pos.to(self.dtype)
+                # Concatenate position features if available
+                x = torch.cat([x, pos], dim=-1)
+            else:
+                raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
+        
         x = x.to(self.dtype)
         # Apply GraphSAGE layers
         for i in range(len(self.hidden_channels)):
