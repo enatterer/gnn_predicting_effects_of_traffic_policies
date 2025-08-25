@@ -1,0 +1,11 @@
+{
+    "use_anchor_pe": true,
+    "anchor_k": 8,
+    "anchor_m": 4,
+    "use_lap_pe": false,
+    "use_rwse": false,
+    "use_pos": true,
+    "embed_dim": 128,
+    "num_layers": 4,
+    "num_heads": 8
+}
