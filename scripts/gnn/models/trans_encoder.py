@@ -167,7 +167,7 @@ class TransEncoder(BaseGNN):
                  num_heads: int = 4,
                  num_layers: int = 5,
                  num_nodes: int = 31635,
-                 use_pos: bool = False,
+                 use_pos: bool = True,
                  use_pos_encoding: bool = False,
                  # LapPE
                  use_lap_pe: bool = False,
@@ -195,7 +195,7 @@ class TransEncoder(BaseGNN):
         # Calculate effective input channels
         effective_in_channels = in_channels
         if use_pos:
-            effective_in_channels += 2
+            effective_in_channels += 6
         if use_lap_pe:
             effective_in_channels += lap_pe_dim
         if use_anchor_pe:
@@ -239,6 +239,7 @@ class TransEncoder(BaseGNN):
         # Log to wandb
         if self.log_to_wandb:
             wandb.config.update({
+                'in_channels': self.in_channels,
                 'use_pos': use_pos,
                 'use_pos_encoding': use_pos_encoding,
                 'use_lap_pe': use_lap_pe,
@@ -253,7 +254,13 @@ class TransEncoder(BaseGNN):
                 'ff_dim': ff_dim,
                 'num_heads': num_heads,
                 'num_layers': num_layers,
+                'num_nodes': num_nodes,
+                'use_graph_conv': use_graph_conv,
+                'use_graph_norm': use_graph_norm,
+                'graph_conv_type': graph_conv_type,
+                'num_graph_conv_layers': num_graph_conv_layers,
                 'pad_to': pad_to,
+                'pad_value': pad_value,
             }, allow_val_change=True)
 
         self.define_layers()
@@ -312,8 +319,23 @@ class TransEncoder(BaseGNN):
 
             # Add coordinate features
             if self.use_pos:
-                pos = d.pos[:, 2, :].to(device)  # [num_nodes, 2]
-                xi = torch.cat([xi, pos], dim=-1)
+                if hasattr(d, 'pos'):
+                    pos = d.pos.to(self.dtype)
+                    # Handle different position tensor shapes
+                    if len(pos.shape) == 3:
+                        # Shape is [N, 3, 2] - flatten to get all 6 coordinates
+                        # This gives us [start_x, start_y, end_x, end_y, mid_x, mid_y] for each node
+                        pos = pos.view(pos.shape[0], -1)  # Shape becomes [N, 6]
+                    elif len(pos.shape) == 2:
+                        # Shape is already [N, features] - use as is
+                        pass
+                    else:
+                        raise ValueError(f"Unexpected position tensor shape: {pos.shape}")
+                    
+                    # Now concatenate - both should be 2D tensors
+                    xi = torch.cat([xi, pos], dim=-1)
+                else:
+                    raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
 
             # Add Laplacian PE
             if self.use_lap_pe:
@@ -322,9 +344,25 @@ class TransEncoder(BaseGNN):
 
             # Add Anchor Distance Encoding
             if self.use_anchor_pe:
-                pos = d.pos[:, 2, :].to(device)
-                ade = anchor_distance_encoding(pos, d.edge_index, K=self.anchor_k, M=self.anchor_m)
-                xi = torch.cat([xi, ade], dim=-1)
+                if hasattr(d, 'pos'):
+                    pos = d.pos.to(device)
+                    # Handle different position tensor shapes for anchor PE
+                    if len(pos.shape) == 3:
+                        # Shape is [N, 3, 2] - use midpoint coordinates for anchor distances
+                        pos = pos[:, 2, :]  # [N, 2] - midpoint coordinates
+                    elif len(pos.shape) == 2:
+                        # Shape is already [N, 2] or [N, 6] - extract first 2 columns as coordinates
+                        if pos.shape[1] >= 2:
+                            pos = pos[:, :2]  # [N, 2] - use first 2 coordinates
+                        else:
+                            raise ValueError(f"Position tensor has insufficient coordinates: {pos.shape}")
+                    else:
+                        raise ValueError(f"Unexpected position tensor shape for anchor PE: {pos.shape}")
+                    
+                    ade = anchor_distance_encoding(pos, d.edge_index, K=self.anchor_k, M=self.anchor_m)
+                    xi = torch.cat([xi, ade], dim=-1)
+                else:
+                    raise ValueError("Anchor PE is enabled but 'pos' attribute is missing in data.")
 
             # Add Random Walk Structural Encoding (if precomputed)
             if self.use_rwse and hasattr(d, 'rw_pe'):
@@ -363,62 +401,35 @@ class TransEncoder(BaseGNN):
                     x = self.dropout_layer(x)
             data.x = x
 
-        # Process for transformer (now x has embed_dim from graph conv)
+        # Process each graph separately through transformer
         if isinstance(data, Batch):
             datalist = data.to_data_list()
         elif isinstance(data, Data):
             datalist = [data]
 
-        x_list, lengths = [], []
-        for d in datalist:
-            xi = d.x  # [num_nodes, embed_dim] after graph conv
-            lengths.append(xi.size(0))
-            x_list.append(xi.to(device))
-
-        # Pad sequences
-        lengths = torch.tensor(lengths, device=device)
-        max_len = int(lengths.max().item())
-        target_len = self.pad_to if self.pad_to is not None else max_len
-
-        if self.use_pos_encoding and target_len > self.num_nodes:
-            raise ValueError(
-                f"pad_to/max_len ({target_len}) exceeds num_nodes ({self.num_nodes})"
-            )
-
-        padded = pad_sequence(x_list, batch_first=True, padding_value=self.pad_value)
-        B, cur_S, C = padded.shape
+        all_predictions = []
         
-        if target_len > cur_S:
-            extra = torch.full((B, target_len-cur_S, C), self.pad_value,
-                               dtype=padded.dtype, device=device)
-            padded = torch.cat([padded, extra], dim=1)
-        elif target_len < cur_S:
-            padded = padded[:, :target_len, :]
-            lengths = torch.clamp(lengths, max=target_len)
-
-        # Create attention mask
-        arange_S = torch.arange(padded.size(1), device=device).unsqueeze(0)
-        key_padding_mask = arange_S >= lengths.unsqueeze(1)
-
-        # Features are already embedded by graph conv to embed_dim
-        x = padded.to(self.dtype)
-        if x.size(-1) != self.embed_dim:
-            x = self.embed(x)
-
-        # Add learnable positional encoding
-        if self.use_pos_encoding:
-            node_indices = torch.arange(x.size(1), device=device).long()
-            pos_emb = self.pos_embedding(node_indices)
-            pos_emb = pos_emb.unsqueeze(0).expand(x.size(0), -1, -1)
-            x = x + pos_emb
-
-        # Transformer processing
-        x = self.transformer(x, src_key_padding_mask=key_padding_mask)
-        x = self.output(x)
-
-        # Unpad predictions
-        lengths = (~key_padding_mask).sum(dim=1)
-        preds_list = [x[i, :lengths[i]] for i in range(x.size(0))]
-        preds_compact = torch.cat(preds_list, dim=0)
-
-        return preds_compact
+        for d in datalist:
+            x = d.x.unsqueeze(0)  # [1, num_nodes, embed_dim]
+            
+            if x.size(-1) != self.embed_dim:
+                x = self.embed(x)
+            
+            # Add positional encoding for this graph only
+            if self.use_pos_encoding:
+                seq_len = x.size(1)
+                if seq_len <= self.num_nodes:
+                    node_indices = torch.arange(seq_len, device=device).long()
+                    pos_emb = self.pos_embedding(node_indices)
+                    pos_emb = pos_emb.unsqueeze(0)  # [1, seq_len, embed_dim]
+                    x = x + pos_emb
+            
+            # No padding mask needed since we process each graph individually
+            x = self.transformer(x)  # [1, num_nodes, embed_dim]
+            x = self.output(x.squeeze(0))  # [num_nodes, 1]
+            
+            all_predictions.append(x.squeeze(-1))  # [num_nodes] - 1D
+        
+        # Return with correct shape to match target
+        result = torch.cat(all_predictions, dim=0)  # [total_nodes_across_batch]
+        return result.unsqueeze(-1)  # [total_nodes_across_batch, 1] - matches target shape
