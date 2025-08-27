@@ -387,7 +387,6 @@ def validate_model_during_training(config: object,
                 mode_stats_predictions.append(mode_stats_pred)
             else:
                 val_loss += loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
-                print('val_loss', val_loss)
                 
             # Collect predictions and targets for potential percentage metrics (kept for future use)
             if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
@@ -423,6 +422,7 @@ def validate_model_during_training(config: object,
             torch.cuda.empty_cache()
     
     print("Validation completed!")
+    print(f"Total validation loss (sum): {val_loss:.4f}")
     
     # Compute log-space metrics (with memory cleanup)
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
