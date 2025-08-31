@@ -226,7 +226,7 @@ class BaseGNN(nn.Module, ABC):
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_train=scalers_train
+                    scalers=scalers_train
                 )
                 # Epoch level logging
                 log_dict = {
@@ -251,7 +251,7 @@ class BaseGNN(nn.Module, ABC):
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_train=scalers_train
+                    scalers=scalers_train
                 )
                 # Epoch level logging
                 log_dict = {
@@ -376,8 +376,8 @@ class BaseGNN(nn.Module, ABC):
                     param_group['lr'] = lr
                     
                 data = data.to(device)
-                targets_node_predictions = data.y
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
+                targets_node_predictions = select_target_tensor(data, config.target_type)
+                #x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy()) #use this if we need weighted loss
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
@@ -386,12 +386,12 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     if config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
-                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data, data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
                         train_loss = train_loss_node_predictions + train_loss_mode_stats
                     else:
                         predicted = self(data)
-                        train_loss = loss_fct(predicted, targets_node_predictions, x_unscaled)
+                        train_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
