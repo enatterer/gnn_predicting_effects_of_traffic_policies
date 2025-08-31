@@ -142,6 +142,7 @@ def main():
             train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
+                                                                             variant=args['project_name'],
                                                                              batch_size=args['batch_size'],
                                                                              path_to_save_dataloader=path_to_save_dataloader,
                                                                              use_all_features=args['use_all_features'],
