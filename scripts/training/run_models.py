@@ -37,9 +37,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['wuerzburg','aschaffenburg','regensburg','schweinfurt','rosenheim']
-val_cities =[] # Non empty implies inductive learning
-test_cities = [] # Non empty implies inductive learning
+train_cities = ['bamberg']
+val_cities =['schweinfurt'] # Non empty implies inductive learning
+test_cities = ['rosenheim'] # Non empty implies inductive learning
     
 def main():
     
@@ -85,6 +85,8 @@ def main():
                         choices=["neighbor_sampling", "random_walk"]) # TODO: New for GraphSAGE
     parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE
     parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.") # TODO: New for GraphSAGE
+    #parameter for Data Augmentation
+    parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
     
     args = vars(parser.parse_args())
     
@@ -136,7 +138,8 @@ def main():
         else:
             test_data = None
 
-        train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
+        if args['project_name'] == 'GNN_Transductive':
+            train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
                                                                              batch_size=args['batch_size'],
@@ -151,8 +154,28 @@ def main():
                                                                              sampling_strategy=args['sampling_strategy'],
                                                                              min_subgraph_nodes=args['min_subgraph_nodes'],
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
-                                                                             is_eign=(args['gnn_arch'] == "eign"))
-        
+                                                                             is_eign=(args['gnn_arch'] == "eign"),
+                                                                             use_data_augmentation=args['use_data_augmentation'])
+        else: #for 'GNN_Inductive' as project name
+            train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
+                                                                                                        val_data=val_data,
+                                                                                                        test_data=test_data,
+                                                                                                        variant=args['project_name'],
+                                                                                                        batch_size=args['batch_size'],
+                                                                                                        path_to_save_dataloader=path_to_save_dataloader,
+                                                                                                        use_all_features=args['use_all_features'],
+                                                                                                        use_bootstrapping=args['use_bootstrapping'],
+                                                                                                        use_weighted_sampling=args['use_weighted_sampling'],
+                                                                                                        use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
+                                                                                                        neighbor_sizes=args['neighbor_sizes'],
+                                                                                                        subgraphs_per_graph=args['subgraphs_per_graph'],
+                                                                                                        seed_size=args['seed_size'],
+                                                                                                        sampling_strategy=args['sampling_strategy'],
+                                                                                                        min_subgraph_nodes=args['min_subgraph_nodes'],
+                                                                                                        max_subgraph_nodes=args['max_subgraph_nodes'],
+                                                                                                        is_eign=(args['gnn_arch'] == "eign"),
+                                                                                                        use_data_augmentation=args['use_data_augmentation'])
+
         # Create WandB config
         config = setup_wandb(args)
 
@@ -178,7 +201,19 @@ def main():
         # print("baseline loss no  " + str(baseline_loss) )
 
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
-        best_val_loss, best_epoch = gnn_instance.train_model(config=config,
+        if args['project_name'] == 'GNN_Transductive':
+            best_val_loss, best_epoch = gnn_instance.train_model(config=config,
+                                                                 loss_fct=loss_fct,
+                                                                 optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                                 train_dl=train_dl,
+                                                                 valid_dl=valid_dl,
+                                                             device=device,
+                                                             early_stopping=early_stopping,
+                                                             model_save_path=model_save_path,
+                                                             scalers_train=scalers_train,
+                                                             target_normalization=config.target_normalization)
+        else:
+            best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                              loss_fct=loss_fct,
                                                              optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
                                                              train_dl=train_dl,
@@ -187,7 +222,7 @@ def main():
                                                              early_stopping=early_stopping,
                                                              model_save_path=model_save_path,
                                                              scalers_train=scalers_train,
-                                                             target_normalization=config.target_normalization)
+                                                             scalers_validation=scalers_validation)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
