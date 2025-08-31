@@ -127,11 +127,12 @@ def get_memory_info():
     return total_memory, available_memory, used_memory
 
 # test_data implies use of complete inductive testing
-def prepare_data_with_graph_features(train_data, val_data, test_data,
+def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
-                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign):
+                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
+                                     use_data_augmentation):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
@@ -180,20 +181,84 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     # scalers_test = copy.deepcopy(scalers_train)
 
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+
+    if variant == 'GNN_Transductive':
+        # MODIFIED: Use simple collate function without scaling
+        #collate_with_scaler = partial(scale_and_collate, scaler=scalers_train['x_scaler'], continuous_feat=continuous_feat, node_feature_filter=node_feature_filter)
+        collate_without_scaling_fn = partial(collate_without_scaling, node_feature_filter=node_feature_filter, augment_pos_rotation=use_data_augmentation)
+        print('Data Augmentation:', use_data_augmentation)
+
+        print("Creating base train loader...")
+        base_train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
+                                    shuffle=True if not use_weighted_sampling else None,
+                                    sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
+                                    num_workers=2, prefetch_factor=2, pin_memory=True, 
+                                    collate_fn=collate_without_scaling_fn,
+                                    worker_init_fn=seed_worker,
+                                    drop_last=False)
+        #print(f"Memory_per_graph: {estimate_average_graph_memory(base_train_loader, num_samples=100)} MB")
+        print("Creating validation loader...")
+        val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
+                            shuffle=True if not use_weighted_sampling else None,
+                            sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
+                            num_workers=2, pin_memory=True, 
+                            collate_fn=collate_without_scaling_fn,
+                            worker_init_fn=seed_worker,
+                            drop_last=False)
     
-    # MODIFIED: Use simple collate function without scaling
-    #collate_with_scaler = partial(scale_and_collate, scaler=scalers_train['x_scaler'], continuous_feat=continuous_feat, node_feature_filter=node_feature_filter)
-    collate_without_scaler = partial(collate_without_scaling, node_feature_filter=node_feature_filter) 
-    
-    print("Creating base train loader...")
-    base_train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
+        print("Creating test loader...")
+        test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
                                 shuffle=True if not use_weighted_sampling else None,
-                                sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
-                                num_workers=2, prefetch_factor=2, pin_memory=True, 
-                                collate_fn=collate_without_scaler,
+                                sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
+                                num_workers=2, 
+                                collate_fn=collate_without_scaling_fn,
                                 worker_init_fn=seed_worker,
                                 drop_last=False)
-    #print(f"Memory_per_graph: {estimate_average_graph_memory(base_train_loader, num_samples=100)} MB")
+    else:
+        collate_fn_aug = partial(collate_fn, augment_pos_rotation=use_data_augmentation)
+        print('Data Augmentation:', use_data_augmentation)
+        print("Normalizing train set...")
+        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
+        print("Train set normalized")      
+        
+        print("Normalizing validation set...")
+        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, is_eign=is_eign)
+        print("Validation set normalized")
+        
+        print("Normalizing test set...")
+        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, is_eign=is_eign)
+        print("Test set normalized")
+        
+        print("Creating train loader...")
+        base_train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        print("Train loader created")
+        
+        print("Creating validation loader...")
+        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        print("Validation loader created")
+        
+        print("Creating test loader...")
+        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        print("Test loader created")
+        
+        joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
+        #if not is_eign:
+            #joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
+        # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
+
+        joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
+        #if not is_eign:
+            #joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
+        # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
+
+        joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
+        #if not is_eign:
+            #joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
+        # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
+        
+        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        print("Dataloaders and scalers saved")
     
     if use_nested_neighbor_loader:
         train_loader = nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
@@ -205,23 +270,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     else:
         train_loader = base_train_loader
     
-    print("Creating validation loader...")
-    val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
-                            shuffle=True if not use_weighted_sampling else None,
-                            sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
-                            num_workers=2, pin_memory=True, 
-                            collate_fn=collate_without_scaler,
-                            worker_init_fn=seed_worker,
-                            drop_last=False)
     
-    print("Creating test loader...")
-    test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
-                                shuffle=True if not use_weighted_sampling else None,
-                                sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
-                                num_workers=2, 
-                                collate_fn=collate_without_scaler,
-                                worker_init_fn=seed_worker,
-                                drop_last=False)
     
     # COMMENTED OUT: No need to save scalers for features
     # joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
@@ -248,7 +297,10 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,
     print("Test dataloader saved.")
     
     # MODIFIED: Return None for scalers since we don't need them
-    return train_loader, val_loader, None  # was: scalers_train
+    if variant=='GNN_Transductive':
+        return train_loader, val_loader, test_loader
+    else:
+        return train_loader, val_loader, scalers_train, scalers_validation
 
 def nested_dataloader(base_train_loader: DataLoader,
                                     neighbor_sizes: list[int] = [15, 10, 5],
@@ -400,25 +452,6 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
     # One-hot encode highway
     if "HIGHWAY" in node_features:
         one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
-    
-    return data_list, scaler
-
-def normalize_modestats_features_batched(data_list, batch_size=1000):
-    scaler = StandardScaler()
-    
-    # First pass: Fit the scaler
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
-        batch = data_list[i:i+batch_size]
-        batch_modestats = np.vstack([data.mode_stats.numpy().reshape(1, -1) for data in batch])
-        scaler.partial_fit(batch_modestats)
-    
-    # Second pass: Transform the data
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing modestats features"):
-        batch = data_list[i:i+batch_size]
-        for data in batch:
-            modestats_reshaped = data.mode_stats.numpy().reshape(1, -1)
-            modestats_normalized = scaler.transform(modestats_reshaped)
-            data.mode_stats = torch.tensor(modestats_normalized.reshape(6, 2), dtype=torch.float32)
     
     return data_list, scaler
 
@@ -795,9 +828,11 @@ class NestedNeighborDataset(Dataset):
             if hasattr(subgraph, 'pos') and hasattr(subgraph, 'n_id'):
                 # n_id contains mapping from subgraph nodes to original nodes
                 subgraph.pos = graph.pos[subgraph.n_id]
+                theta = random.uniform(0, 2 * math.pi)
+                subgraph.pos = rotate_pos(subgraph.pos, theta)
             return subgraph
     
-    def _random_walk_subgraph(self, graph: Data, walk_length: int = 10, num_walks: int = 3) -> Data:
+    def _random_walk_subgraph(self, graph: Data, walk_length: int = 13, num_walks: int = 4) -> Data:
         """Sample subgraph using random walks."""
         if graph.num_nodes == 0:
             return graph.clone()
@@ -925,7 +960,9 @@ class NestedNeighborDataset(Dataset):
         
         # Apply feature filtering to the subgraph
         if hasattr(self, 'node_feature_filter') and self.node_feature_filter is not None:
-            subgraph.x = subgraph.x[:, self.node_feature_filter]
+            # Only filter if number of features is greater than max index in filter
+            if subgraph.x.shape[1] > max(self.node_feature_filter):
+                subgraph.x = subgraph.x[:, self.node_feature_filter]
         
         return subgraph
 class EarlyStopping:
