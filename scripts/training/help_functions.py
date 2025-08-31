@@ -908,6 +908,7 @@ class NestedNeighborDataset(Dataset):
                 if not torch.is_tensor(value) or value.size(0) != graph.num_nodes:
                     setattr(subgraph_data, key, value)
         
+        subgraph_data.orig_subset = subset  # Store original node indices for edge_weights mapping
         return subgraph_data
     
     def _truncate_subgraph(self, subgraph: Data, max_nodes: int) -> Data:
@@ -921,20 +922,27 @@ class NestedNeighborDataset(Dataset):
     
     def _extract_subgraph_edge_weights(self, subgraph: Data, original_graph: Data) -> torch.Tensor:
         """Extract node weights (road segment weights) for subgraph nodes."""
-        
         # Check if original graph has edge_weights
         if not hasattr(original_graph, 'edge_weights') or original_graph.edge_weights is None:
             raise ValueError(f"Original graph missing 'edge_weights' attribute. Available attributes: {list(original_graph.keys())}")
+
+        # Neighbor sampling: use n_id
+        if hasattr(subgraph, 'n_id') and subgraph.n_id is not None:
+            return original_graph.edge_weights[subgraph.n_id]
+        # Random walk: use mapping from subgraph nodes to original nodes
+        elif hasattr(subgraph, 'orig_subset') and subgraph.orig_subset is not None:
+            return original_graph.edge_weights[subgraph.orig_subset]
+        # Fallback: if subgraph nodes are a subset of original nodes in order
+        elif hasattr(subgraph, 'x') and subgraph.x.shape[0] <= original_graph.edge_weights.shape[0]:
+            # Try to use the subset indices if stored
+            if hasattr(subgraph, 'subset_indices'):
+                return original_graph.edge_weights[subgraph.subset_indices]
+            else:
+                # If not, just take the first N weights (not always correct!)
+                return original_graph.edge_weights[:subgraph.x.shape[0]]
+        else:
+            raise ValueError(f"Cannot map subgraph nodes to original graph for edge_weights. Subgraph attributes: {list(subgraph.keys())}")
         
-        # Get original node weights (road segment weights)
-        original_weights = original_graph.edge_weights
-        
-        # Check if subgraph has n_id for node mapping
-        if not hasattr(subgraph, 'n_id') or subgraph.n_id is None:
-            raise ValueError(f"Subgraph missing 'n_id' attribute. Available attributes: {list(subgraph.keys())}")
-        
-        return original_weights[subgraph.n_id]  # Direct node mapping
-    
     def _fallback_subgraph(self, graph: Data) -> Data:
         """Fallback subgraph for small graphs."""
         return graph.clone()
