@@ -7,6 +7,23 @@ from sklearn.model_selection import train_test_split
 import torch
 from torch.utils.data import Subset, Dataset
 from torch_geometric.data import Batch
+import math
+import random
+
+def rotate_pos(pos, theta):
+    """Rotate 2D positions by theta radians."""
+    if pos is None or pos.shape[1] < 2:
+        return pos
+    rot_matrix = torch.tensor([
+        [math.cos(theta), -math.sin(theta)],
+        [math.sin(theta),  math.cos(theta)]
+    ], dtype=pos.dtype, device=pos.device)
+    pos_xy = pos[:, :2] @ rot_matrix.T
+    if pos.shape[1] > 2:
+        pos_aug = torch.cat([pos_xy, pos[:, 2:]], dim=1)
+    else:
+        pos_aug = pos_xy
+    return pos_aug
 
 class GraphDataset(Dataset):
     def __init__(self, paths, labels):
@@ -114,29 +131,22 @@ def save_dataloader_params(dataloader, file_path):
     with open(file_path, 'w') as f:
         json.dump(params, f)
 
-def collate_fn(data_list):
+def collate_fn(data_list, augment_pos_rotation=False):
+    # On-the-fly rotation augmentation
+    if augment_pos_rotation:
+        for data in data_list:
+            if hasattr(data, 'pos') and data.pos is not None:
+                theta = random.uniform(0, 2 * math.pi)
+                data.pos = rotate_pos(data.pos, theta)
     return Batch.from_data_list(data_list)
 
-def scale_and_collate(batch, scaler, continuous_feat, node_feature_filter):
-    
-    # Large disconnected graph
-    batch = Batch.from_data_list(batch)
-    
-    # Scale continuous x features
-    x = batch.x[:, continuous_feat].numpy()
-    x_normalized = scaler.transform(x)
-    batch.x[:, continuous_feat] = torch.tensor(x_normalized, dtype=batch.x.dtype)
-
-    # Filter node features
-    batch.x = batch.x[:, node_feature_filter]
-    
-    return batch
-
-def collate_without_scaling(batch, node_feature_filter):
-    """
-    Collate function that filters features but doesn't apply scaling
-    since features are already normalized during preprocessing.
-    """
+def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False):
+    # On-the-fly rotation augmentation
+    if augment_pos_rotation:
+        for data in batch:
+            if hasattr(data, 'pos') and data.pos is not None:
+                theta = random.uniform(0, 2 * math.pi)
+                data.pos = rotate_pos(data.pos, theta)
     batch = Batch.from_data_list(batch)
     
     # Filter node features
