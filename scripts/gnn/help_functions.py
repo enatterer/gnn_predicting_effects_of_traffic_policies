@@ -313,7 +313,7 @@ def validate_model_during_training(config: object,
                                    dataset: DataLoader, 
                                    loss_func: nn.Module, 
                                    device: torch.device,
-                                   scalers_train: dict) -> tuple:
+                                   scalers: dict) -> tuple:
     """
     Validate the model during training, with support for mode stats predictions and log-space evaluation.
 
@@ -323,7 +323,7 @@ def validate_model_during_training(config: object,
     - dataset (DataLoader): Validation dataset loader.
     - loss_func (nn.Module): Loss function for validation.
     - device (torch.device): Device to perform validation on.
-    - scalers_validation (dict): x and pos scalers for validation data.
+    - scalers (dict): x and pos scalers for validation data.
 
     Returns:
     - tuple: Validation metrics including log-space loss and correlations.
@@ -355,16 +355,11 @@ def validate_model_during_training(config: object,
             
             # Import the target selection function
             targets_node_predictions = select_target_tensor(data, config.target_type)
-            # Check if scalers are available (they may be None if features are pre-normalized)
-            if scalers_train is not None and "x_scaler" in scalers_train:
-                # Only inverse transform the continuous features that were originally normalized
-                continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
-                x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
-                x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
-            else:
-                # Features are already normalized during preprocessing, use them directly
-                x_unscaled = data.x
+            
+            # Since validation data is already normalized and filtered, use it directly
+            # No inverse transformation needed since we're not using weighted loss
+            # and the loss function works with normalized features
+            
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
             # Standard Forward Pass
@@ -372,11 +367,6 @@ def validate_model_during_training(config: object,
                 node_predicted, mode_stats_pred = model(data)
             else:
                 node_predicted = model(data)
-
-            # # Example MC Dropout Prediction, if to be used later. Use with torch.no_grad().
-            # mean_prediction, uncertainty = mc_dropout_predict(model, data, num_samples=50, device=device)
-            # node_predicted = torch.tensor(mean_prediction).to(device)
-            # mode_stats_pred = None  # MC Dropout currently only affects node predictions
 
             # Compute validation losses
             if config.predict_mode_stats:
@@ -401,9 +391,6 @@ def validate_model_during_training(config: object,
                     base_volumes = data.unscaled_vol_base
                 
                 batch_indices = data.batch  # Get batch indices for graph-level aggregation
-                
-                #print(f"DEBUG: Batch {idx} - pred_cars shape: {pred_cars_diff.shape}, batch_indices shape: {batch_indices.shape}")
-                #print(f"DEBUG: Batch {idx} - unique batch IDs: {torch.unique(batch_indices)}")
                 
                 all_pred_cars_diff.append(pred_cars_diff)
                 all_true_cars_diff.append(true_cars_diff)
@@ -492,14 +479,11 @@ def validate_model_during_training_eign(
             targets_node_predictions_unsigned = data.y if hasattr(data, 'y') else None
             
             # Check if scalers are available (they may be None if features are pre-normalized)
-            if scalers_validation is not None and "x_scaler" in scalers_validation:
-                # Only inverse transform the continuous features that were originally normalized
-                continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
-                x_unscaled = scalers_validation["x_scaler"].inverse_transform(continuous_features)
+            if scalers_validation is not None and "x_scaler" in scalers_validation: #Inductive case
+                x_unscaled = scalers_validation["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy())
                 x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
             else:
-                # Features are already normalized during preprocessing, use them directly
+                # Features are already normalized during preprocessing, use them directly Transductive case
                 x_unscaled = data
             
             if scalers_validation is not None and "x_signed_scaler" in scalers_validation:
