@@ -423,7 +423,7 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
     # Continuous features to normalize
     continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
                        EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
+                       #EdgeFeatures.CAPACITY_REDUCTION, since this is binary, no normalization
                        EdgeFeatures.FREESPEED,
                        EdgeFeatures.LENGTH]
     
@@ -467,7 +467,7 @@ def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_s
     # Continuous features to normalize
     continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
                        EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
+                       #EdgeFeatures.CAPACITY_REDUCTION,
                        EdgeFeatures.FREESPEED,
                        EdgeFeatures.LENGTH]
     
