@@ -49,7 +49,7 @@ class TransConv(BaseGNN):
         self.use_residuals = use_residuals
 
         if self.use_pos:
-            self.in_channels += 4 # x and y for start and end points
+            self.in_channels += 6 # x and y for start and end points
         
         if self.log_to_wandb:
             wandb.config.update({'hidden_channels': hidden_channels,
@@ -95,8 +95,9 @@ class TransConv(BaseGNN):
 
         if self.use_pos:
             pos1 = data.pos[:, 0, :]  # Start position
-            pos2 = data.pos[:, 1, :]  # End position
-            x = torch.cat((x, pos1, pos2), dim=1)  # Concatenate along the feature dimension
+            pos2 = data.pos[:, 1, :]  # Mid position
+            pos3 = data.pos[:, 2, :]  # End position
+            x = torch.cat((x, pos1, pos2, pos3), dim=1)  # Concatenate along the feature dimension
 
         x = x.to(self.dtype)
 
