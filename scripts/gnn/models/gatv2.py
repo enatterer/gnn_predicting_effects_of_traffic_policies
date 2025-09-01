@@ -108,7 +108,7 @@ class GATv2(BaseGNN):
             pos2 = data.pos[:, 1, :]  # Middle position
             pos3 = data.pos[:, 2, :]  # End position
             x = torch.cat((x, pos1, pos2, pos3), dim=1)  # Concatenate along the feature dimension
-            print(f"DEBUG: x shape after pos concat: {x.shape}")
+            #print(f"DEBUG: x shape after pos concat: {x.shape}")
 
         x = x.to(self.dtype)
 
