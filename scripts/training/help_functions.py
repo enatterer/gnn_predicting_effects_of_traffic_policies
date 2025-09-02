@@ -256,8 +256,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
             #joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
         # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
         
-        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
         print("Dataloaders and scalers saved")
     
     if use_nested_neighbor_loader:
