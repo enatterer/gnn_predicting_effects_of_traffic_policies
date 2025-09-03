@@ -132,6 +132,13 @@ def save_dataloader_params(dataloader, file_path):
         json.dump(params, f)
 
 def collate_fn(data_list, augment_pos_rotation=False):
+    # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
+    for data in data_list:
+        if hasattr(data, 'pos') and data.pos is not None:
+            if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
+                # Extract middle position (index 1)
+                data.pos = data.pos[:, 1, :].contiguous()
+    
     # On-the-fly rotation augmentation
     if augment_pos_rotation:
         for data in data_list:
@@ -141,6 +148,13 @@ def collate_fn(data_list, augment_pos_rotation=False):
     return Batch.from_data_list(data_list)
 
 def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False):
+    # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
+    for data in batch:
+        if hasattr(data, 'pos') and data.pos is not None:
+            if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
+                # Extract middle position (index 1)
+                data.pos = data.pos[:, 1, :].contiguous()
+    
     # On-the-fly rotation augmentation
     if augment_pos_rotation:
         for data in batch:
