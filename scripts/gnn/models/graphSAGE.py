@@ -70,7 +70,7 @@ class GraphSAGE(BaseGNN):
 
         # Adjust input channels if using position features
         if self.use_pos:
-            self.in_channels += 6  # Add 6 for start, end, midpoint coordinates (3 points × 2 coords each)
+            self.in_channels += 2  # Add 2 for start, end coordinates (midpoint)
 
         if self.log_to_wandb:
             wandb.config.update({
@@ -133,30 +133,28 @@ class GraphSAGE(BaseGNN):
         
 
     def forward(self, data):
-
-        # Unpack data
-        x = data.x.to(self.dtype)
-        edge_index = data.edge_index
-        
+        x, edge_index = data.x, data.edge_index
+    
         if self.use_pos:
-            if hasattr(data, 'pos'):
-                pos = data.pos.to(self.dtype)
-                # Handle different position tensor shapes
-                if len(pos.shape) == 3:
-                    # Shape is [N, 3, 2] - flatten to get all 6 coordinates
-                    # This gives us [start_x, start_y, end_x, end_y, mid_x, mid_y] for each node
-                    pos = pos.view(pos.shape[0], -1)  # Shape becomes [N, 6]
-                elif len(pos.shape) == 2:
-                    # Shape is already [N, features] - use as is
-                    pass
-                else:
-                    raise ValueError(f"Unexpected position tensor shape: {pos.shape}")
-                
-                # Now concatenate - both should be 2D tensors
-                x = torch.cat([x, pos], dim=-1)
-            else:
+            if not hasattr(data, 'pos') or data.pos is None:
                 raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
         
+            pos = data.pos
+            
+            # Handle different pos shapes
+            if len(pos.shape) == 3:
+                # If still [N, 3, 2], extract middle position
+                if pos.shape[1] == 3:
+                    pos = pos[:, 1, :]  # Take middle position
+                pos = pos.view(pos.size(0), -1)  # Flatten to [N, 2]
+            elif len(pos.shape) == 2:
+                # Already 2D, check if it needs flattening
+                if pos.shape[1] != 2:
+                    pos = pos.view(pos.size(0), -1)  # Flatten if needed
+        
+            # Concatenate x and pos features
+            x = torch.cat([x, pos], dim=1)
+    
         x = x.to(self.dtype)
         # Apply GraphSAGE layers
         for i in range(len(self.hidden_channels)):
