@@ -195,7 +195,7 @@ class TransEncoder(BaseGNN):
         # Calculate effective input channels
         effective_in_channels = in_channels
         if use_pos:
-            effective_in_channels += 6
+            effective_in_channels += 2  # Only middle position (x, y coordinates)
         if use_lap_pe:
             effective_in_channels += lap_pe_dim
         if use_anchor_pe:
@@ -319,20 +319,9 @@ class TransEncoder(BaseGNN):
 
             # Add coordinate features
             if self.use_pos:
-                if hasattr(d, 'pos'):
+                if hasattr(d, 'pos') and d.pos is not None:
+                    # pos is already [N, 2] from collate function (middle position only)
                     pos = d.pos.to(self.dtype)
-                    # Handle different position tensor shapes
-                    if len(pos.shape) == 3:
-                        # Shape is [N, 3, 2] - flatten to get all 6 coordinates
-                        # This gives us [start_x, start_y, end_x, end_y, mid_x, mid_y] for each node
-                        pos = pos.view(pos.shape[0], -1)  # Shape becomes [N, 6]
-                    elif len(pos.shape) == 2:
-                        # Shape is already [N, features] - use as is
-                        pass
-                    else:
-                        raise ValueError(f"Unexpected position tensor shape: {pos.shape}")
-                    
-                    # Now concatenate - both should be 2D tensors
                     xi = torch.cat([xi, pos], dim=-1)
                 else:
                     raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
@@ -344,21 +333,9 @@ class TransEncoder(BaseGNN):
 
             # Add Anchor Distance Encoding
             if self.use_anchor_pe:
-                if hasattr(d, 'pos'):
+                if hasattr(d, 'pos') and d.pos is not None:
+                    # pos is already [N, 2] from collate function
                     pos = d.pos.to(device)
-                    # Handle different position tensor shapes for anchor PE
-                    if len(pos.shape) == 3:
-                        # Shape is [N, 3, 2] - use midpoint coordinates for anchor distances
-                        pos = pos[:, 2, :]  # [N, 2] - midpoint coordinates
-                    elif len(pos.shape) == 2:
-                        # Shape is already [N, 2] or [N, 6] - extract first 2 columns as coordinates
-                        if pos.shape[1] >= 2:
-                            pos = pos[:, :2]  # [N, 2] - use first 2 coordinates
-                        else:
-                            raise ValueError(f"Position tensor has insufficient coordinates: {pos.shape}")
-                    else:
-                        raise ValueError(f"Unexpected position tensor shape for anchor PE: {pos.shape}")
-                    
                     ade = anchor_distance_encoding(pos, d.edge_index, K=self.anchor_k, M=self.anchor_m)
                     xi = torch.cat([xi, ade], dim=-1)
                 else:
