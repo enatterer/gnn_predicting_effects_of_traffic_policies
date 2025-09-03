@@ -59,7 +59,7 @@ class GATv2(BaseGNN):
         self.add_self_loops = add_self_loops
 
         if self.use_pos:
-            self.in_channels += 6 # x and y for start, middle and end points
+            self.in_channels += 2  # Only middle position (x, y coordinates)
 
         if self.log_to_wandb:
             wandb.config.update({'in_channels': self.in_channels,
@@ -104,11 +104,12 @@ class GATv2(BaseGNN):
         edge_index = data.edge_index
 
         if self.use_pos:
-            pos1 = data.pos[:, 0, :]  # Start position
-            pos2 = data.pos[:, 1, :]  # Middle position
-            pos3 = data.pos[:, 2, :]  # End position
-            x = torch.cat((x, pos1, pos2, pos3), dim=1)  # Concatenate along the feature dimension
-            #print(f"DEBUG: x shape after pos concat: {x.shape}")
+            if not hasattr(data, 'pos') or data.pos is None:
+                raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
+            
+            # pos is already [N, 2] from collate function (middle position only)
+            pos = data.pos
+            x = torch.cat([x, pos], dim=1)  # Concatenate along the feature dimension
 
         x = x.to(self.dtype)
 
