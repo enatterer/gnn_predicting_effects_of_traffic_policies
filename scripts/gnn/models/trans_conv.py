@@ -49,8 +49,8 @@ class TransConv(BaseGNN):
         self.use_residuals = use_residuals
 
         if self.use_pos:
-            self.in_channels += 6 # x and y for start and end points
-        
+            self.in_channels += 2  # Only middle position (x, y coordinates)
+
         if self.log_to_wandb:
             wandb.config.update({'hidden_channels': hidden_channels,
                                 'num_heads': num_heads,
@@ -94,10 +94,12 @@ class TransConv(BaseGNN):
         edge_index = data.edge_index
 
         if self.use_pos:
-            pos1 = data.pos[:, 0, :]  # Start position
-            pos2 = data.pos[:, 1, :]  # Mid position
-            pos3 = data.pos[:, 2, :]  # End position
-            x = torch.cat((x, pos1, pos2, pos3), dim=1)  # Concatenate along the feature dimension
+            if not hasattr(data, 'pos') or data.pos is None:
+                raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
+            
+            # pos is already [N, 2] from collate function (middle position only)
+            pos = data.pos
+            x = torch.cat([x, pos], dim=1)  # Concatenate along the feature dimension
 
         x = x.to(self.dtype)
 
