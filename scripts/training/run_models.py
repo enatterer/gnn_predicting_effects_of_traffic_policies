@@ -37,9 +37,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['bamberg']
-val_cities =['schweinfurt'] # Non empty implies inductive learning
-test_cities = ['rosenheim'] # Non empty implies inductive learning
+train_cities = ['schweinfurt','bamberg']
+val_cities =['rosenheim'] # Non empty implies inductive learning
+test_cities = ['bamberg'] # Non empty implies inductive learning
     
 def main():
     
@@ -87,6 +87,7 @@ def main():
     parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.") # TODO: New for GraphSAGE
     #parameter for Data Augmentation
     parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
+    parser.add_argument("--use_edge_perturbation_probability", type=float, default=0.0, help="The probability of edge perturbation (random dropout on line graph edges) during training. 0.0 means no perturbation.")
     
     args = vars(parser.parse_args())
     
@@ -156,7 +157,8 @@ def main():
                                                                              min_subgraph_nodes=args['min_subgraph_nodes'],
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                              is_eign=(args['gnn_arch'] == "eign"),
-                                                                             use_data_augmentation=args['use_data_augmentation'])
+                                                                             use_data_augmentation=args['use_data_augmentation'],
+                                                                             use_edge_perturbation_probability=args['use_edge_perturbation_probability'])
         else: #for 'GNN_Inductive' as project name
             train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
                                                                                                         val_data=val_data,
@@ -175,7 +177,8 @@ def main():
                                                                                                         min_subgraph_nodes=args['min_subgraph_nodes'],
                                                                                                         max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                                                         is_eign=(args['gnn_arch'] == "eign"),
-                                                                                                        use_data_augmentation=args['use_data_augmentation'])
+                                                                                                        use_data_augmentation=args['use_data_augmentation'],
+                                                                                                        use_edge_perturbation_probability=args['use_edge_perturbation_probability'])
 
         # Create WandB config
         config = setup_wandb(args)
