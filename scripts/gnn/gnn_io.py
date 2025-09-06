@@ -9,6 +9,7 @@ from torch.utils.data import Subset, Dataset
 from torch_geometric.data import Batch
 import math
 import random
+from functools import partial
 
 def rotate_pos(pos, theta):
     """Rotate 2D positions by theta radians."""
@@ -131,7 +132,7 @@ def save_dataloader_params(dataloader, file_path):
     with open(file_path, 'w') as f:
         json.dump(params, f)
 
-def collate_fn(data_list, augment_pos_rotation=False):
+def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True): #for inductive learning
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in data_list:
         if hasattr(data, 'pos') and data.pos is not None:
@@ -140,14 +141,39 @@ def collate_fn(data_list, augment_pos_rotation=False):
                 data.pos = data.pos[:, 1, :].contiguous()
     
     # On-the-fly rotation augmentation
-    if augment_pos_rotation:
+    if is_training and augment_pos_rotation:
         for data in data_list:
             if hasattr(data, 'pos') and data.pos is not None:
                 theta = random.uniform(0, 2 * math.pi)
                 data.pos = rotate_pos(data.pos, theta)
+    
+    # On-the-fly edge perturbation (random dropout on line graph edges)
+    if is_training and augment_edge_perturbation_prob > 0:
+        for data in data_list:
+            if hasattr(data, 'edge_index') and data.edge_index is not None:
+                edge_index = data.edge_index.clone()
+                num_edges = edge_index.size(1)
+                mask = torch.rand(num_edges, device=edge_index.device) > augment_edge_perturbation_prob
+                
+                # Ensure minimum connectivity - simplified approach
+                min_edges = max(2, int(num_edges * 0.1))  # Keep at least 10% of edges
+                if mask.sum() < min_edges:
+                    # Randomly keep additional edges to meet minimum
+                    false_indices = (~mask).nonzero(as_tuple=False).squeeze(1)
+                    if len(false_indices) > 0:
+                        additional_edges_needed = min_edges - mask.sum().item()
+                        additional_edges_needed = min(additional_edges_needed, len(false_indices))
+                        if additional_edges_needed > 0:
+                            keep_indices = false_indices[torch.randperm(len(false_indices))[:additional_edges_needed]]
+                            mask[keep_indices] = True
+                
+                data.edge_index = edge_index[:, mask]
+                if hasattr(data, 'edge_attr') and data.edge_attr is not None:
+                    data.edge_attr = data.edge_attr[mask]
+    
     return Batch.from_data_list(data_list)
 
-def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False):
+def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False): #for transductive learning
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in batch:
         if hasattr(data, 'pos') and data.pos is not None:
