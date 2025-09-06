@@ -14,11 +14,14 @@ from sklearn.preprocessing import StandardScaler
 import torch
 import psutil
 import gc
+import json
+import math
 
 from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRandomSampler
 from torch_geometric.data import Batch, Data
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.utils import subgraph
+from gnn.gnn_io import rotate_pos
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -132,7 +135,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
-                                     use_data_augmentation):
+                                     use_data_augmentation, use_edge_perturbation_probability):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
@@ -214,9 +217,15 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
                                 collate_fn=collate_without_scaling_fn,
                                 worker_init_fn=seed_worker,
                                 drop_last=False)
+        print("Loaders created")
+        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        print("Test Dataloader saved since Transductive Variant. No scalers needed.")
+        
     else:
-        collate_fn_aug = partial(collate_fn, augment_pos_rotation=use_data_augmentation)
-        print('Data Augmentation:', use_data_augmentation)
+        collate_fn_train = partial(collate_fn, augment_pos_rotation=use_data_augmentation, augment_edge_perturbation_prob=use_edge_perturbation_probability, is_training=True)
+        collate_fn_eval = partial(collate_fn, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=False)
+        print('Data Augmentation:', use_data_augmentation, 'Edge Perturbation Probability:', use_edge_perturbation_probability)
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
         print("Train set normalized")      
@@ -230,15 +239,31 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
         print("Test set normalized")
         
         print("Creating train loader...")
-        base_train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        if use_nested_neighbor_loader:
+            collate_fn_no_aug = partial(collate_fn, 
+                augment_pos_rotation=False,  # No augmentation
+                augment_edge_perturbation_prob=0.0,  # No augmentation
+                is_training=False)  # No augmentation
+            base_train_loader = DataLoader(
+                dataset=train_set_normalized,
+                batch_size=batch_size,
+                shuffle=True,
+                num_workers=4,
+                prefetch_factor=2,
+                pin_memory=True, 
+                collate_fn=collate_fn_no_aug,  # ← No augmentation here
+                worker_init_fn=seed_worker
+                )
+        else:
+            base_train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn_train, worker_init_fn=seed_worker)
         print("Train loader created")
         
         print("Creating validation loader...")
-        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, pin_memory=True, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn_eval, worker_init_fn=seed_worker)
         print("Validation loader created")
         
         print("Creating test loader...")
-        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, collate_fn=collate_fn_aug, worker_init_fn=seed_worker)
+        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, collate_fn=collate_fn_eval, worker_init_fn=seed_worker)
         print("Test loader created")
         
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
@@ -258,15 +283,24 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
         
         # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
         # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-        print("Dataloaders and scalers saved")
+        print("Test dataloader NOT saved since Inductive Variant. Scalers are saved.")
     
     if use_nested_neighbor_loader:
-        train_loader = nested_dataloader(base_train_loader, neighbor_sizes=neighbor_sizes, 
-                                                         subgraphs_per_graph=subgraphs_per_graph, seed_size=seed_size,  
-                                                         final_batch_size=batch_size*subgraphs_per_graph, sampling_strategy=sampling_strategy, 
-                                                         min_subgraph_nodes=min_subgraph_nodes,
-                                                         max_subgraph_nodes=max_subgraph_nodes,
-                                                         node_feature_filter=node_feature_filter)
+        train_loader = nested_dataloader(
+            base_train_loader, 
+            neighbor_sizes=neighbor_sizes, 
+            subgraphs_per_graph=subgraphs_per_graph, 
+            seed_size=seed_size,  
+            final_batch_size=batch_size*subgraphs_per_graph, 
+            sampling_strategy=sampling_strategy, 
+            min_subgraph_nodes=min_subgraph_nodes,
+            max_subgraph_nodes=max_subgraph_nodes,
+            node_feature_filter=node_feature_filter,
+            # Add augmentation parameters
+            augment_pos_rotation=use_data_augmentation,
+            augment_edge_perturbation_prob=use_edge_perturbation_probability,
+            is_training=True
+        )
     else:
         train_loader = base_train_loader
     
@@ -292,8 +326,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
                     print(f"Sampling strategy: {graph.sampling_strategy}")
             break
     
-    save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-    save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+    #save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+    #save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
     print("Test dataloader saved.")
     
     # MODIFIED: Return None for scalers since we don't need them
@@ -303,29 +337,20 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
         return train_loader, val_loader, scalers_train, scalers_validation
 
 def nested_dataloader(base_train_loader: DataLoader,
-                                    neighbor_sizes: list[int] = [15, 10, 5],
-                                    subgraphs_per_graph: int = 3,
-                                    seed_size: int = 1,  # Single seed per subgraph   
-                                    final_batch_size: int = 24,  # batch_size * subgraphs_per_graph
-                                    sampling_strategy: str = 'neighbor_sampling',  # Single strategy
-                                    min_subgraph_nodes: int = 10,
-                                    max_subgraph_nodes: int = 100,
-                                    node_feature_filter: list = None) -> DataLoader:
+                     neighbor_sizes: list[int] = [15, 10, 5],
+                     subgraphs_per_graph: int = 3,
+                     seed_size: int = 1,
+                     final_batch_size: int = 24,
+                     sampling_strategy: str = 'neighbor_sampling',
+                     min_subgraph_nodes: int = 10,
+                     max_subgraph_nodes: int = 100,
+                     node_feature_filter: list = None,
+                     # Add augmentation parameters
+                     augment_pos_rotation: bool = False,
+                     augment_edge_perturbation_prob: float = 0.0,
+                     is_training: bool = True) -> DataLoader:
     """
-    Create enhanced nested dataloader with on-the-fly subgraph generation.
-    
-    Args:
-        base_train_loader: Your existing base graph loader
-        neighbor_sizes: Neighbor sampling sizes per hop
-        subgraphs_per_graph: Number of subgraphs per original graph
-        seed_size: Batch size for seed nodes in neighbor sampling 
-        final_batch_size: Final batch size for the nested loader
-        sampling_strategy: Single sampling strategy to use for all subgraphs
-        min_subgraph_nodes: Minimum nodes in subgraph
-        max_subgraph_nodes: Maximum nodes in subgraph 
-    
-    Returns:
-        DataLoader that yields batched subgraphs (generated on-the-fly)
+    Create enhanced nested dataloader with on-the-fly subgraph generation and augmentation.
     """
     
     nested_dataset = NestedNeighborDataset(
@@ -336,18 +361,22 @@ def nested_dataloader(base_train_loader: DataLoader,
         sampling_strategy=sampling_strategy,
         min_subgraph_nodes=min_subgraph_nodes,
         max_subgraph_nodes=max_subgraph_nodes,
-        shuffle_mapping=False,  # Set to True for two layer randomization in combination with outer dataloader shuffle
-        node_feature_filter=node_feature_filter
+        shuffle_mapping=False, ## Set to True for two layer randomization in combination with outer dataloader shuffle
+        node_feature_filter=node_feature_filter,
+        # Pass augmentation parameters
+        augment_pos_rotation=augment_pos_rotation,
+        augment_edge_perturbation_prob=augment_edge_perturbation_prob,
+        is_training=is_training
     )
     
-    # Create final dataloader
+    # Create final dataloader with augmented collate function
     nested_loader = DataLoader(
         nested_dataset,
         batch_size=final_batch_size,
         shuffle=True,
         num_workers=4,
         pin_memory=True,
-        collate_fn=Batch.from_data_list,
+        collate_fn=Batch.from_data_list,  # Simple, no augmentation here
         drop_last=False,
     )
     
@@ -712,17 +741,13 @@ class NestedNeighborDataset(Dataset):
                  min_subgraph_nodes: int,
                  max_subgraph_nodes: int,
                  shuffle_mapping: bool = False,
-                 node_feature_filter: list = None):
-        """
-        Args:
-            graph_loader: Your existing base graph loader
-            neighbor_sizes: Neighbor sampling sizes per hop [15,10,5]
-            subgraphs_per_graph: Number of subgraphs per original graph (3)
-            seed_size: Batch size for seed nodes
-            sampling_strategy: Single sampling strategy to use for all subgraphs.
-            min_subgraph_nodes: Minimum nodes in subgraph
-            max_subgraph_nodes: Maximum nodes in subgraph 
-        """
+                 node_feature_filter: list = None,
+                 # Add augmentation parameters
+                 augment_pos_rotation: bool = False,
+                 augment_edge_perturbation_prob: float = 0.0,
+                 is_training: bool = True):
+        
+        # Store existing parameters
         self.neighbor_sizes = neighbor_sizes
         self.subgraphs_per_graph = subgraphs_per_graph
         self.seed_size = seed_size  
@@ -731,6 +756,11 @@ class NestedNeighborDataset(Dataset):
         self.max_subgraph_nodes = max_subgraph_nodes
         self.shuffle_mapping = shuffle_mapping
         self.node_feature_filter = node_feature_filter
+        
+        # Store augmentation parameters
+        self.augment_pos_rotation = augment_pos_rotation
+        self.augment_edge_perturbation_prob = augment_edge_perturbation_prob
+        self.is_training = is_training
         
         print(f"Initializing On-The-Fly Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
         print(f"Using single sampling strategy: {self.sampling_strategy}")
@@ -825,12 +855,8 @@ class NestedNeighborDataset(Dataset):
         
         # Get first subgraph from the loader
         for subgraph in neigh_loader:
-            # NeighborLoader already properly subsets node features, but double-check pos
             if hasattr(subgraph, 'pos') and hasattr(subgraph, 'n_id'):
-                # n_id contains mapping from subgraph nodes to original nodes
                 subgraph.pos = graph.pos[subgraph.n_id]
-                theta = random.uniform(0, 2 * math.pi)
-                subgraph.pos = rotate_pos(subgraph.pos, theta)
             return subgraph
     
     def _random_walk_subgraph(self, graph: Data, walk_length: int = 13, num_walks: int = 4) -> Data:
@@ -952,7 +978,7 @@ class NestedNeighborDataset(Dataset):
         return len(self.subgraph_mapping)
     
     def __getitem__(self, idx):
-        """Generate subgraph on-the-fly using neighbor sampling."""
+        """Generate subgraph on-the-fly using neighbor sampling and data augmentation."""
         mapping = self.subgraph_mapping[idx]
         
         # Load the original graph on-demand (direct indexing)
@@ -964,16 +990,56 @@ class NestedNeighborDataset(Dataset):
             subgraph_idx=mapping['subgraph_idx']
         )
         
-        # Extract edge weights for subgraph (no re-normalization)
+        # Apply augmentation to the subgraph
+        subgraph = self._apply_augmentation(subgraph)
+        
+        # Extract edge weights for subgraph
         subgraph.edge_weights = self._extract_subgraph_edge_weights(subgraph, original_graph)
         
         # Apply feature filtering to the subgraph
         if hasattr(self, 'node_feature_filter') and self.node_feature_filter is not None:
             # Only filter if number of features is greater than max index in filter
-            if subgraph.x.shape[1] > max(self.node_feature_filter):
+            if subgraph.x.shape[1] > len(self.node_feature_filter):
                 subgraph.x = subgraph.x[:, self.node_feature_filter]
         
         return subgraph
+    
+    def _apply_augmentation(self, subgraph: Data) -> Data:
+        """Apply augmentation to a single subgraph."""
+        # Position already extracted by base_train_loader, skip this step
+    
+        # On-the-fly rotation augmentation
+        if self.is_training and self.augment_pos_rotation:
+            if hasattr(subgraph, 'pos') and subgraph.pos is not None:
+                theta = random.uniform(0, 2 * math.pi)
+                subgraph.pos = rotate_pos(subgraph.pos, theta)
+        
+        # On-the-fly edge perturbation (simplified approach)
+        if self.is_training and self.augment_edge_perturbation_prob > 0:
+            if hasattr(subgraph, 'edge_index') and subgraph.edge_index is not None:
+                edge_index = subgraph.edge_index.clone()
+                num_edges = edge_index.size(1)
+                mask = torch.rand(num_edges, device=edge_index.device) > self.augment_edge_perturbation_prob
+                
+                # Ensure minimum connectivity - simplified approach
+                min_edges = max(2, int(num_edges * 0.1))  # Keep at least 10% of edges
+                if mask.sum() < min_edges:
+                    # Randomly keep additional edges to meet minimum
+                    false_indices = (~mask).nonzero(as_tuple=False).squeeze(1)
+                    if len(false_indices) > 0:
+                        additional_edges_needed = min_edges - mask.sum().item()
+                        additional_edges_needed = min(additional_edges_needed, len(false_indices))
+                        if additional_edges_needed > 0:
+                            keep_indices = false_indices[torch.randperm(len(false_indices))[:additional_edges_needed]]
+                            mask[keep_indices] = True
+                
+                subgraph.edge_index = edge_index[:, mask]
+                if hasattr(subgraph, 'edge_attr') and subgraph.edge_attr is not None:
+                    subgraph.edge_attr = subgraph.edge_attr[mask]
+        
+        return subgraph
+    
+    # ...rest of the existing methods remain the same...
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience
