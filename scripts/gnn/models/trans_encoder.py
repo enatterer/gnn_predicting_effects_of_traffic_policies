@@ -167,7 +167,7 @@ class TransEncoder(BaseGNN):
                  num_heads: int = 4,
                  num_layers: int = 5,
                  num_nodes: int = 31635,
-                 use_pos: bool = True,
+                 use_pos: bool = False,
                  use_pos_encoding: bool = False,
                  # LapPE
                  use_lap_pe: bool = False,
