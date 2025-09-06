@@ -54,7 +54,7 @@ use_linegraph = True # Flag to use line graph transformation
 #all_cities = ['rosenheim','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
 #cities_1=['nuernberg', 'augsburg', 'muenchen','schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten','landshut', 'ingolstadt', 'regensburg', 'neuulm',rosenheim]
 #cities_rest=[]
-all_cities = ['landshut', 'ingolstadt', 'regensburg' 'rosenheim']
+all_cities = ['schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg']
 #target_feature = 'vol_car_percentage' #other options: 'vol_car'
 #target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max','none'
 x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
@@ -897,7 +897,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
 def main():
     
     # Create the result base path
-    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data','kreisfreistadt')
+    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data','kreisfreistadt_norm')
     os.makedirs(result_base_path, exist_ok=True)
     
     for city in all_cities:
