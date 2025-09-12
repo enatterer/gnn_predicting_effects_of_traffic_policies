@@ -130,20 +130,20 @@ def get_memory_info():
     return total_memory, available_memory, used_memory
 
 # test_data implies use of complete inductive testing
-def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
+def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                                      batch_size, path_to_save_dataloader,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
-                                     use_data_augmentation, use_edge_perturbation_probability):
+                                     use_data_augmentation, use_edge_perturbation_probability, 
+                                     use_feature_noise_probability):
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
     print("Splitting into subsets...")
 
-    # TODO: Fix Later
     if use_bootstrapping:
-        train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=train_data, test_ratio=0.1, bootstrap_seed=4) # TODO: fix later
+        train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=train_data, test_ratio=0.1, bootstrap_seed=4)
     else:
         dataset, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
                                                                                     train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
@@ -164,24 +164,29 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
                 continue
             node_features.append(name)
     else:
-        # Manual feature selection (e.g., from ablation)
         node_features = [
             "VOL_BASE_CASE",
             "CAPACITY_BASE_CASE",
             "CAPACITY_REDUCTION",
             "FREESPEED",
             "LENGTH",
-            # Add/remove features as desired
-            # "HOME",
-            # "WORK",
-            # "SHOP",
         ]
     print(node_features)
-    # COMMENTED OUT: Features already normalized during preprocessing
-    # # Fit GLOBAL Scaler!
-    # # Assume no exclusive test scaler, #TODO:fix later if needed
-    # scalers_train, continuous_feat = fit_global_scaler(dataset, batch_size=128)
-    # scalers_test = copy.deepcopy(scalers_train)
+
+    # CREATE FEATURE MAPPING ONCE - BEFORE NORMALIZATION
+    filtered_feature_mapping = {}
+    current_idx = 0
+    
+    for feature_name in node_features:
+        if feature_name == "HIGHWAY":
+            # Highway gets one-hot encoded into 6 classes
+            filtered_feature_mapping[EdgeFeatures.HIGHWAY.value] = list(range(current_idx, current_idx + 6))
+            current_idx += 6
+        else:
+            filtered_feature_mapping[EdgeFeatures[feature_name].value] = current_idx
+            current_idx += 1
+    
+    print(f"Global feature mapping: {filtered_feature_mapping}")
 
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
 
@@ -223,27 +228,44 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
         print("Test Dataloader saved since Transductive Variant. No scalers needed.")
         
     else:
-        collate_fn_train = partial(collate_fn, augment_pos_rotation=use_data_augmentation, augment_edge_perturbation_prob=use_edge_perturbation_probability, is_training=True)
-        collate_fn_eval = partial(collate_fn, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=False)
-        print('Data Augmentation:', use_data_augmentation, 'Edge Perturbation Probability:', use_edge_perturbation_probability)
+        collate_fn_train = partial(collate_fn, 
+                                  augment_pos_rotation=use_data_augmentation, 
+                                  augment_edge_perturbation_prob=use_edge_perturbation_probability,
+                                  augment_feature_noise_prob=use_feature_noise_probability,
+                                  filtered_feature_mapping=filtered_feature_mapping, 
+                                  is_training=True)
+        collate_fn_eval = partial(collate_fn, 
+                                 augment_pos_rotation=False, 
+                                 augment_edge_perturbation_prob=0.0,
+                                 augment_feature_noise_prob=0.0,
+                                 filtered_feature_mapping=filtered_feature_mapping, 
+                                 is_training=False)
+        
+        print('Data Augmentation:', use_data_augmentation, 
+              'Edge Perturbation Probability:', use_edge_perturbation_probability,
+              'Feature Noise Probability:', use_feature_noise_probability)
+        
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
         print("Train set normalized")      
         
-        print("Normalizing validation set...")
-        valid_set_normalized, scalers_validation = normalize_dataset(dataset_input=valid_set, node_features=node_features, is_eign=is_eign)
+        # ✅ FIX: Use training scaler for validation and test sets
+        print("Normalizing validation set with TRAINING scaler...")
+        valid_set_normalized = normalize_dataset_with_scaler(dataset_input=valid_set, node_features=node_features, scalers=scalers_train, is_eign=is_eign)
         print("Validation set normalized")
         
-        print("Normalizing test set...")
-        test_set_normalized, scalers_test = normalize_dataset(dataset_input=test_set, node_features=node_features, is_eign=is_eign)
+        print("Normalizing test set with TRAINING scaler...")
+        test_set_normalized = normalize_dataset_with_scaler(dataset_input=test_set, node_features=node_features, scalers=scalers_train, is_eign=is_eign)
         print("Test set normalized")
         
         print("Creating train loader...")
         if use_nested_neighbor_loader:
             collate_fn_no_aug = partial(collate_fn, 
-                augment_pos_rotation=False,  # No augmentation
-                augment_edge_perturbation_prob=0.0,  # No augmentation
-                is_training=False)  # No augmentation
+                augment_pos_rotation=False,
+                augment_edge_perturbation_prob=0.0,
+                augment_feature_noise_prob=0.0,
+                filtered_feature_mapping=filtered_feature_mapping,
+                is_training=False)
             base_train_loader = DataLoader(
                 dataset=train_set_normalized,
                 batch_size=batch_size,
@@ -266,20 +288,14 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
         test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, collate_fn=collate_fn_eval, worker_init_fn=seed_worker)
         print("Test loader created")
         
+        # ✅ ONLY SAVE TRAINING SCALERS (validation/test use same scalers)
         joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-        #if not is_eign:
-            #joblib.dump(scalers_train['pos_scaler'], os.path.join(path_to_save_dataloader, 'train_pos_scaler.pkl'))
-        # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
-
-        joblib.dump(scalers_validation['x_scaler'], os.path.join(path_to_save_dataloader, 'validation_x_scaler.pkl'))
-        #if not is_eign:
-            #joblib.dump(scalers_validation['pos_scaler'], os.path.join(path_to_save_dataloader, 'validation_pos_scaler.pkl'))
-        # joblib.dump(scalers_validation['modestats_scaler'], os.path.join(path_to_save_dataloader, 'validation_mode_stats_scaler.pkl'))
-
-        joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
-        #if not is_eign:
-            #joblib.dump(scalers_test['pos_scaler'], os.path.join(path_to_save_dataloader, 'test_pos_scaler.pkl'))
-        # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
+        if is_eign and 'x_signed_scaler' in scalers_train:
+            joblib.dump(scalers_train['x_signed_scaler'], os.path.join(path_to_save_dataloader, 'train_x_signed_scaler.pkl'))
+        
+        # ✅ REMOVE: No longer need separate validation/test scalers
+        # joblib.dump(scalers_validation['x_scaler'], ...)
+        # joblib.dump(scalers_test['x_scaler'], ...)
         
         # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
         # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
@@ -296,9 +312,10 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
             min_subgraph_nodes=min_subgraph_nodes,
             max_subgraph_nodes=max_subgraph_nodes,
             node_feature_filter=node_feature_filter,
-            # Add augmentation parameters
+            filtered_feature_mapping=filtered_feature_mapping,
             augment_pos_rotation=use_data_augmentation,
             augment_edge_perturbation_prob=use_edge_perturbation_probability,
+            augment_feature_noise_prob=use_feature_noise_probability,  
             is_training=True
         )
     else:
@@ -334,7 +351,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data,variant,
     if variant=='GNN_Transductive':
         return train_loader, val_loader, test_loader
     else:
-        return train_loader, val_loader, scalers_train, scalers_validation
+        # ✅ ONLY RETURN TRAINING SCALERS (no validation scalers needed)
+        return train_loader, val_loader, scalers_train, scalers_train  # Use training scalers for both
 
 def nested_dataloader(base_train_loader: DataLoader,
                      neighbor_sizes: list[int] = [15, 10, 5],
@@ -345,9 +363,10 @@ def nested_dataloader(base_train_loader: DataLoader,
                      min_subgraph_nodes: int = 10,
                      max_subgraph_nodes: int = 100,
                      node_feature_filter: list = None,
-                     # Add augmentation parameters
+                     filtered_feature_mapping: dict = None,  # ✅ SINGLE MAPPING
                      augment_pos_rotation: bool = False,
                      augment_edge_perturbation_prob: float = 0.0,
+                     augment_feature_noise_prob: float = 0.0,
                      is_training: bool = True) -> DataLoader:
     """
     Create enhanced nested dataloader with on-the-fly subgraph generation and augmentation.
@@ -363,13 +382,13 @@ def nested_dataloader(base_train_loader: DataLoader,
         max_subgraph_nodes=max_subgraph_nodes,
         shuffle_mapping=False, ## Set to True for two layer randomization in combination with outer dataloader shuffle
         node_feature_filter=node_feature_filter,
-        # Pass augmentation parameters
+        filtered_feature_mapping=filtered_feature_mapping,  # ✅ PASS SINGLE MAPPING
         augment_pos_rotation=augment_pos_rotation,
         augment_edge_perturbation_prob=augment_edge_perturbation_prob,
+        augment_feature_noise_prob=augment_feature_noise_prob,
         is_training=is_training
     )
     
-    # Create final dataloader with augmented collate function
     nested_loader = DataLoader(
         nested_dataset,
         batch_size=final_batch_size,
@@ -416,7 +435,7 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
     data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
 
     print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features)
+    normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features) 
     print("x features normalized")
     
     if is_eign:
@@ -426,18 +445,13 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
         )
         print("x_signed features normalized")
         
-    # print("Fitting and normalizing modestats features...")
-    # normalized_data_list, modestats_scaler = normalize_modestats_features_batched(normalized_data_list)
-    # print("Modestats features normalized")
-    
     scalers_dict = {
         "x_scaler": x_scaler,
         "x_signed_scaler": x_signed_scaler,
     } if is_eign else {
         "x_scaler": x_scaler,
-        # "modestats_scaler": modestats_scaler
     }
-    return normalized_data_list, scalers_dict
+    return normalized_data_list, scalers_dict 
 
 def normalize_x_features_batched(data_list, node_features, batch_size=100):
     """
@@ -482,8 +496,25 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
     # One-hot encode highway
     if "HIGHWAY" in node_features:
         one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+
+    return data_list, scaler 
+
+def normalize_dataset_with_scaler(dataset_input, node_features, scalers, is_eign=False):
+    """
+    Normalize dataset using pre-fitted scalers (for validation/test sets).
+    """
+    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
+
+    print("Normalizing x features with existing scaler...")
+    normalized_data_list = normalize_x_features_with_scaler(data_list, node_features, scalers['x_scaler'])
+    print("x features normalized")
     
-    return data_list, scaler
+    if is_eign and 'x_signed_scaler' in scalers:
+        print("Normalizing x_signed features with existing scaler...")
+        normalized_data_list = normalize_x_signed_features_with_scaler(normalized_data_list, scalers['x_signed_scaler'])
+        print("x_signed features normalized")
+    
+    return normalized_data_list
 
 def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_size=100):
     """
@@ -501,16 +532,21 @@ def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_s
                        EdgeFeatures.FREESPEED,
                        EdgeFeatures.LENGTH]
     
-    # Get number of nodes in the graph
-    num_nodes = data_list[0].x.shape[0]
-    
-    # Second pass: Transform the data
+    # ✅ FIX: Handle variable node counts correctly
     for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
         batch = data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = x_scaler.transform(batch_x)
-        for j, data in enumerate(batch):
-            data.x[:,continuous_feat] = torch.tensor(batch_x_normalized[j*num_nodes:(j+1)*num_nodes], dtype=data.x.dtype)
+        
+        # ✅ CORRECT: Use proper indexing for variable node counts
+        start = 0
+        for data in batch:
+            num_nodes = data.x.shape[0]
+            data.x[:,continuous_feat] = torch.tensor(
+                batch_x_normalized[start:start+num_nodes], 
+                dtype=data.x.dtype
+            )
+            start += num_nodes
 
     # Filter features
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
@@ -682,7 +718,9 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dropout": config.dropout,
         "predict_mode_stats": config.predict_mode_stats,
         "dtype": torch.float32,
-        "log_to_wandb": True} # During training, yes
+        "log_to_wandb": True,
+        "use_target_standardization": getattr(config, 'use_target_standardization', False)  # ✅ ADD THIS LINE
+    }
 
     if gnn_arch == "point_net_transf_gat":
         return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
@@ -742,9 +780,10 @@ class NestedNeighborDataset(Dataset):
                  max_subgraph_nodes: int,
                  shuffle_mapping: bool = False,
                  node_feature_filter: list = None,
-                 # Add augmentation parameters
+                 filtered_feature_mapping: dict = None,
                  augment_pos_rotation: bool = False,
                  augment_edge_perturbation_prob: float = 0.0,
+                 augment_feature_noise_prob: float = 0.0,
                  is_training: bool = True):
         
         # Store existing parameters
@@ -756,16 +795,17 @@ class NestedNeighborDataset(Dataset):
         self.max_subgraph_nodes = max_subgraph_nodes
         self.shuffle_mapping = shuffle_mapping
         self.node_feature_filter = node_feature_filter
-        
-        # Store augmentation parameters
+        self.filtered_feature_mapping = filtered_feature_mapping
         self.augment_pos_rotation = augment_pos_rotation
         self.augment_edge_perturbation_prob = augment_edge_perturbation_prob
+        self.augment_feature_noise_prob = augment_feature_noise_prob
         self.is_training = is_training
         
         print(f"Initializing On-The-Fly Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
         print(f"Using single sampling strategy: {self.sampling_strategy}")
         print(f"Shuffle mapping: {shuffle_mapping}")
         print(f"Feature filter: {node_feature_filter}")
+        print(f"Feature mapping: {filtered_feature_mapping}")
         
         # Store original dataset for on-demand loading
         self.original_dataset = graph_loader.dataset
@@ -923,12 +963,20 @@ class NestedNeighborDataset(Dataset):
         if hasattr(graph, 'pos') and graph.pos is not None:
             subgraph_data.pos = graph.pos[subset]  # Only keep positions of selected nodes
         
+        # LapPE: copy from original graph for subset nodes
+        if hasattr(graph, 'lap_pe') and graph.lap_pe is not None:
+            subgraph_data.lap_pe = graph.lap_pe[subset]
+        
+        # City attribute for DANN
+        if hasattr(graph, 'city'):
+            subgraph_data.city = graph.city
+    
         # Handle target values - subset them properly 
         if hasattr(graph, 'y') and graph.y is not None:
             subgraph_data.y = graph.y[subset]  # Only keep targets of selected nodes
         
         # Copy other attributes selectively (avoid copying node-level attributes)
-        node_level_attrs = {'x', 'edge_index', 'edge_attr', 'y', 'pos', 'num_nodes', 'num_edges'}
+        node_level_attrs = {'x', 'edge_index', 'edge_attr', 'y', 'pos', 'lap_pe', 'city', 'num_nodes', 'num_edges'}
         for key, value in graph.items():
             if key not in node_level_attrs:
                 # Only copy graph-level attributes, not node-level ones
@@ -1014,6 +1062,11 @@ class NestedNeighborDataset(Dataset):
                 theta = random.uniform(0, 2 * math.pi)
                 subgraph.pos = rotate_pos(subgraph.pos, theta)
         
+        # On-the-fly feature noise augmentation
+        if self.is_training and self.augment_feature_noise_prob > 0:
+            if hasattr(subgraph, 'x') and subgraph.x is not None and torch.rand(1).item() < self.augment_feature_noise_prob:
+                subgraph.x = self.apply_gaussian_noise_to_features(subgraph.x)
+        
         # On-the-fly edge perturbation (simplified approach)
         if self.is_training and self.augment_edge_perturbation_prob > 0:
             if hasattr(subgraph, 'edge_index') and subgraph.edge_index is not None:
@@ -1036,10 +1089,58 @@ class NestedNeighborDataset(Dataset):
                 subgraph.edge_index = edge_index[:, mask]
                 if hasattr(subgraph, 'edge_attr') and subgraph.edge_attr is not None:
                     subgraph.edge_attr = subgraph.edge_attr[mask]
-        
+    
         return subgraph
     
-    # ...rest of the existing methods remain the same...
+    def apply_gaussian_noise_to_features(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Apply Gaussian noise to normalized features using the filtered feature mapping.
+        """
+        if self.filtered_feature_mapping is None:
+            print("Warning: No filtered_feature_mapping available. Skipping feature noise.")
+            return x
+        
+        noise = torch.zeros_like(x)
+        
+        # Volume features
+        if EdgeFeatures.VOL_BASE_CASE.value in self.filtered_feature_mapping:
+            idx = self.filtered_feature_mapping[EdgeFeatures.VOL_BASE_CASE.value]
+            if isinstance(idx, int) and idx < x.shape[1]:
+                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1
+        
+        # Capacity features
+        if EdgeFeatures.CAPACITY_BASE_CASE.value in self.filtered_feature_mapping:
+            idx = self.filtered_feature_mapping[EdgeFeatures.CAPACITY_BASE_CASE.value]
+            if isinstance(idx, int) and idx < x.shape[1]:
+                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1
+        
+        # Length features
+        if EdgeFeatures.LENGTH.value in self.filtered_feature_mapping:
+            idx = self.filtered_feature_mapping[EdgeFeatures.LENGTH.value]
+            if isinstance(idx, int) and idx < x.shape[1]:
+                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05
+        
+        # Speed features
+        if EdgeFeatures.FREESPEED.value in self.filtered_feature_mapping:
+            idx = self.filtered_feature_mapping[EdgeFeatures.FREESPEED.value]
+            if isinstance(idx, int) and idx < x.shape[1]:
+                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05
+        
+        # Conditional noise for capacity reduction
+        cap_red_idx = self.filtered_feature_mapping.get(EdgeFeatures.CAPACITY_REDUCTION.value)
+        cap_base_idx = self.filtered_feature_mapping.get(EdgeFeatures.CAPACITY_BASE_CASE.value)
+        
+        if (cap_red_idx is not None and isinstance(cap_red_idx, int) and cap_red_idx < x.shape[1] and 
+            cap_base_idx is not None and isinstance(cap_base_idx, int) and cap_base_idx < x.shape[1]):
+            
+            mask = x[:, cap_red_idx] == 1
+            if mask.any():
+                noise[mask, cap_base_idx] += torch.randn(mask.sum()) * 0.05
+        
+        # Apply noise and clamp to reasonable bounds
+        x_noisy = x + noise
+        
+        return x_noisy
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience
