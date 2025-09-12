@@ -108,9 +108,14 @@ def main():
     if args['gnn_arch'] == "eign":
         dataset_path = os.path.join(project_root, 'data','inductive_data','training_data_eign','kreisfreistadt')
         base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive_eign') # for saving results
-    else:
+    elif args['project_name'] == 'GNN_Transductive':
+        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt_norm')
+        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
+    elif args['project_name'] == 'GNN_Inductive': #for 'GNN_Inductive' as project name
         dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
         base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
+    else:
+        raise ValueError(f"Unknown project_name: {args['project_name']}. Supported: GNN_Transductive, GNN_Inductive")
     
     try:
         
