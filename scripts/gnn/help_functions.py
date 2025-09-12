@@ -10,6 +10,7 @@ import torch
 import torch.nn as nn
 from torch import Tensor
 from torch.utils.data import DataLoader
+from torch_geometric.data import Batch, Data
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -315,7 +316,7 @@ def validate_model_during_training(config: object,
                                    device: torch.device,
                                    scalers: dict) -> tuple:
     """
-    Validate the model during training, with support for mode stats predictions and log-space evaluation.
+    Validate the model during training, with support for mode stats predictions and target standardization.
 
     Parameters:
     - config (object): Configuration object with flags and parameters.
@@ -326,112 +327,117 @@ def validate_model_during_training(config: object,
     - scalers (dict): x and pos scalers for validation data.
 
     Returns:
-    - tuple: Validation metrics including log-space loss and correlations.
+    - tuple: Validation metrics including loss and correlations.
+    - supports DANN and target standardization
     """
     print("Starting validation...")
     model.eval()
-    val_loss = 0 #for log space loss
+    val_loss = 0
     num_batches = 0
-    actual_node_targets = [] #for log space loss
-    node_predictions = [] #for log space loss
-    mode_stats_targets = [] #for mode stats loss
-    mode_stats_predictions = [] #for mode stats loss
-    
-    # For percentage metrics (removed downstream)
-    all_pred_cars_diff = []
-    all_true_cars_diff = []
-    all_base_volumes = []
-    all_batch_indices = []
+    actual_node_targets = []
+    node_predictions = []
+    mode_stats_targets = []
+    mode_stats_predictions = []
+    val_domain_loss = 0
 
-    # TODO: Maybe add as a parameter later?
-    # Separate loss for mode stats
     mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
     print('len dataset', len(dataset))
-    
-    # Choose the appropriate inference mode
+
     with torch.inference_mode():
         for idx, data in tqdm(enumerate(dataset), total=len(dataset), desc="Validation", unit="batch"):
             data = data.to(device)
-            
-            # Import the target selection function
             targets_node_predictions = select_target_tensor(data, config.target_type)
             
-            # Since validation data is already normalized and filtered, use it directly
-            # No inverse transformation needed since we're not using weighted loss
-            # and the loss function works with normalized features
+            # ✅ STANDARDIZE TARGET FOR LOSS COMPUTATION
+            if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+                targets_standardized = model.standardize_target(targets_node_predictions)
+            else:
+                targets_standardized = targets_node_predictions
             
             targets_mode_stats = data.mode_stats if config.predict_mode_stats else None
 
-            # Standard Forward Pass
-            if config.predict_mode_stats:
+            if config.use_dann:
+                # DANN: get both outputs
+                node_predicted, domain_logits = model(data, alpha=0.0)  # No reversal during validation
+                city_labels = model.get_city_labels(data.to_data_list() if isinstance(data, Batch) else [data])
+                
+                # Compute loss on standardized targets
+                task_loss = loss_func(node_predicted, targets_standardized, data, data.batch).item()
+                domain_loss = nn.functional.cross_entropy(domain_logits, city_labels).item()
+                val_loss += task_loss + config.domain_lambda * domain_loss
+                val_domain_loss += domain_loss
+                
+                # ✅ INVERSE STANDARDIZE PREDICTIONS FOR METRICS
+                if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+                    node_predicted_original = model.inverse_standardize_target(node_predicted)
+                else:
+                    node_predicted_original = node_predicted
+                    
+            elif config.predict_mode_stats:
                 node_predicted, mode_stats_pred = model(data)
-            else:
-                node_predicted = model(data)
-
-            # Compute validation losses
-            if config.predict_mode_stats:
-                val_loss_node_predictions = loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
+                
+                # Compute loss on standardized targets
+                val_loss_node_predictions = loss_func(node_predicted, targets_standardized, data, data.batch).item()
                 val_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats).item()
                 val_loss += val_loss_node_predictions + val_loss_mode_stats
+                
+                # ✅ INVERSE STANDARDIZE PREDICTIONS FOR METRICS
+                if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+                    node_predicted_original = model.inverse_standardize_target(node_predicted)
+                else:
+                    node_predicted_original = node_predicted
+                
                 mode_stats_targets.append(targets_mode_stats)
                 mode_stats_predictions.append(mode_stats_pred)
             else:
-                val_loss += loss_func(node_predicted, targets_node_predictions, data, data.batch).item()
+                node_predicted = model(data)
                 
-            # Collect predictions and targets for potential percentage metrics (kept for future use)
-            if hasattr(data, 'unscaled_vol_base') and data.unscaled_vol_base is not None:
-                if config.target_normalization:
-                    # Convert from log space to cars
-                    pred_cars_diff = inverse_signed_log_transform(node_predicted)
-                    true_cars_diff = inverse_signed_log_transform(targets_node_predictions)
-                    base_volumes = data.unscaled_vol_base
+                # Compute loss on standardized targets
+                val_loss += loss_func(node_predicted, targets_standardized, data, data.batch).item()
+                
+                # ✅ INVERSE STANDARDIZE PREDICTIONS FOR METRICS
+                if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+                    node_predicted_original = model.inverse_standardize_target(node_predicted)
                 else:
-                    pred_cars_diff = node_predicted
-                    true_cars_diff = targets_node_predictions
-                    base_volumes = data.unscaled_vol_base
-                
-                batch_indices = data.batch  # Get batch indices for graph-level aggregation
-                
-                all_pred_cars_diff.append(pred_cars_diff)
-                all_true_cars_diff.append(true_cars_diff)
-                all_base_volumes.append(base_volumes)
-                all_batch_indices.append(batch_indices)
+                    node_predicted_original = node_predicted
 
-            # Collect predictions and targets (in log space for correlation metrics)
-            actual_node_targets.append(targets_node_predictions)
-            node_predictions.append(node_predicted)
+            # ✅ COLLECT ORIGINAL SCALE TARGETS AND PREDICTIONS FOR METRICS
+            actual_node_targets.append(targets_node_predictions)  # Original scale
+            node_predictions.append(node_predicted_original)      # Original scale
             num_batches += 1
-            
-            # Clear batch memory
+
+            # Clean up
             del data, targets_node_predictions, node_predicted
+            if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+                del targets_standardized, node_predicted_original
             if config.predict_mode_stats:
                 del targets_mode_stats, mode_stats_pred
             torch.cuda.empty_cache()
-    
+
     print("Validation completed!")
     print(f"Total validation loss (sum): {val_loss:.4f}")
     
-    # Compute log-space metrics (with memory cleanup)
+    # Compute metrics on original scale
     total_validation_loss = val_loss / num_batches if num_batches > 0 else 0
     
     # Concatenate tensors for correlation metrics
     actual_node_targets = torch.cat(actual_node_targets)
     node_predictions = torch.cat(node_predictions)
     
-    # Compute metrics
+    # Compute metrics on original scale
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
     
-    print(f"Target-space validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    print(f"Original-scale validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
     
     # Clear large tensors to save memory
     del actual_node_targets, node_predictions
     torch.cuda.empty_cache()
-    
-    # Removed percentage metrics aggregation and logging
-    
-    # Handle mode stats results if enabled
-    if config.predict_mode_stats:
+
+    if config.use_dann:
+        avg_domain_loss = val_domain_loss / num_batches if num_batches > 0 else 0
+        return total_validation_loss, r_squared, spearman_corr, pearson_corr, avg_domain_loss
+    elif config.predict_mode_stats:
         mode_stats_targets = torch.cat(mode_stats_targets)
         mode_stats_predictions = torch.cat(mode_stats_predictions)
         return (
@@ -439,7 +445,6 @@ def validate_model_during_training(config: object,
             r_squared,
             spearman_corr,
             pearson_corr,
-            # removed percentage_metrics
             val_loss_node_predictions,
             val_loss_mode_stats,
         )
@@ -662,3 +667,4 @@ def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device 
     uncertainty = predictions.std(axis=0)       # Uncertainty (standard deviation)
 
     return mean_prediction, uncertainty
+
