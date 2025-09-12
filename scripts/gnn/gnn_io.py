@@ -10,6 +10,7 @@ from torch_geometric.data import Batch
 import math
 import random
 from functools import partial
+from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 def rotate_pos(pos, theta):
     """Rotate 2D positions by theta radians."""
@@ -132,7 +133,7 @@ def save_dataloader_params(dataloader, file_path):
     with open(file_path, 'w') as f:
         json.dump(params, f)
 
-def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True): #for inductive learning
+def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True, augment_feature_noise_prob=0.0, filtered_feature_mapping=None):
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in data_list:
         if hasattr(data, 'pos') and data.pos is not None:
@@ -146,6 +147,12 @@ def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_
             if hasattr(data, 'pos') and data.pos is not None:
                 theta = random.uniform(0, 2 * math.pi)
                 data.pos = rotate_pos(data.pos, theta)
+    
+    # On-the-fly feature noise augmentation
+    if is_training and augment_feature_noise_prob > 0:
+        for data in data_list:
+            if hasattr(data, 'x') and data.x is not None and torch.rand(1).item() < augment_feature_noise_prob:
+                data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping) 
     
     # On-the-fly edge perturbation (random dropout on line graph edges)
     if is_training and augment_edge_perturbation_prob > 0:
@@ -172,6 +179,57 @@ def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_
                     data.edge_attr = data.edge_attr[mask]
     
     return Batch.from_data_list(data_list)
+
+def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: dict = None) -> torch.Tensor:
+    """
+    Apply Gaussian noise to normalized features using filtered feature mapping.
+    If no mapping provided, skip noise application.
+    """
+    if filtered_feature_mapping is None:
+        print("Warning: No filtered_feature_mapping provided. Skipping feature noise.")
+        return x
+    
+    noise = torch.zeros_like(x)
+    
+    # Volume features
+    if EdgeFeatures.VOL_BASE_CASE.value in filtered_feature_mapping:
+        idx = filtered_feature_mapping[EdgeFeatures.VOL_BASE_CASE.value]
+        if isinstance(idx, int) and idx < x.shape[1]:
+            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1  # ±10%
+    
+    # Capacity features
+    if EdgeFeatures.CAPACITY_BASE_CASE.value in filtered_feature_mapping:
+        idx = filtered_feature_mapping[EdgeFeatures.CAPACITY_BASE_CASE.value]
+        if isinstance(idx, int) and idx < x.shape[1]:
+            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1  # ±10%
+    
+    # Length features
+    if EdgeFeatures.LENGTH.value in filtered_feature_mapping:
+        idx = filtered_feature_mapping[EdgeFeatures.LENGTH.value]
+        if isinstance(idx, int) and idx < x.shape[1]:
+            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05  # ±5%
+    
+    # Speed features
+    if EdgeFeatures.FREESPEED.value in filtered_feature_mapping:
+        idx = filtered_feature_mapping[EdgeFeatures.FREESPEED.value]
+        if isinstance(idx, int) and idx < x.shape[1]:
+            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05  # ±5%
+    
+    # Conditional noise for capacity reduction
+    cap_red_idx = filtered_feature_mapping.get(EdgeFeatures.CAPACITY_REDUCTION.value)
+    cap_base_idx = filtered_feature_mapping.get(EdgeFeatures.CAPACITY_BASE_CASE.value)
+    
+    if (cap_red_idx is not None and isinstance(cap_red_idx, int) and cap_red_idx < x.shape[1] and 
+        cap_base_idx is not None and isinstance(cap_base_idx, int) and cap_base_idx < x.shape[1]):
+        
+        mask = x[:, cap_red_idx] == 1
+        if mask.any():
+            noise[mask, cap_base_idx] += torch.randn(mask.sum()) * 0.05  # Extra ±5% if policy applied
+    
+    # Apply noise and clamp to reasonable bounds
+    x_noisy = x + noise
+    
+    return x_noisy
 
 def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False): #for transductive learning
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
