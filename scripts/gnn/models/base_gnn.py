@@ -10,6 +10,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
+from torch_geometric.data import Data, Batch
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
@@ -26,13 +27,10 @@ class BaseGNN(nn.Module, ABC):
                  use_dropout: bool = False,
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
-                 log_to_wandb: bool = False):
+                 log_to_wandb: bool = False,
+                 use_target_standardization: bool = False):
         """
         Base class for all GNN implementations.
-        Core parameters are defined here, additional parameters can be added in child classes.
-        
-        Child classes must call super().__init__() in their __init__ method. Followed by self.define_layers() and self.initialize_weights().
-        See the PointNetTransfGAT class for an example.
         """
         super().__init__()
         self.in_channels = in_channels
@@ -41,10 +39,13 @@ class BaseGNN(nn.Module, ABC):
         self.use_dropout = use_dropout
         self.predict_mode_stats = predict_mode_stats
         self.dtype = dtype
-        
-        # Log specific model kwargs to wandb (during training runs)
         self.log_to_wandb = log_to_wandb
         
+        # Target standardization parameters
+        self.use_target_standardization = use_target_standardization
+        self.target_mean = None
+        self.target_std = None
+
     @abstractmethod
     def define_layers(self):
         """
@@ -86,6 +87,10 @@ class BaseGNN(nn.Module, ABC):
         if config is None:
             raise ValueError("Config cannot be None")
         
+        # COMPUTE TARGET STATISTICS BEFORE TRAINING
+        if self.use_target_standardization:
+            self.compute_target_statistics(train_dl, config, device)
+        
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
         scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
@@ -102,7 +107,6 @@ class BaseGNN(nn.Module, ABC):
         setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
 
         if config.continue_training:
-
             # Load checkpoint
             checkpoint = torch.load(config.base_checkpoint_path)
             
@@ -114,7 +118,20 @@ class BaseGNN(nn.Module, ABC):
             best_val_loss = checkpoint['best_val_loss']
             start_epoch = checkpoint['epoch'] + 1
             
+            # Load target statistics when continuing training
+            if self.use_target_standardization:
+                if 'target_mean' in checkpoint and 'target_std' in checkpoint:
+                    self.target_mean = checkpoint['target_mean'].to(device)
+                    self.target_std = checkpoint['target_std'].to(device)
+                    print("Target statistics loaded from checkpoint")
+                else:
+                    print("Target statistics not found in checkpoint, recomputing...")
+                    self.compute_target_statistics(train_dl, config, device)
+            
             print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
+        else:
+            # ✅ ADD THIS: Initialize for new training
+            start_epoch = 0
 
         for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
             super().train()
@@ -131,33 +148,14 @@ class BaseGNN(nn.Module, ABC):
                 lr = scheduler.get_lr(step)
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
-                
-                # Debug prints for data loading
-                #print(f"DEBUG DATA: data.x.shape = {data.x.shape}")
-                #print(f"DEBUG DATA: data.y = {data.y_vol_car_percentage.shape}")
-                #print(f"DEBUG DATA: data.edge_index.shape = {data.edge_index.shape}")
-                #if hasattr(data, 'batch'):
-                #    print(f"DEBUG DATA: data.batch.shape = {data.batch.shape}")
-                #print(f"DEBUG DATA: Moving data to device...")
                     
                 data = data.to(device)
-                #print(f"DEBUG DATA: Data moved to device successfully")
                 
                 # Select target based on configuration
                 targets_node_predictions = select_target_tensor(data, config.target_type)
-                #print(f"DEBUG DATA: Using target type: {config.target_type}")
-                #print(f"DEBUG DATA: targets_node_predictions.shape = {targets_node_predictions.shape}")
-                #print(f"DEBUG DATA: About to inverse transform scaler...")
-
-                # COMMENT OUT: Features are already normalized during preprocessing
-                # # Only inverse transform the continuous features that were originally normalized
-                # # The scaler was fitted on 5 features: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                # continuous_feat = [0, 1, 2, 3, 4]  # Correct indices for 5-feature tensor: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
-                # continuous_features = data.x[:, continuous_feat].detach().clone().cpu().numpy()
-                # x_unscaled = scalers_train["x_scaler"].inverse_transform(continuous_features)
-                # x_unscaled = torch.tensor(x_unscaled, dtype=torch.float32, device=device)
-
-                #print(f"DEBUG DATA: No scaler transformation needed - features pre-normalized")
+                
+                # STANDARDIZE TARGET
+                targets_node_predictions = self.standardize_target(targets_node_predictions)
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
@@ -273,18 +271,30 @@ class BaseGNN(nn.Module, ABC):
                 if model_save_path:         
                     torch.save(self.state_dict(), model_save_path)
                     print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
+                    
+                    # ✅ ADD THIS: Save target statistics with best model
+                    if self.use_target_standardization and self.target_mean is not None:
+                        stats_path = model_save_path.replace('.pt', '_target_stats.pt')
+                        self.save_target_statistics(stats_path)
             
             # Save checkpoint
             if epoch % 20 == 0:
                 checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-                torch.save({
+                checkpoint_dict = {
                     'epoch': epoch,
                     'model_state_dict': self.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scaler_state_dict': scaler.state_dict(),
                     'best_val_loss': best_val_loss,
                     'val_loss': val_loss,
-                }, checkpoint_path)
+                }
+                
+                # ✅ ADD THIS: Include target statistics in checkpoints
+                if self.use_target_standardization and self.target_mean is not None:
+                    checkpoint_dict['target_mean'] = self.target_mean.cpu()
+                    checkpoint_dict['target_std'] = self.target_std.cpu()
+                
+                torch.save(checkpoint_dict, checkpoint_path)
                 print(f'Checkpoint saved to {checkpoint_path}')
             
             early_stopping(val_loss)
@@ -295,6 +305,12 @@ class BaseGNN(nn.Module, ABC):
         print("Best validation loss: ", best_val_loss)
         wandb.summary["best_val_loss"] = best_val_loss
         wandb.finish()
+        
+        # ✅ ADD THIS: Save target statistics after training
+        if self.use_target_standardization and model_save_path:
+            stats_path = model_save_path.replace('.pt', '_target_stats.pt')
+            self.save_target_statistics(stats_path)
+        
         return val_loss, epoch
     
     def train_model_inductive(self, 
@@ -330,6 +346,10 @@ class BaseGNN(nn.Module, ABC):
         if config is None:
             raise ValueError("Config cannot be None")
         
+        # COMPUTE TARGET STATISTICS BEFORE TRAINING
+        if self.use_target_standardization:
+            self.compute_target_statistics(train_dl, config, device)
+        
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
         scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
@@ -358,7 +378,20 @@ class BaseGNN(nn.Module, ABC):
             best_val_loss = checkpoint['best_val_loss']
             start_epoch = checkpoint['epoch'] + 1
             
+            # ✅ ADD THIS: Load target statistics when continuing training
+            if self.use_target_standardization:
+                if 'target_mean' in checkpoint and 'target_std' in checkpoint:
+                    self.target_mean = checkpoint['target_mean'].to(device)
+                    self.target_std = checkpoint['target_std'].to(device)
+                    print("Target statistics loaded from checkpoint")
+                else:
+                    print("Target statistics not found in checkpoint, recomputing...")
+                    self.compute_target_statistics(train_dl, config, device)
+            
             print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
+        else:
+            # ✅ ADD THIS: Initialize for new training
+            start_epoch = 0
 
         for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
             super().train()
@@ -368,6 +401,7 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss = 0
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
+            epoch_train_domain_loss = 0
 
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
                 step = epoch * len(train_dl) + idx
@@ -377,14 +411,24 @@ class BaseGNN(nn.Module, ABC):
                     
                 data = data.to(device)
                 targets_node_predictions = select_target_tensor(data, config.target_type)
-                #x_unscaled = scalers_train["x_scaler"].inverse_transform(data.x.detach().clone().cpu().numpy()) #use this if we need weighted loss
+                
+                # STANDARDIZE TARGET
+                targets_node_predictions = self.standardize_target(targets_node_predictions)
 
                 if config.predict_mode_stats:
                     targets_mode_stats = data.mode_stats
-            
+
                 with autocast():
-                    # Forward pass
-                    if config.predict_mode_stats:
+                    if config.use_dann:
+                        # DANN forward pass
+                        predicted, domain_logits = self(data, alpha=config.domain_lambda)
+                        city_labels = self.get_city_labels(data.to_data_list() if isinstance(data, Batch) else [data])
+                        
+                        task_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
+                        domain_loss = nn.functional.cross_entropy(domain_logits, city_labels)
+                        train_loss = task_loss + config.domain_lambda * domain_loss
+                        epoch_train_domain_loss += domain_loss.item()
+                    elif config.predict_mode_stats:
                         predicted, mode_stats_pred = self(data)
                         train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data, data.batch)
                         train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
@@ -395,7 +439,7 @@ class BaseGNN(nn.Module, ABC):
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
-                if config.predict_mode_stats:
+                if config.predict_mode_stats and not config.use_dann:
                     epoch_train_loss_node_predictions += train_loss_node_predictions.item()
                     epoch_train_loss_mode_stats += train_loss_mode_stats.item()
         
@@ -412,14 +456,13 @@ class BaseGNN(nn.Module, ABC):
                     optimizer.zero_grad()
                     
                 # Batch level logging
-                if config.predict_mode_stats:
-                    wandb.log({"batch_train_loss": train_loss.item(),
-                               "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
-                               "batch_train_loss-mode_stats": train_loss_mode_stats.item(),
-                               "batch_step":step})
-                else:   
-                    wandb.log({"batch_train_loss": train_loss.item(),
-                               "batch_step":step})
+                log_dict = {"batch_train_loss": train_loss.item(), "batch_step": step}
+                if config.use_dann:
+                    log_dict["batch_train_domain_loss"] = domain_loss.item()
+                if config.predict_mode_stats and not config.use_dann:
+                    log_dict["batch_train_loss-node_predictions"] = train_loss_node_predictions.item()
+                    log_dict["batch_train_loss-mode_stats"] = train_loss_mode_stats.item()
+                wandb.log(log_dict)
             
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
@@ -427,14 +470,34 @@ class BaseGNN(nn.Module, ABC):
                 optimizer.zero_grad()
                 
             # Validation step
-            if config.predict_mode_stats:
+            if config.use_dann:
+                val_loss, r_squared, spearman_corr, pearson_corr, val_domain_loss = validate_model_during_training(
+                    config=config,
+                    model=self,
+                    dataset=valid_dl,
+                    loss_func=loss_fct,
+                    device=device,
+                    scalers=scalers_validation
+                )
+                wandb.log({
+                    "val_loss": val_loss,
+                    "train_loss": epoch_train_loss / len(train_dl),
+                    "lr": lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr,
+                    "val_domain_loss": val_domain_loss,
+                    "train_domain_loss": epoch_train_domain_loss / len(train_dl),
+                    "epoch": epoch
+                })
+            elif config.predict_mode_stats:
                 val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
                     config=config,
                     model=self,
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_validation=scalers_validation
+                    scalers=scalers_validation
                 )
                 # Epoch level logging
                 wandb.log({
@@ -448,7 +511,8 @@ class BaseGNN(nn.Module, ABC):
                     "train_loss-mode_stats": epoch_train_loss_mode_stats / len(train_dl),
                     "val_loss-node_predictions": val_loss_node_predictions,
                     "val_loss-mode_stats": val_loss_mode_stats,
-                    "epoch":epoch})
+                    "epoch": epoch
+                })
             else:
                 val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
                     config=config,
@@ -456,7 +520,7 @@ class BaseGNN(nn.Module, ABC):
                     dataset=valid_dl,
                     loss_func=loss_fct,
                     device=device,
-                    scalers_validation=scalers_validation
+                    scalers=scalers_validation
                 )
                 # Epoch level logging
                 wandb.log({
@@ -466,7 +530,8 @@ class BaseGNN(nn.Module, ABC):
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
-                    "epoch":epoch})
+                    "epoch": epoch
+                })
 
             print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
             
@@ -475,18 +540,30 @@ class BaseGNN(nn.Module, ABC):
                 if model_save_path:         
                     torch.save(self.state_dict(), model_save_path)
                     print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
+                    
+                    # ✅ ADD THIS: Save target statistics with best model
+                    if self.use_target_standardization and self.target_mean is not None:
+                        stats_path = model_save_path.replace('.pt', '_target_stats.pt')
+                        self.save_target_statistics(stats_path)
             
             # Save checkpoint
             if epoch % 20 == 0:
                 checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
-                torch.save({
+                checkpoint_dict = {
                     'epoch': epoch,
                     'model_state_dict': self.state_dict(),
                     'optimizer_state_dict': optimizer.state_dict(),
                     'scaler_state_dict': scaler.state_dict(),
                     'best_val_loss': best_val_loss,
                     'val_loss': val_loss,
-                }, checkpoint_path)
+                }
+                
+                # ✅ ADD THIS: Include target statistics in checkpoints
+                if self.use_target_standardization and self.target_mean is not None:
+                    checkpoint_dict['target_mean'] = self.target_mean.cpu()
+                    checkpoint_dict['target_std'] = self.target_std.cpu()
+                
+                torch.save(checkpoint_dict, checkpoint_path)
                 print(f'Checkpoint saved to {checkpoint_path}')
             
             early_stopping(val_loss)
@@ -497,4 +574,68 @@ class BaseGNN(nn.Module, ABC):
         print("Best validation loss: ", best_val_loss)
         wandb.summary["best_val_loss"] = best_val_loss
         wandb.finish()
+        
+        # ✅ ADD THIS: Save target statistics after training
+        if self.use_target_standardization and model_save_path:
+            stats_path = model_save_path.replace('.pt', '_target_stats.pt')
+            self.save_target_statistics(stats_path)
+        
         return val_loss, epoch
+    
+    def compute_target_statistics(self, train_dl: DataLoader, config: object, device: torch.device):
+        """
+        Compute mean and std of target variable from training data.
+        """
+        if not self.use_target_standardization:
+            return
+            
+        print("Computing target statistics for standardization...")
+        all_targets = []
+        
+        for data in tqdm(train_dl, desc="Computing target stats"):
+            data = data.to(device)
+            targets = select_target_tensor(data, config.target_type)
+            all_targets.append(targets.cpu())
+        
+        # Concatenate all targets
+        y_train = torch.cat(all_targets, dim=0)
+        
+        # Compute statistics
+        self.target_mean = y_train.mean().to(device)
+        self.target_std = y_train.std().clamp_min(1e-6).to(device)  # Avoid division by zero
+        
+        print(f"Target statistics - Mean: {self.target_mean:.4f}, Std: {self.target_std:.4f}")
+    
+    def standardize_target(self, targets: torch.Tensor) -> torch.Tensor:
+        """
+        Standardize target values using computed statistics.
+        """
+        if not self.use_target_standardization or self.target_mean is None:
+            return targets
+        return (targets - self.target_mean) / self.target_std
+    
+    def inverse_standardize_target(self, standardized_targets: torch.Tensor) -> torch.Tensor:
+        """
+        Convert standardized targets back to original scale.
+        """
+        if not self.use_target_standardization or self.target_mean is None:
+            return standardized_targets
+        return standardized_targets * self.target_std + self.target_mean
+
+    def save_target_statistics(self, path: str):
+        """Save target statistics for later use."""
+        if self.use_target_standardization and self.target_mean is not None:
+            stats = {
+                'target_mean': self.target_mean.cpu(),
+                'target_std': self.target_std.cpu()
+            }
+            torch.save(stats, path)
+            print(f"Target statistics saved to {path}")
+    
+    def load_target_statistics(self, path: str, device: torch.device):
+        """Load target statistics."""
+        if self.use_target_standardization:
+            stats = torch.load(path, map_location=device)
+            self.target_mean = stats['target_mean'].to(device)
+            self.target_std = stats['target_std'].to(device)
+            print(f"Target statistics loaded from {path}")
