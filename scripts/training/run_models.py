@@ -15,6 +15,7 @@ python run_models.py --gnn_arch trans_encoder --unique_model_description encoder
 '''
 
 
+from html import parser
 import os
 import sys
 import json
@@ -37,9 +38,9 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['schweinfurt','bamberg']
-val_cities =['rosenheim'] # Non empty implies inductive learning
-test_cities = ['bamberg'] # Non empty implies inductive learning
+train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
+val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
+test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
     
@@ -88,7 +89,14 @@ def main():
     #parameter for Data Augmentation
     parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
     parser.add_argument("--use_edge_perturbation_probability", type=float, default=0.0, help="The probability of edge perturbation (random dropout on line graph edges) during training. 0.0 means no perturbation.")
-    
+    #for Gaussian noise addition to node features
+    parser.add_argument("--augment_feature_noise_prob", type=float, default=0.0, help="Probability of applying Gaussian noise to features (0.0-1.0)")
+
+    #parser for DANN
+    parser.add_argument("--use_dann", type=str_to_bool, default=False, help="Whether to use Domain Adversarial Neural Network.")
+    parser.add_argument("--domain_lambda", type=float, default=0.0, help="Weight for domain adversarial loss.")
+    parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="Whether to use target standardization during training.")
+
     args = vars(parser.parse_args())
     
     # Parse neighbor_sizes from string to list
@@ -158,7 +166,8 @@ def main():
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                              is_eign=(args['gnn_arch'] == "eign"),
                                                                              use_data_augmentation=args['use_data_augmentation'],
-                                                                             use_edge_perturbation_probability=args['use_edge_perturbation_probability'])
+                                                                             use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
+                                                                             use_feature_noise_probability=args['augment_feature_noise_prob'])
         else: #for 'GNN_Inductive' as project name
             train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
                                                                                                         val_data=val_data,
@@ -178,7 +187,8 @@ def main():
                                                                                                         max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                                                         is_eign=(args['gnn_arch'] == "eign"),
                                                                                                         use_data_augmentation=args['use_data_augmentation'],
-                                                                                                        use_edge_perturbation_probability=args['use_edge_perturbation_probability'])
+                                                                                                        use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
+                                                                                                        use_feature_noise_probability=args['augment_feature_noise_prob'])
 
         # Create WandB config
         config = setup_wandb(args)
@@ -217,16 +227,16 @@ def main():
                                                              scalers_train=scalers_train,
                                                              target_normalization=config.target_normalization)
         else:
-            best_val_loss, best_epoch = gnn_instance.train_model(config=config,
+            best_val_loss, best_epoch = gnn_instance.train_model_inductive(config=config,
                                                              loss_fct=loss_fct,
-                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-3) if config.gnn_arch != "xgboost" else None,
                                                              train_dl=train_dl,
                                                              valid_dl=valid_dl,
                                                              device=device,
                                                              early_stopping=early_stopping,
                                                              model_save_path=model_save_path,
                                                              scalers_train=scalers_train,
-                                                             scalers_validation=scalers_validation)
+                                                             scalers_validation=scalers_train)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
