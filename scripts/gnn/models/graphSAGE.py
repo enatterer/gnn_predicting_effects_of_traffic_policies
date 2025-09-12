@@ -28,7 +28,6 @@ class GraphSAGE(BaseGNN):
     """
     def __init__(self, 
                  in_channels: int = 5,
-                 use_pos: bool = False,
                  out_channels: int = 1,
                  hidden_channels: list[int] = [256, 512, 1024, 512, 256],
                  dropout: float = 0.3, 
@@ -36,55 +35,101 @@ class GraphSAGE(BaseGNN):
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = True,
+                 use_target_standardization: bool = False,
+                 
+                 # POSITIONAL ENCODING PARAMETERS
+                 use_pos: bool = False,
+                 use_pos_encoding: bool = False,
+                 use_lap_pe: bool = False,
+                 lap_pe_dim: int = 8,
+                 use_anchor_pe: bool = False,
+                 anchor_k: int = 12,
+                 anchor_m: int = 16,
+                 use_rwse: bool = False,
+                 rwse_dim: int = 8,
+                 
+                 # Graph structure parameters
                  use_graph_norm: bool = False,
                  use_residuals: bool = False,
-                 #GraphSAGE specific parameters
-                 aggregator: str = 'max',  # Options: 'max' | 'mean'
-                 update_function: str = 'relu',  # Options: 'relu' | 'mlp'
-                 mlp_hidden_dim: int = 1024):  # Hidden dim for learnable MLP update
+                 
+                 # GraphSAGE specific parameters
+                 aggregator: str = 'mean', #options: 'max', 'mean'
+                 update_function: str = 'relu',
+                 mlp_hidden_dim: int = 1024):
                 
+        # STORE POSITIONAL ENCODING PARAMETERS
+        self.use_pos = use_pos
+        self.use_pos_encoding = use_pos_encoding
+        self.use_lap_pe = use_lap_pe
+        self.lap_pe_dim = lap_pe_dim
+        self.use_anchor_pe = use_anchor_pe
+        self.anchor_k = anchor_k
+        self.anchor_m = anchor_m
+        self.use_rwse = use_rwse
+        self.rwse_dim = rwse_dim
+
+        # CALCULATE EFFECTIVE INPUT CHANNELS
+        effective_in_channels = in_channels
+        if use_pos:
+            effective_in_channels += 2  # x, y coordinates
+        if use_lap_pe:
+            effective_in_channels += 2  # First 2 Laplacian eigenvectors
+        if use_anchor_pe:
+            effective_in_channels += anchor_k * anchor_m
+        if use_rwse:
+            effective_in_channels += rwse_dim
+
         # Call parent class constructor
         super().__init__(
-            in_channels=in_channels,
+            in_channels=effective_in_channels,
             out_channels=out_channels,
             dropout=dropout,
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_to_wandb=log_to_wandb)
+            log_to_wandb=log_to_wandb,
+            use_target_standardization=use_target_standardization)
         
         # Model-specific parameters
         self.hidden_channels = hidden_channels
-        self.mlp_hidden_dim    = mlp_hidden_dim
+        self.mlp_hidden_dim = mlp_hidden_dim
+        
         if aggregator not in ['max', 'mean']:
             raise ValueError(f"Unsupported aggregator: {aggregator}. Choose 'max' or 'mean'.")
         else:
             self.aggregator = aggregator
+            
         if update_function not in ['relu', 'mlp']:
             raise ValueError(f"Unsupported update function: {update_function}. Choose 'relu' or 'mlp'.")
         else:
             self.update_function = update_function
+            
         self.use_graph_norm = use_graph_norm
         self.use_residuals = use_residuals
-        self.use_pos = use_pos
 
-        # Adjust input channels if using position features
-        if self.use_pos:
-            self.in_channels += 2  # Add 2 for start, end coordinates (midpoint)
-
+        # WANDB LOGGING (CLEANED UP)
         if self.log_to_wandb:
             wandb.config.update({
                 'hidden_channels': hidden_channels,
                 'in_channels': self.in_channels,
                 'mlp_hidden_dim': mlp_hidden_dim,
                 'use_pos': use_pos,
+                'use_pos_encoding': use_pos_encoding,
+                'use_lap_pe': use_lap_pe,
+                'lap_pe_dim': lap_pe_dim,
+                'use_anchor_pe': use_anchor_pe,
+                'anchor_k': anchor_k,
+                'anchor_m': anchor_m,
+                'use_rwse': use_rwse,
+                'rwse_dim': rwse_dim,
+                'aggregator': aggregator,
+                'update_function': update_function,
                 'use_graph_norm': use_graph_norm,
                 'use_residuals': use_residuals,
             }, allow_val_change=True)
 
-        # Define the layers of the model
+        # Define the layers
         self.define_layers()
-
         # Initialize weights
         self.initialize_weights()
 
@@ -108,9 +153,9 @@ class GraphSAGE(BaseGNN):
                 in_channels, self.hidden_channels[i],
                 aggr=self.aggregator,   # 'mean', 'max', or 'lstm'
                 root_weight=True,
-                normalize=True,
+                normalize=False,
                 bias=True,
-                project=True) #TODO: to change to True if we want to project the features to the hidden_channels[i]
+                project=False) #TODO: to change to True if we want to project the features to the hidden_channels[i]
             setattr(self, f'conv{i + 1}', conv)
 
             if self.use_graph_norm:
@@ -133,29 +178,102 @@ class GraphSAGE(BaseGNN):
         
 
     def forward(self, data):
+        """
+        Forward pass with positional encodings.
+        """
+        from torch_geometric.data import Batch, Data
+        
+        # ✅ HANDLE BATCH/DATA INPUT
+        if isinstance(data, Batch):
+            datalist = data.to_data_list()
+        elif isinstance(data, Data):
+            datalist = [data]
+        else:
+            raise ValueError("Input must be Batch or Data")
+
+        # ✅ ENHANCE FEATURES FOR EACH GRAPH
+        enhanced_datalist = []
+        for d in datalist:
+            xi = d.x.clone()
+
+            # Add coordinate features
+            if self.use_pos:
+                if hasattr(d, 'pos') and d.pos is not None:
+                    pos = d.pos.to(self.dtype)
+                    # Handle different pos shapes
+                    if pos.dim() == 3 and pos.shape[1] == 3:
+                        pos = pos[:, 1, :]  # Take middle position
+                    elif pos.dim() == 2 and pos.shape[1] != 2:
+                        pos = pos.view(pos.size(0), -1)  # Flatten if needed
+                    xi = torch.cat([xi, pos], dim=-1)
+                else:
+                    raise ValueError("Position features enabled but 'pos' missing")
+
+            # Add Laplacian PE
+            if self.use_lap_pe:
+                if hasattr(d, 'lap_pe') and d.lap_pe is not None:
+                    lap_pe = d.lap_pe[:, :2].to(self.dtype)  # First 2 eigenvectors
+                    xi = torch.cat([xi, lap_pe], dim=-1)
+                else:
+                    print("Warning: Laplacian PE enabled but 'lap_pe' missing")
+
+            # Add Anchor Distance Encoding
+            if self.use_anchor_pe:
+                if hasattr(d, 'pos') and d.pos is not None:
+                    # Simple anchor distance encoding
+                    pos = d.pos.to(next(self.parameters()).device)
+                    if pos.dim() == 3:
+                        pos = pos[:, 1, :]  # Middle position
+                    
+                    # Select random anchor nodes
+                    num_nodes = pos.size(0)
+                    num_anchors = min(self.anchor_k, num_nodes)
+                    anchor_indices = torch.randperm(num_nodes)[:num_anchors]
+                    anchors = pos[anchor_indices]
+                    
+                    # Compute distances to anchors
+                    distances = torch.cdist(pos, anchors)  # [num_nodes, num_anchors]
+                    
+                    # Pad or truncate to desired size
+                    if distances.size(1) < self.anchor_k:
+                        pad_size = self.anchor_k - distances.size(1)
+                        distances = torch.cat([distances, torch.zeros(num_nodes, pad_size, device=distances.device)], dim=1)
+                    else:
+                        distances = distances[:, :self.anchor_k]
+                    
+                    # Simple encoding (you can make this more sophisticated)
+                    ade = distances.repeat(1, self.anchor_m // self.anchor_k + 1)[:, :self.anchor_k * self.anchor_m]
+                    xi = torch.cat([xi, ade], dim=-1)
+
+            # Add Random Walk Structural Encoding
+            if self.use_rwse:
+                if hasattr(d, 'rw_pe') and d.rw_pe is not None:
+                    rwse = d.rw_pe.to(self.dtype)
+                    # Pad or truncate to desired dimension
+                    if rwse.size(1) < self.rwse_dim:
+                        pad = torch.zeros(rwse.size(0), self.rwse_dim - rwse.size(1), device=rwse.device, dtype=self.dtype)
+                        rwse = torch.cat([rwse, pad], dim=1)
+                    else:
+                        rwse = rwse[:, :self.rwse_dim]
+                    xi = torch.cat([xi, rwse], dim=-1)
+                else:
+                    print("Warning: Random Walk SE enabled but 'rw_pe' missing")
+
+            # Create enhanced data object
+            d_enhanced = d.clone()
+            d_enhanced.x = xi.to(self.dtype)
+            enhanced_datalist.append(d_enhanced)
+
+        # ✅ RECONSTRUCT BATCH
+        if len(enhanced_datalist) > 1:
+            data = Batch.from_data_list(enhanced_datalist)
+        else:
+            data = enhanced_datalist[0]
+
+        # ✅ STANDARD GRAPHSAGE FORWARD PASS
         x, edge_index = data.x, data.edge_index
-    
-        if self.use_pos:
-            if not hasattr(data, 'pos') or data.pos is None:
-                raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
-        
-            pos = data.pos
-            
-            # Handle different pos shapes
-            if len(pos.shape) == 3:
-                # If still [N, 3, 2], extract middle position
-                if pos.shape[1] == 3:
-                    pos = pos[:, 1, :]  # Take middle position
-                pos = pos.view(pos.size(0), -1)  # Flatten to [N, 2]
-            elif len(pos.shape) == 2:
-                # Already 2D, check if it needs flattening
-                if pos.shape[1] != 2:
-                    pos = pos.view(pos.size(0), -1)  # Flatten if needed
-        
-            # Concatenate x and pos features
-            x = torch.cat([x, pos], dim=1)
-    
         x = x.to(self.dtype)
+
         # Apply GraphSAGE layers
         for i in range(len(self.hidden_channels)):
             x_0 = x
