@@ -4,7 +4,7 @@ import torch
 from torch import nn
 from torch_geometric.data import Batch, Data
 from torch_geometric.nn import (
-    GCNConv, GATConv, GraphConv, TransformerConv, GraphNorm
+    GCNConv, GATConv, GraphConv, TransformerConv, GraphNorm, GATv2Conv
 )
 from torch.nn.utils.rnn import pad_sequence
 from torch_geometric.utils import get_laplacian, degree, to_dense_adj
@@ -19,6 +19,23 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from gnn.models.base_gnn import BaseGNN
+
+
+# ---------------- DANN Components ---------------- #
+
+class GradientReversalLayer(torch.autograd.Function):
+    """Gradient Reversal Layer for Domain Adversarial Training"""
+    @staticmethod
+    def forward(ctx, x, alpha=1.0):
+        ctx.alpha = alpha
+        return x
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return grad_output * -ctx.alpha, None
+
+def gradient_reversal(x, alpha=1.0):
+    return GradientReversalLayer.apply(x, alpha)
 
 
 # ---------------- Utility functions ---------------- #
@@ -98,74 +115,17 @@ def anchor_distance_encoding(pos, edge_index, K=12, M=16):
     rbf_encodings = rbf(d, centers, gamma)  # [N, K, M]
     return rbf_encodings.reshape(N, K * M)  # [N, K*M]
 
-def compute_laplacian_pe(edge_index, num_nodes, pe_dim=8):
-    """
-    Compute Laplacian Positional Encoding using eigendecomposition.
-    
-    Args:
-        edge_index: [2, num_edges] 
-        num_nodes: number of nodes
-        pe_dim: dimension of positional encoding
-        
-    Returns:
-        [num_nodes, pe_dim] positional encodings
-    """
-    device = edge_index.device
-    
-    try:
-        # Get normalized Laplacian
-        edge_index_lap, edge_weight_lap = get_laplacian(
-            edge_index, 
-            num_nodes=num_nodes, 
-            normalization='sym',
-            dtype=torch.float32
-        )
-        
-        # Convert to dense for eigendecomposition
-        L = to_dense_adj(
-            edge_index_lap, 
-            edge_attr=edge_weight_lap, 
-            max_num_nodes=num_nodes
-        ).squeeze(0)  # [num_nodes, num_nodes]
-        
-        # Eigendecomposition
-        eigenvals, eigenvecs = LA.eigh(L)
-        
-        # Skip first eigenvalue (~0) and take next pe_dim eigenvectors
-        start_idx = 1 if eigenvals[0].abs() < 1e-6 else 0
-        end_idx = min(start_idx + pe_dim, num_nodes)
-        
-        pe_eigenvecs = eigenvecs[:, start_idx:end_idx]  # [num_nodes, k]
-        
-        # Pad or truncate to pe_dim
-        if pe_eigenvecs.size(1) < pe_dim:
-            padding = torch.zeros(
-                num_nodes, 
-                pe_dim - pe_eigenvecs.size(1), 
-                device=device, 
-                dtype=pe_eigenvecs.dtype
-            )
-            pe_eigenvecs = torch.cat([pe_eigenvecs, padding], dim=1)
-        else:
-            pe_eigenvecs = pe_eigenvecs[:, :pe_dim]
-            
-        return pe_eigenvecs.to(device)
-        
-    except Exception as e:
-        print(f"⚠️ LapPE computation failed: {e}, using random features")
-        return torch.randn(num_nodes, pe_dim, device=device) * 0.1
 
-
-# ---------------- Enhanced TransEncoder ---------------- #
+# ---------------- Enhanced TransEncoder with DANN ---------------- #
 
 class TransEncoder(BaseGNN):
     def __init__(self,
                  in_channels: int = 5,
                  out_channels: int = 1,
-                 embed_dim: int = 128,
-                 ff_dim: int = 512,
+                 embed_dim: int = 96, # 128,
+                 ff_dim: int = 256, # 512,
                  num_heads: int = 4,
-                 num_layers: int = 5,
+                 num_layers: int = 2, # 5
                  num_nodes: int = 31635,
                  use_pos: bool = False,
                  use_pos_encoding: bool = False,
@@ -179,6 +139,10 @@ class TransEncoder(BaseGNN):
                  # Random Walk Structural Encoding
                  use_rwse: bool = False,
                  rwse_dim: int = 8,
+                 # DANN settings
+                 use_dann: bool = False,
+                 city_list: list = None,
+                 domain_classifier_layers: list = None,
                  # Training params
                  dropout: float = 0.1,
                  use_dropout: bool = False,
@@ -189,15 +153,34 @@ class TransEncoder(BaseGNN):
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
+                 use_target_standardization: bool = False, 
                  pad_to: int | None = None,
                  pad_value: float = 0.0):
+
+        # DANN setup
+        self.use_dann = use_dann
+        if city_list is None:
+            # Default city list based on your data
+            self.city_list = ['wuerzburg', 'aschaffenburg', 'regensburg', 'bayreuth', 
+                             'rosenheim', 'landshut', 'schweinfurt']
+        else:
+            self.city_list = city_list
+        
+        self.city_to_idx = {city: idx for idx, city in enumerate(self.city_list)}
+        self.num_cities = len(self.city_list)
+        
+        # Domain classifier architecture
+        if domain_classifier_layers is None:
+            self.domain_classifier_layers = [embed_dim // 2]
+        else:
+            self.domain_classifier_layers = domain_classifier_layers
 
         # Calculate effective input channels
         effective_in_channels = in_channels
         if use_pos:
             effective_in_channels += 2  # Only middle position (x, y coordinates)
         if use_lap_pe:
-            effective_in_channels += lap_pe_dim
+            effective_in_channels += 2 
         if use_anchor_pe:
             effective_in_channels += anchor_k * anchor_m
         if use_rwse:
@@ -210,7 +193,8 @@ class TransEncoder(BaseGNN):
             use_dropout=use_dropout,
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
-            log_to_wandb=log_to_wandb)
+            log_to_wandb=log_to_wandb,
+            use_target_standardization=use_target_standardization)  # ✅ PASS IT TO PARENT
 
         # Store all parameters
         self.use_pos = use_pos
@@ -249,6 +233,9 @@ class TransEncoder(BaseGNN):
                 'anchor_m': anchor_m,
                 'use_rwse': use_rwse,
                 'rwse_dim': rwse_dim,
+                'use_dann': use_dann,
+                'num_cities': self.num_cities,
+                'domain_classifier_layers': self.domain_classifier_layers,
                 'effective_in_channels': self.in_channels,
                 'embed_dim': embed_dim,
                 'ff_dim': ff_dim,
@@ -281,13 +268,31 @@ class TransEncoder(BaseGNN):
         if self.use_pos_encoding:
             self.pos_embedding = nn.Embedding(self.num_nodes, self.embed_dim)
 
+        # DANN Domain Classifier
+        if self.use_dann:
+            domain_layers = []
+            prev_dim = self.embed_dim
+            
+            for hidden_dim in self.domain_classifier_layers:
+                domain_layers.extend([
+                    nn.Linear(prev_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(self.dropout if self.use_dropout else 0.0)
+                ])
+                prev_dim = hidden_dim
+            
+            # Final classification layer
+            domain_layers.append(nn.Linear(prev_dim, self.num_cities))
+            
+            self.domain_classifier = nn.Sequential(*domain_layers)
+
         if self.use_graph_conv:
             for i in range(self.num_graph_conv_layers):
                 in_channels = self.in_channels if i == 0 else self.embed_dim
                 if self.graph_conv_type == 'gcn':
                     conv = GCNConv(in_channels, self.embed_dim)
-                elif self.graph_conv_type == 'gat':
-                    conv = GATConv(in_channels, self.embed_dim)
+                elif self.graph_conv_type == 'gatv2':
+                    conv = GATv2Conv(in_channels, self.embed_dim)
                 elif self.graph_conv_type == 'graph':
                     conv = GraphConv(in_channels, self.embed_dim)
                 elif self.graph_conv_type == 'trans_conv':
@@ -301,7 +306,29 @@ class TransEncoder(BaseGNN):
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
 
-    def forward(self, data):
+    def get_city_labels(self, datalist):
+        """Convert city names to indices for domain classification."""
+        city_labels = []
+        for d in datalist:
+            if hasattr(d, 'city'):
+                city_idx = self.city_to_idx.get(d.city, 0)  # Default to 0 if city not found
+            else:
+                city_idx = 0  # Default city index
+            city_labels.append(city_idx)
+        return torch.tensor(city_labels, dtype=torch.long, device=next(self.parameters()).device)
+
+    def forward(self, data, alpha=1.0):
+        """
+        Forward pass with optional DANN.
+        
+        Args:
+            data: Input batch
+            alpha: Gradient reversal strength for DANN (0.0 = no reversal, 1.0 = full reversal)
+        
+        Returns:
+            If use_dann=False: predictions [total_nodes_across_batch, 1]
+            If use_dann=True: (predictions, domain_logits) where domain_logits [batch_size, num_cities]
+        """
         device = next(self.parameters()).device
 
         # Process data into per-graph tensors FIRST (before graph conv)
@@ -320,16 +347,29 @@ class TransEncoder(BaseGNN):
             # Add coordinate features
             if self.use_pos:
                 if hasattr(d, 'pos') and d.pos is not None:
-                    # pos is already [N, 2] from collate function (middle position only)
                     pos = d.pos.to(self.dtype)
+                    
+                    # Handle 3D position tensor - extract middle position or flatten
+                    if pos.dim() == 3:
+                        pos = pos[:, 1, :]  # [num_nodes, 2] - middle position only
+                    
                     xi = torch.cat([xi, pos], dim=-1)
                 else:
                     raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
 
-            # Add Laplacian PE
+            # Add Laplacian PE (use precomputed if available)
             if self.use_lap_pe:
-                lap_pe = compute_laplacian_pe(d.edge_index, d.x.size(0), self.lap_pe_dim)
-                xi = torch.cat([xi, lap_pe], dim=-1)
+                if hasattr(d, 'lap_pe') and d.lap_pe is not None:
+                    # Use precomputed Laplacian PE
+                    lap_pe = d.lap_pe.to(device)
+                    
+                    # Take only the first 2 Laplacian positional encodings
+                    lap_pe = lap_pe[:, :2]  # [num_nodes, 2]
+                    
+                    xi = torch.cat([xi, lap_pe], dim=-1)
+                else:
+                    # Fallback to on-the-fly computation if precomputed is missing
+                    print("⚠️ Warning: data.lap_pe not found")
 
             # Add Anchor Distance Encoding
             if self.use_anchor_pe:
@@ -385,6 +425,7 @@ class TransEncoder(BaseGNN):
             datalist = [data]
 
         all_predictions = []
+        all_graph_embeddings = []  # For DANN domain classification
         
         for d in datalist:
             x = d.x.unsqueeze(0)  # [1, num_nodes, embed_dim]
@@ -401,12 +442,32 @@ class TransEncoder(BaseGNN):
                     pos_emb = pos_emb.unsqueeze(0)  # [1, seq_len, embed_dim]
                     x = x + pos_emb
             
-            # No padding mask needed since we process each graph individually
-            x = self.transformer(x)  # [1, num_nodes, embed_dim]
-            x = self.output(x.squeeze(0))  # [num_nodes, 1]
+            # Transformer encoding
+            x_transformed = self.transformer(x)  # [1, num_nodes, embed_dim]
             
-            all_predictions.append(x.squeeze(-1))  # [num_nodes] - 1D
+            # Task prediction (main objective)
+            predictions = self.output(x_transformed.squeeze(0))  # [num_nodes, 1]
+            all_predictions.append(predictions.squeeze(-1))  # [num_nodes] - 1D
+            
+            # Graph-level representation for domain classification
+            if self.use_dann:
+                # Global mean pooling for graph-level representation
+                graph_embedding = x_transformed.mean(dim=1).squeeze(0)  # [embed_dim]
+                all_graph_embeddings.append(graph_embedding)
         
-        # Return with correct shape to match target
+        # Concatenate all predictions
         result = torch.cat(all_predictions, dim=0)  # [total_nodes_across_batch]
-        return result.unsqueeze(-1)  # [total_nodes_across_batch, 1] - matches target shape
+        
+        if self.use_dann:
+            # Stack graph embeddings
+            graph_embeddings = torch.stack(all_graph_embeddings, dim=0)  # [batch_size, embed_dim]
+            
+            # Apply gradient reversal
+            reversed_embeddings = gradient_reversal(graph_embeddings, alpha)
+            
+            # Domain classification
+            domain_logits = self.domain_classifier(reversed_embeddings)  # [batch_size, num_cities]
+            
+            return result.unsqueeze(-1), domain_logits  # [total_nodes_across_batch, 1], [batch_size, num_cities]
+        else:
+            return result.unsqueeze(-1)  # [total_nodes_across_batch, 1]
