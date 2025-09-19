@@ -21,7 +21,7 @@ from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRando
 from torch_geometric.data import Batch, Data
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.utils import subgraph
-from gnn.gnn_io import rotate_pos
+from gnn.gnn_io import rotate_pos, apply_gaussian_noise_to_features
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -237,7 +237,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
         collate_fn_eval = partial(collate_fn, 
                                  augment_pos_rotation=False, 
                                  augment_edge_perturbation_prob=0.0,
-                                 augment_feature_noise_prob=0.0,
+                                 augment_feature_noise_prob=False,
                                  filtered_feature_mapping=filtered_feature_mapping, 
                                  is_training=False)
         
@@ -263,7 +263,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             collate_fn_no_aug = partial(collate_fn, 
                 augment_pos_rotation=False,
                 augment_edge_perturbation_prob=0.0,
-                augment_feature_noise_prob=0.0,
+                augment_feature_noise_prob=False,
                 filtered_feature_mapping=filtered_feature_mapping,
                 is_training=False)
             base_train_loader = DataLoader(
@@ -366,7 +366,7 @@ def nested_dataloader(base_train_loader: DataLoader,
                      filtered_feature_mapping: dict = None,  # ✅ SINGLE MAPPING
                      augment_pos_rotation: bool = False,
                      augment_edge_perturbation_prob: float = 0.0,
-                     augment_feature_noise_prob: float = 0.0,
+                     augment_feature_noise_prob: bool = False,
                      is_training: bool = True) -> DataLoader:
     """
     Create enhanced nested dataloader with on-the-fly subgraph generation and augmentation.
@@ -783,7 +783,7 @@ class NestedNeighborDataset(Dataset):
                  filtered_feature_mapping: dict = None,
                  augment_pos_rotation: bool = False,
                  augment_edge_perturbation_prob: float = 0.0,
-                 augment_feature_noise_prob: float = 0.0,
+                 augment_feature_noise_prob: bool = False,
                  is_training: bool = True):
         
         # Store existing parameters
@@ -1063,9 +1063,9 @@ class NestedNeighborDataset(Dataset):
                 subgraph.pos = rotate_pos(subgraph.pos, theta)
         
         # On-the-fly feature noise augmentation
-        if self.is_training and self.augment_feature_noise_prob > 0:
-            if hasattr(subgraph, 'x') and subgraph.x is not None and torch.rand(1).item() < self.augment_feature_noise_prob:
-                subgraph.x = self.apply_gaussian_noise_to_features(subgraph.x)
+        if self.is_training and self.augment_feature_noise_prob:
+            if hasattr(subgraph, 'x') and subgraph.x is not None:
+                subgraph.x = apply_gaussian_noise_to_features(subgraph.x)
         
         # On-the-fly edge perturbation (simplified approach)
         if self.is_training and self.augment_edge_perturbation_prob > 0:
@@ -1092,55 +1092,6 @@ class NestedNeighborDataset(Dataset):
     
         return subgraph
     
-    def apply_gaussian_noise_to_features(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Apply Gaussian noise to normalized features using the filtered feature mapping.
-        """
-        if self.filtered_feature_mapping is None:
-            print("Warning: No filtered_feature_mapping available. Skipping feature noise.")
-            return x
-        
-        noise = torch.zeros_like(x)
-        
-        # Volume features
-        if EdgeFeatures.VOL_BASE_CASE.value in self.filtered_feature_mapping:
-            idx = self.filtered_feature_mapping[EdgeFeatures.VOL_BASE_CASE.value]
-            if isinstance(idx, int) and idx < x.shape[1]:
-                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1
-        
-        # Capacity features
-        if EdgeFeatures.CAPACITY_BASE_CASE.value in self.filtered_feature_mapping:
-            idx = self.filtered_feature_mapping[EdgeFeatures.CAPACITY_BASE_CASE.value]
-            if isinstance(idx, int) and idx < x.shape[1]:
-                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1
-        
-        # Length features
-        if EdgeFeatures.LENGTH.value in self.filtered_feature_mapping:
-            idx = self.filtered_feature_mapping[EdgeFeatures.LENGTH.value]
-            if isinstance(idx, int) and idx < x.shape[1]:
-                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05
-        
-        # Speed features
-        if EdgeFeatures.FREESPEED.value in self.filtered_feature_mapping:
-            idx = self.filtered_feature_mapping[EdgeFeatures.FREESPEED.value]
-            if isinstance(idx, int) and idx < x.shape[1]:
-                noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05
-        
-        # Conditional noise for capacity reduction
-        cap_red_idx = self.filtered_feature_mapping.get(EdgeFeatures.CAPACITY_REDUCTION.value)
-        cap_base_idx = self.filtered_feature_mapping.get(EdgeFeatures.CAPACITY_BASE_CASE.value)
-        
-        if (cap_red_idx is not None and isinstance(cap_red_idx, int) and cap_red_idx < x.shape[1] and 
-            cap_base_idx is not None and isinstance(cap_base_idx, int) and cap_base_idx < x.shape[1]):
-            
-            mask = x[:, cap_red_idx] == 1
-            if mask.any():
-                noise[mask, cap_base_idx] += torch.randn(mask.sum()) * 0.05
-        
-        # Apply noise and clamp to reasonable bounds
-        x_noisy = x + noise
-        
-        return x_noisy
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience
