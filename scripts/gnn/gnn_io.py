@@ -13,7 +13,7 @@ from functools import partial
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 def rotate_pos(pos, theta):
-    """Rotate 2D positions by theta radians."""
+    """Rotate 2D positions by theta radians, with 30% chance of random reflection."""
     if pos is None or pos.shape[1] < 2:
         return pos
     rot_matrix = torch.tensor([
@@ -21,6 +21,19 @@ def rotate_pos(pos, theta):
         [math.sin(theta),  math.cos(theta)]
     ], dtype=pos.dtype, device=pos.device)
     pos_xy = pos[:, :2] @ rot_matrix.T
+
+    # With 30% probability, apply a random reflection
+    if random.random() < 0.3:
+        reflection_type = random.choice(['horizontal', 'vertical', 'diagonal1', 'diagonal2'])
+        if reflection_type == 'horizontal':
+            pos_xy[:, 1] = -pos_xy[:, 1]
+        elif reflection_type == 'vertical':
+            pos_xy[:, 0] = -pos_xy[:, 0]
+        elif reflection_type == 'diagonal1':  # y = x
+            pos_xy = pos_xy.flip(1)
+        elif reflection_type == 'diagonal2':  # y = -x
+            pos_xy = -pos_xy.flip(1)
+
     if pos.shape[1] > 2:
         pos_aug = torch.cat([pos_xy, pos[:, 2:]], dim=1)
     else:
@@ -133,7 +146,7 @@ def save_dataloader_params(dataloader, file_path):
     with open(file_path, 'w') as f:
         json.dump(params, f)
 
-def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True, augment_feature_noise_prob=0.0, filtered_feature_mapping=None):
+def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True, augment_feature_noise_prob=False, filtered_feature_mapping=None):
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in data_list:
         if hasattr(data, 'pos') and data.pos is not None:
@@ -149,9 +162,9 @@ def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_
                 data.pos = rotate_pos(data.pos, theta)
     
     # On-the-fly feature noise augmentation
-    if is_training and augment_feature_noise_prob > 0:
+    if is_training and augment_feature_noise_prob:
         for data in data_list:
-            if hasattr(data, 'x') and data.x is not None and torch.rand(1).item() < augment_feature_noise_prob:
+            if hasattr(data, 'x') and data.x is not None:
                 data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping) 
     
     # On-the-fly edge perturbation (random dropout on line graph edges)
@@ -195,25 +208,25 @@ def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: 
     if EdgeFeatures.VOL_BASE_CASE.value in filtered_feature_mapping:
         idx = filtered_feature_mapping[EdgeFeatures.VOL_BASE_CASE.value]
         if isinstance(idx, int) and idx < x.shape[1]:
-            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1  # ±10%
+            noise[:, idx] = torch.randn(x[:, idx].size(), device=x.device) * 0.1  # ±10%
     
     # Capacity features
     if EdgeFeatures.CAPACITY_BASE_CASE.value in filtered_feature_mapping:
         idx = filtered_feature_mapping[EdgeFeatures.CAPACITY_BASE_CASE.value]
         if isinstance(idx, int) and idx < x.shape[1]:
-            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.1  # ±10%
+            noise[:, idx] = torch.randn(x[:, idx].size(), device=x.device) * 0.1  # ±10%
     
     # Length features
     if EdgeFeatures.LENGTH.value in filtered_feature_mapping:
         idx = filtered_feature_mapping[EdgeFeatures.LENGTH.value]
         if isinstance(idx, int) and idx < x.shape[1]:
-            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05  # ±5%
+            noise[:, idx] = torch.randn(x[:, idx].size(), device=x.device) * 0.05  # ±5%
     
     # Speed features
     if EdgeFeatures.FREESPEED.value in filtered_feature_mapping:
         idx = filtered_feature_mapping[EdgeFeatures.FREESPEED.value]
         if isinstance(idx, int) and idx < x.shape[1]:
-            noise[:, idx] = torch.randn(x[:, idx].size()) * 0.05  # ±5%
+            noise[:, idx] = torch.randn(x[:, idx].size(), device=x.device) * 0.05  # ±5%
     
     # Conditional noise for capacity reduction
     cap_red_idx = filtered_feature_mapping.get(EdgeFeatures.CAPACITY_REDUCTION.value)
@@ -224,7 +237,7 @@ def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: 
         
         mask = x[:, cap_red_idx] == 1
         if mask.any():
-            noise[mask, cap_base_idx] += torch.randn(mask.sum()) * 0.05  # Extra ±5% if policy applied
+            noise[mask, cap_base_idx] += torch.randn(mask.sum(), device=x.device) * 0.05  # Extra ±5% if policy applied
     
     # Apply noise and clamp to reasonable bounds
     x_noisy = x + noise
