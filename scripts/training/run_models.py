@@ -38,8 +38,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
-val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
+train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg']
+val_cities =['nuernberg'] # Non empty implies inductive learning
 test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
@@ -90,7 +90,7 @@ def main():
     parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
     parser.add_argument("--use_edge_perturbation_probability", type=float, default=0.0, help="The probability of edge perturbation (random dropout on line graph edges) during training. 0.0 means no perturbation.")
     #for Gaussian noise addition to node features
-    parser.add_argument("--augment_feature_noise_prob", type=float, default=0.0, help="Probability of applying Gaussian noise to features (0.0-1.0)")
+    parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
 
     #parser for DANN
     parser.add_argument("--use_dann", type=str_to_bool, default=False, help="Whether to use Domain Adversarial Neural Network.")
