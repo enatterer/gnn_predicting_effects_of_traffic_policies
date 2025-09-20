@@ -698,7 +698,7 @@ def setup_wandb_metrics(predict_mode_stats=False):
         wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
         wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
 
-def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device):
+def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device, use_city_balanced_loss: bool = False):
     """
     Factory function to create the specified model architecture.
     
@@ -719,7 +719,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "predict_mode_stats": config.predict_mode_stats,
         "dtype": torch.float32,
         "log_to_wandb": True,
-        "use_target_standardization": getattr(config, 'use_target_standardization', False)  # ✅ ADD THIS LINE
+        "use_target_standardization": getattr(config, 'use_target_standardization', False),
+        "use_city_balanced_loss": use_city_balanced_loss
     }
 
     if gnn_arch == "point_net_transf_gat":
