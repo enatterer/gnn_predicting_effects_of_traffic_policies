@@ -668,3 +668,96 @@ def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device 
 
     return mean_prediction, uncertainty
 
+# Add after the existing GNN_Loss class, around line 100
+
+try:
+    from torch_scatter import scatter_mean
+    HAS_SCATTER = True
+except ImportError:
+    HAS_SCATTER = False
+
+class CityBalancedGNNLoss(nn.Module):
+    """
+    City-balanced MSE for link-level predictions in batched PyG graphs.
+
+    Steps:
+    1. Compute per-node squared error (collapse time/features).
+    2. Aggregate to per-graph mean (each graph equally weighted).
+    3. Optionally aggregate per-city mean (each city equally weighted).
+    """
+
+    def __init__(self, loss_fct='mse', device=None, weighted=False, num_nodes=None, eps: float = 1e-8):
+        super().__init__()
+        self.eps = eps
+        self.loss_fct = loss_fct  # Keep for compatibility
+        self.device = device  # Keep for compatibility
+        self.weighted = weighted  # Keep for compatibility
+        self.num_nodes = num_nodes  # Keep for compatibility
+        
+        print(f"✅ Initialized CityBalancedGNNLoss with {loss_fct} loss")
+
+    def forward(
+        self,
+        y_pred: torch.Tensor,           # [N, H] or [N, H, C]
+        y_true: torch.Tensor,           # [N, H] or [N, H, C]
+        batch: torch.Tensor = None,     # [N] node -> graph_id
+        city_id_per_graph: torch.Tensor = None,  # [G] graph -> city_id
+    ) -> torch.Tensor:
+
+        # 0) Per-node error (support both MSE and L1)
+        if self.loss_fct == 'l1':
+            se = torch.abs(y_pred - y_true)
+        else:  # Default to MSE
+            se = (y_pred - y_true) ** 2
+            
+        while se.dim() > 1:
+            se = se.mean(dim=-1)  # collapse H (/C)
+        # se: [N]
+
+        if batch is None:
+            # Single-graph case
+            return se.mean()
+
+        # 1) Per-graph mean SE
+        num_graphs = int(batch.max().item()) + 1
+        device = se.device
+
+        per_graph_sum = torch.zeros(num_graphs, device=device, dtype=se.dtype)
+        per_graph_cnt = torch.zeros(num_graphs, device=device, dtype=se.dtype)
+
+        per_graph_sum.index_add_(0, batch, se)
+        per_graph_cnt.index_add_(0, batch, torch.ones_like(se))
+
+        per_graph_mse = per_graph_sum / (per_graph_cnt + self.eps)  # [G]
+
+        if city_id_per_graph is None:
+            # Graph-balanced
+            return per_graph_mse.mean()
+
+        # 2) Per-city mean of graph MSEs
+        num_cities = int(city_id_per_graph.max().item()) + 1
+
+        sum_city = torch.zeros(num_cities, device=device, dtype=per_graph_mse.dtype)
+        cnt_city = torch.zeros(num_cities, device=device, dtype=per_graph_mse.dtype)
+
+        sum_city.index_add_(0, city_id_per_graph, per_graph_mse)
+        cnt_city.index_add_(0, city_id_per_graph, torch.ones_like(per_graph_mse))
+
+        per_city_mse = sum_city / (cnt_city + self.eps)  # [C]
+
+        # 3) City-balanced
+        return per_city_mse.mean()
+
+    def __call__(self, y_pred: torch.Tensor, y_true: torch.Tensor, data: object = None, batch: torch.Tensor = None) -> torch.Tensor:
+        """Compatibility method to match GNN_Loss interface"""
+        # Extract city information from data if available
+        city_id_per_graph = None
+        if data is not None and hasattr(data, 'city'):
+            # Convert city names to city IDs (only when called via old interface)
+            cities_in_batch = data.city if isinstance(data.city, list) else [data.city] * (batch.max().item() + 1 if batch is not None else 1)
+            unique_cities = list(set(cities_in_batch))
+            city_name_to_id = {city: i for i, city in enumerate(unique_cities)}
+            city_ids = [city_name_to_id[city] for city in cities_in_batch]
+            city_id_per_graph = torch.tensor(city_ids, device=y_pred.device, dtype=torch.long)
+        
+        return self.forward(y_pred, y_true, batch, city_id_per_graph)
