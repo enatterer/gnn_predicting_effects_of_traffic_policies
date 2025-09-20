@@ -244,7 +244,12 @@ def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: 
     
     return x_noisy
 
-def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False): #for transductive learning
+def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False, 
+                           augment_feature_noise_prob=False, is_training=True, 
+                           filtered_feature_mapping=None):
+    """
+    Collate function for transductive learning with rotation and Gaussian noise augmentation.
+    """
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in batch:
         if hasattr(data, 'pos') and data.pos is not None:
@@ -252,17 +257,27 @@ def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=Fal
                 # Extract middle position (index 1)
                 data.pos = data.pos[:, 1, :].contiguous()
     
+    # ✅ STEP 1: Filter node features FIRST (before augmentation)
+    for data in batch:
+        if node_feature_filter is not None:
+            data.x = data.x[:, node_feature_filter]
+    
+    # ✅ STEP 2: Apply augmentation to filtered features
     # On-the-fly rotation augmentation
-    if augment_pos_rotation:
+    if is_training and augment_pos_rotation:
         for data in batch:
             if hasattr(data, 'pos') and data.pos is not None:
                 theta = random.uniform(0, 2 * math.pi)
                 data.pos = rotate_pos(data.pos, theta)
-    batch = Batch.from_data_list(batch)
     
-    # Filter node features
-    if node_feature_filter is not None:
-        batch.x = batch.x[:, node_feature_filter]
+    # On-the-fly feature noise augmentation
+    if is_training and augment_feature_noise_prob:
+        for data in batch:
+            if hasattr(data, 'x') and data.x is not None:
+                data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping)
+    
+    # ✅ STEP 3: Create batch (features already filtered)
+    batch = Batch.from_data_list(batch)
     
     return batch
 
