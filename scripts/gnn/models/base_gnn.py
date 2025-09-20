@@ -28,7 +28,8 @@ class BaseGNN(nn.Module, ABC):
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
-                 use_target_standardization: bool = False):
+                 use_target_standardization: bool = False,
+                 use_city_balanced_loss: bool = False): 
         """
         Base class for all GNN implementations.
         """
@@ -45,6 +46,7 @@ class BaseGNN(nn.Module, ABC):
         self.use_target_standardization = use_target_standardization
         self.target_mean = None
         self.target_std = None
+        self.use_city_balanced_loss = use_city_balanced_loss
 
     @abstractmethod
     def define_layers(self):
