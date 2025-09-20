@@ -668,14 +668,6 @@ def mc_dropout_predict(model, data, num_samples: int = 50, device: torch.device 
 
     return mean_prediction, uncertainty
 
-# Add after the existing GNN_Loss class, around line 100
-
-try:
-    from torch_scatter import scatter_mean
-    HAS_SCATTER = True
-except ImportError:
-    HAS_SCATTER = False
-
 class CityBalancedGNNLoss(nn.Module):
     """
     City-balanced MSE for link-level predictions in batched PyG graphs.
