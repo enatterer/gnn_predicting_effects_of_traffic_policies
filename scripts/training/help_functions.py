@@ -191,37 +191,82 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
 
     if variant == 'GNN_Transductive':
-        # MODIFIED: Use simple collate function without scaling
-        #collate_with_scaler = partial(scale_and_collate, scaler=scalers_train['x_scaler'], continuous_feat=continuous_feat, node_feature_filter=node_feature_filter)
-        collate_without_scaling_fn = partial(collate_without_scaling, node_feature_filter=node_feature_filter, augment_pos_rotation=use_data_augmentation)
-        print('Data Augmentation:', use_data_augmentation)
+        if use_nested_neighbor_loader:
+            # For nested neighbor loader: disable augmentation in base loader
+            collate_without_scaling_fn = partial(
+                collate_without_scaling, 
+                node_feature_filter=node_feature_filter,
+                augment_pos_rotation=False,  # ✅ DISABLE rotation for base loader
+                augment_feature_noise_prob=False,  # ✅ DISABLE noise for base loader
+                is_training=False,  # ✅ NOT training mode for base loader
+                filtered_feature_mapping=filtered_feature_mapping
+            )
+            print('Base loader augmentation DISABLED (will be applied in nested loader)')
+        else:
+            # For standard loader: enable augmentation in base loader
+            collate_without_scaling_fn = partial(
+                collate_without_scaling, 
+                node_feature_filter=node_feature_filter,
+                augment_pos_rotation=use_data_augmentation,  # ✅ Enable rotation augmentation
+                augment_feature_noise_prob=use_feature_noise_probability,  # ✅ Enable Gaussian noise augmentation  
+                is_training=True,  # ✅ Training mode
+                filtered_feature_mapping=filtered_feature_mapping
+            )
+            print('Base loader augmentation ENABLED')
+        
+        # For validation/test, always disable augmentation
+        collate_without_scaling_fn_no_aug = partial(
+            collate_without_scaling,
+            node_feature_filter=node_feature_filter,
+            augment_pos_rotation=False,  # ✅ Disable rotation for validation/test
+            augment_feature_noise_prob=False,  # ✅ Disable noise for validation/test
+            is_training=False,  # ✅ Not training mode
+            filtered_feature_mapping=filtered_feature_mapping
+        )
+        
+        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability)
+        print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
 
         print("Creating base train loader...")
-        base_train_loader = DataLoader(dataset=train_set, batch_size=batch_size,
-                                    shuffle=True if not use_weighted_sampling else None,
-                                    sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
-                                    num_workers=2, prefetch_factor=2, pin_memory=True, 
-                                    collate_fn=collate_without_scaling_fn,
-                                    worker_init_fn=seed_worker,
-                                    drop_last=False)
-        #print(f"Memory_per_graph: {estimate_average_graph_memory(base_train_loader, num_samples=100)} MB")
+        base_train_loader = DataLoader(
+            dataset=train_set,
+            batch_size=batch_size,
+            shuffle=True if not use_weighted_sampling else None,
+            sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
+            num_workers=2,
+            prefetch_factor=2,
+            pin_memory=True,
+            collate_fn=collate_without_scaling_fn,  # ✅ Uses conditional augmentation
+            worker_init_fn=seed_worker,
+            drop_last=False
+        )
+
         print("Creating validation loader...")
-        val_loader = DataLoader(dataset=valid_set, batch_size=batch_size,
-                            shuffle=True if not use_weighted_sampling else None,
-                            sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
-                            num_workers=2, pin_memory=True, 
-                            collate_fn=collate_without_scaling_fn,
-                            worker_init_fn=seed_worker,
-                            drop_last=False)
-    
+        val_loader = DataLoader(
+            dataset=valid_set,
+            batch_size=batch_size,
+            shuffle=True if not use_weighted_sampling else None,
+            sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
+            num_workers=2,
+            pin_memory=True,
+            collate_fn=collate_without_scaling_fn_no_aug,  # ✅ Always without augmentation
+            worker_init_fn=seed_worker,
+            drop_last=False
+        )
+
         print("Creating test loader...")
-        test_loader = DataLoader(dataset=test_set, batch_size=batch_size,
-                                shuffle=True if not use_weighted_sampling else None,
-                                sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
-                                num_workers=2, 
-                                collate_fn=collate_without_scaling_fn,
-                                worker_init_fn=seed_worker,
-                                drop_last=False)
+        test_loader = DataLoader(
+            dataset=test_set,
+            batch_size=batch_size,
+            shuffle=True if not use_weighted_sampling else None,
+            sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
+            num_workers=2,
+            pin_memory=True,
+            collate_fn=collate_without_scaling_fn_no_aug,  # ✅ Always without augmentation
+            worker_init_fn=seed_worker,
+            drop_last=False
+        )
+
         print("Loaders created")
         save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
         save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
@@ -1066,7 +1111,7 @@ class NestedNeighborDataset(Dataset):
         # On-the-fly feature noise augmentation
         if self.is_training and self.augment_feature_noise_prob:
             if hasattr(subgraph, 'x') and subgraph.x is not None:
-                subgraph.x = apply_gaussian_noise_to_features(subgraph.x)
+                subgraph.x = apply_gaussian_noise_to_features(subgraph.x,self.filtered_feature_mapping)
         
         # On-the-fly edge perturbation (simplified approach)
         if self.is_training and self.augment_edge_perturbation_prob > 0:
