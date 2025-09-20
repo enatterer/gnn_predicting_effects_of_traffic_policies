@@ -20,7 +20,6 @@ import os
 import sys
 import json
 import argparse
-
 import torch
 #from torchinfo import summary
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
@@ -31,7 +30,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from training.help_functions import *
-from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies
+from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies,CityBalancedGNNLoss
 
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
@@ -96,6 +95,9 @@ def main():
     parser.add_argument("--use_dann", type=str_to_bool, default=False, help="Whether to use Domain Adversarial Neural Network.")
     parser.add_argument("--domain_lambda", type=float, default=0.0, help="Weight for domain adversarial loss.")
     parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="Whether to use target standardization during training.")
+
+    parser.add_argument("--use_city_balanced_loss", type=str_to_bool, default=False, 
+                   help="Optional for inductive variant: Whether to use city-balanced loss function (based on CityBalancedGNNLoss) or not. and for transductive variant use standard node-weighted loss function (based on GNN_Loss).")
 
     args = vars(parser.parse_args())
     
@@ -208,11 +210,22 @@ def main():
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
                                         config=config,
                                         model_kwargs=model_kwargs,
-                                        device=device).to(device)
-        
-        loss_fct = GNN_Loss(loss_fct=config.loss_fct, num_nodes=train_dl.dataset[0].x.shape[0],
-                            device=device, weighted=config.use_weighted_loss)
-        
+                                        device=device).to(device)  # ✅ REMOVE use_city_balanced_loss parameter
+
+        # ✅ LOSS FUNCTION STILL WORKS - it doesn't need model support
+        if args.get('use_city_balanced_loss', False):
+            loss_fct = CityBalancedGNNLoss(loss_fct=config.loss_fct, 
+                                           device=device, 
+                                           weighted=config.use_weighted_loss,
+                                           num_nodes=train_dl.dataset[0].x.shape[0])
+            print("Using city-balanced loss function- INDUCTIVE VARIANT")
+        else:
+            loss_fct = GNN_Loss(loss_fct=config.loss_fct, 
+                                num_nodes=train_dl.dataset[0].x.shape[0],
+                                device=device, 
+                                weighted=config.use_weighted_loss)
+            print("Using standard node-weighted loss function- TRANSDUCTIVE VARIANT")
+
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
         # baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
