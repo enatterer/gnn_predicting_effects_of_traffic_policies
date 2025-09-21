@@ -127,7 +127,7 @@ class TransEncoder(BaseGNN):
                  num_heads: int = 4,
                  num_layers: int = 2, # 5
                  num_nodes: int = 31635,
-                 use_pos: bool = False,
+                 use_pos: bool = True,
                  use_pos_encoding: bool = False,
                  # LapPE
                  use_lap_pe: bool = False,
@@ -154,8 +154,11 @@ class TransEncoder(BaseGNN):
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
                  use_target_standardization: bool = False, 
+                 use_city_balanced_loss: bool = False,
                  pad_to: int | None = None,
-                 pad_value: float = 0.0):
+                 pad_value: float = 0.0,
+                 # ✅ NEW: Edge dropout parameter
+                 edge_dropout_prob: float = 0.0):
 
         # DANN setup
         self.use_dann = use_dann
@@ -194,7 +197,9 @@ class TransEncoder(BaseGNN):
             predict_mode_stats=predict_mode_stats,
             dtype=dtype,
             log_to_wandb=log_to_wandb,
-            use_target_standardization=use_target_standardization)  # ✅ PASS IT TO PARENT
+            use_target_standardization=use_target_standardization,
+            use_city_balanced_loss=use_city_balanced_loss
+        )
 
         # Store all parameters
         self.use_pos = use_pos
@@ -219,6 +224,9 @@ class TransEncoder(BaseGNN):
 
         self.pad_to = pad_to
         self.pad_value = pad_value
+
+        # ✅ Store edge dropout probability
+        self.edge_dropout_prob = edge_dropout_prob
 
         # Log to wandb
         if self.log_to_wandb:
@@ -248,6 +256,7 @@ class TransEncoder(BaseGNN):
                 'num_graph_conv_layers': num_graph_conv_layers,
                 'pad_to': pad_to,
                 'pad_value': pad_value,
+                'edge_dropout_prob': edge_dropout_prob,  # ✅ NEW
             }, allow_val_change=True)
 
         self.define_layers()
@@ -286,17 +295,22 @@ class TransEncoder(BaseGNN):
             
             self.domain_classifier = nn.Sequential(*domain_layers)
 
+        # ✅ UPDATED: Graph convolution layers with built-in attention dropout
         if self.use_graph_conv:
             for i in range(self.num_graph_conv_layers):
                 in_channels = self.in_channels if i == 0 else self.embed_dim
+                
                 if self.graph_conv_type == 'gcn':
                     conv = GCNConv(in_channels, self.embed_dim)
                 elif self.graph_conv_type == 'gatv2':
-                    conv = GATv2Conv(in_channels, self.embed_dim)
+                    # ✅ Built-in attention dropout for GATv2Conv
+                    conv = GATv2Conv(in_channels, self.embed_dim, dropout=self.edge_dropout_prob)
                 elif self.graph_conv_type == 'graph':
                     conv = GraphConv(in_channels, self.embed_dim)
                 elif self.graph_conv_type == 'trans_conv':
-                    conv = TransformerConv(in_channels, self.embed_dim)
+                    # ✅ Built-in attention dropout for TransformerConv
+                    conv = TransformerConv(in_channels, self.embed_dim, dropout=self.edge_dropout_prob)
+                    
                 setattr(self, f'conv_{i+1}', conv)
 
                 if self.use_graph_norm:
@@ -406,16 +420,21 @@ class TransEncoder(BaseGNN):
         # NOW apply graph convolution with correct input dimensions
         if self.use_graph_conv:
             x, edge_index = data.x, data.edge_index
-
+            
             for i in range(self.num_graph_conv_layers):
                 if self.use_graph_norm:
                     graph_norm = getattr(self, f'graph_norm_{i+1}')
                     x = graph_norm(x)
+                
                 conv = getattr(self, f'conv_{i+1}')
+                
+                # ✅ CLEAN: Always call with just edge_index (attention dropout built-in)
                 x = conv(x, edge_index)
+                
                 x = nn.functional.relu(x)
                 if self.use_dropout:
                     x = self.dropout_layer(x)
+            
             data.x = x
 
         # Process each graph separately through transformer
