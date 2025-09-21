@@ -146,7 +146,13 @@ def save_dataloader_params(dataloader, file_path):
     with open(file_path, 'w') as f:
         json.dump(params, f)
 
-def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_prob=0.0, is_training=True, augment_feature_noise_prob=False, filtered_feature_mapping=None):
+def collate_fn(data_list, augment_pos_rotation=False, 
+               is_training=True, augment_feature_noise_prob=False, filtered_feature_mapping=None):
+    """
+    Collate function with rotation and Gaussian noise augmentation only.
+    Edge dropout is now handled in the model.
+    """
+    
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in data_list:
         if hasattr(data, 'pos') and data.pos is not None:
@@ -165,31 +171,10 @@ def collate_fn(data_list, augment_pos_rotation=False, augment_edge_perturbation_
     if is_training and augment_feature_noise_prob:
         for data in data_list:
             if hasattr(data, 'x') and data.x is not None:
-                data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping) 
+                data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping)
     
-    # On-the-fly edge perturbation (random dropout on line graph edges)
-    if is_training and augment_edge_perturbation_prob > 0:
-        for data in data_list:
-            if hasattr(data, 'edge_index') and data.edge_index is not None:
-                edge_index = data.edge_index.clone()
-                num_edges = edge_index.size(1)
-                mask = torch.rand(num_edges, device=edge_index.device) > augment_edge_perturbation_prob
-                
-                # Ensure minimum connectivity - simplified approach
-                min_edges = max(2, int(num_edges * 0.1))  # Keep at least 10% of edges
-                if mask.sum() < min_edges:
-                    # Randomly keep additional edges to meet minimum
-                    false_indices = (~mask).nonzero(as_tuple=False).squeeze(1)
-                    if len(false_indices) > 0:
-                        additional_edges_needed = min_edges - mask.sum().item()
-                        additional_edges_needed = min(additional_edges_needed, len(false_indices))
-                        if additional_edges_needed > 0:
-                            keep_indices = false_indices[torch.randperm(len(false_indices))[:additional_edges_needed]]
-                            mask[keep_indices] = True
-                
-                data.edge_index = edge_index[:, mask]
-                if hasattr(data, 'edge_attr') and data.edge_attr is not None:
-                    data.edge_attr = data.edge_attr[mask]
+    # ❌ REMOVED: Edge perturbation (now handled in TransEncoder model)
+    # Edge dropout is now created on-the-fly in the model during forward pass
     
     return Batch.from_data_list(data_list)
 
@@ -245,10 +230,11 @@ def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: 
     return x_noisy
 
 def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False, 
-                           augment_feature_noise_prob=False, is_training=True, 
-                           filtered_feature_mapping=None):
+                           augment_feature_noise_prob=False, 
+                           is_training=True, filtered_feature_mapping=None):
     """
-    Collate function for transductive learning with rotation and Gaussian noise augmentation.
+    Collate function with rotation and Gaussian noise augmentation only.
+    Edge dropout is now handled in the model.
     """
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
     for data in batch:
