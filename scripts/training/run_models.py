@@ -37,8 +37,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg']
-val_cities =['nuernberg'] # Non empty implies inductive learning
+train_cities = ['bamberg','rosenheim']
+val_cities =['schweinfurt'] # Non empty implies inductive learning
 test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
@@ -90,6 +90,9 @@ def main():
     parser.add_argument("--use_edge_perturbation_probability", type=float, default=0.0, help="The probability of edge perturbation (random dropout on line graph edges) during training. 0.0 means no perturbation.")
     #for Gaussian noise addition to node features
     parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
+    
+    # node masking parameter augmentation
+    parser.add_argument("--use_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
 
     #parser for DANN
     parser.add_argument("--use_dann", type=str_to_bool, default=False, help="Whether to use Domain Adversarial Neural Network.")
@@ -174,7 +177,8 @@ def main():
                                                                              is_eign=(args['gnn_arch'] == "eign"),
                                                                              use_data_augmentation=args['use_data_augmentation'],
                                                                              use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
-                                                                             use_feature_noise_probability=args['augment_feature_noise_prob'])
+                                                                             use_feature_noise_probability=args['augment_feature_noise_prob'],
+                                                                             use_node_masking_probability=args['use_node_masking_probability'])  # ✅ NEW
         else: #for 'GNN_Inductive' as project name
             train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
                                                                                                         val_data=val_data,
@@ -195,7 +199,8 @@ def main():
                                                                                                         is_eign=(args['gnn_arch'] == "eign"),
                                                                                                         use_data_augmentation=args['use_data_augmentation'],
                                                                                                         use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
-                                                                                                        use_feature_noise_probability=args['augment_feature_noise_prob'])
+                                                                                                        use_feature_noise_probability=args['augment_feature_noise_prob'],
+                                                                                                        use_node_masking_probability=args['use_node_masking_probability'])  # ✅ NEW
 
         # Create WandB config
         config = setup_wandb(args)
@@ -224,7 +229,7 @@ def main():
                                 num_nodes=train_dl.dataset[0].x.shape[0],
                                 device=device, 
                                 weighted=config.use_weighted_loss)
-            print("Using standard node-weighted loss function- TRANSDUCTIVE VARIANT")
+            print("Using standard loss function- TRANSDUCTIVE VARIANT")
 
         ## Not needed now, Naive MSE doesn't tell anything!
         # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
