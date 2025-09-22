@@ -147,9 +147,11 @@ def save_dataloader_params(dataloader, file_path):
         json.dump(params, f)
 
 def collate_fn(data_list, augment_pos_rotation=False, 
-               is_training=True, augment_feature_noise_prob=False, filtered_feature_mapping=None):
+               is_training=True, augment_feature_noise_prob=False, 
+               augment_node_masking_prob=0.0,  # ✅ NEW: Simple node masking probability
+               filtered_feature_mapping=None):
     """
-    Collate function with rotation and Gaussian noise augmentation only.
+    Collate function with rotation, Gaussian noise, and simple node masking augmentation.
     Edge dropout is now handled in the model.
     """
     
@@ -173,8 +175,11 @@ def collate_fn(data_list, augment_pos_rotation=False,
             if hasattr(data, 'x') and data.x is not None:
                 data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping)
     
-    # ❌ REMOVED: Edge perturbation (now handled in TransEncoder model)
-    # Edge dropout is now created on-the-fly in the model during forward pass
+    # On-the-fly simple node masking
+    if is_training and augment_node_masking_prob > 0:
+        for data in data_list:
+            if hasattr(data, 'x') and data.x is not None:
+                data.x = apply_simple_node_masking(data.x, node_mask_prob=augment_node_masking_prob)
     
     return Batch.from_data_list(data_list)
 
@@ -231,9 +236,10 @@ def apply_gaussian_noise_to_features(x: torch.Tensor, filtered_feature_mapping: 
 
 def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=False, 
                            augment_feature_noise_prob=False, 
+                           augment_node_masking_prob=0.0,  # ✅ NEW: Simple node masking probability
                            is_training=True, filtered_feature_mapping=None):
     """
-    Collate function with rotation and Gaussian noise augmentation only.
+    Collate function with rotation, Gaussian noise, and simple node masking augmentation.
     Edge dropout is now handled in the model.
     """
     # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
@@ -262,7 +268,13 @@ def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=Fal
             if hasattr(data, 'x') and data.x is not None:
                 data.x = apply_gaussian_noise_to_features(data.x, filtered_feature_mapping)
     
-    # ✅ STEP 3: Create batch (features already filtered)
+    # On-the-fly simple node masking
+    if is_training and augment_node_masking_prob > 0:
+        for data in batch:
+            if hasattr(data, 'x') and data.x is not None:
+                data.x = apply_simple_node_masking(data.x, node_mask_prob=augment_node_masking_prob)
+
+    # STEP 3: Create batch (features already filtered and augmented)
     batch = Batch.from_data_list(batch)
     
     return batch
@@ -277,3 +289,33 @@ def print_model_info(model):
     print(f"Trainable parameters: {trainable_params:,}")
     print(f"Model size: {total_params * 4 / 1024 / 1024:.2f} MB")
     print("=" * 30)
+
+def apply_simple_node_masking(x: torch.Tensor, node_mask_prob: float = 0.05) -> torch.Tensor:
+    """
+    Simple node masking: randomly select nodes and mask ALL their features to 0.
+    Simulates complete sensor failure at intersection level.
+    
+    Args:
+        x: Node features [num_nodes, num_features]
+        node_mask_prob: Probability of masking each node completely
+    
+    Returns:
+        x_masked: Node features with some nodes completely masked to 0
+    """
+    if node_mask_prob <= 0:
+        return x
+    
+    num_nodes = x.shape[0]
+    
+    # Randomly select nodes to mask completely
+    nodes_to_mask = torch.rand(num_nodes, device=x.device) < node_mask_prob
+    
+    if nodes_to_mask.any():
+        x_masked = x.clone()
+        # Set ALL features of selected nodes to 0
+        x_masked[nodes_to_mask] = 0.0
+        
+        print(f"🚨 Masked {nodes_to_mask.sum().item()}/{num_nodes} nodes completely (sensor failure)")
+        return x_masked
+    
+    return x
