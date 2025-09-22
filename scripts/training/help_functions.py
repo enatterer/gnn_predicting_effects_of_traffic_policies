@@ -21,7 +21,7 @@ from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRando
 from torch_geometric.data import Batch, Data
 from torch_geometric.loader import NeighborLoader
 from torch_geometric.utils import subgraph
-from gnn.gnn_io import rotate_pos, apply_gaussian_noise_to_features
+from gnn.gnn_io import rotate_pos, apply_gaussian_noise_to_features, apply_simple_node_masking
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -136,7 +136,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
                                      use_data_augmentation, use_edge_perturbation_probability, 
-                                     use_feature_noise_probability):
+                                     use_feature_noise_probability, use_node_masking_probability=0.0): 
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
     
@@ -198,6 +198,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                 node_feature_filter=node_feature_filter,
                 augment_pos_rotation=False,  # DISABLE rotation for base loader
                 augment_feature_noise_prob=False,  # DISABLE noise for base loader
+                augment_node_masking_prob=0.0,  # DISABLE node masking for base loader for nested loader
                 is_training=False,  # NOT training mode for base loader
                 filtered_feature_mapping=filtered_feature_mapping
             )
@@ -209,6 +210,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                 node_feature_filter=node_feature_filter,
                 augment_pos_rotation=use_data_augmentation,  # Enable rotation augmentation
                 augment_feature_noise_prob=use_feature_noise_probability,  # Enable Gaussian noise augmentation  
+                augment_node_masking_prob=use_node_masking_probability,  # Enable node masking
                 is_training=True,  # Training mode
                 filtered_feature_mapping=filtered_feature_mapping
             )
@@ -220,11 +222,12 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             node_feature_filter=node_feature_filter,
             augment_pos_rotation=False,  # Disable rotation for validation/test
             augment_feature_noise_prob=False,  # Disable noise for validation/test
+            augment_node_masking_prob=0.0,  # Disable node masking for validation/test
             is_training=False,  # Not training mode
             filtered_feature_mapping=filtered_feature_mapping
         )
         
-        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability)
+        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability, 'Node Masking Probability:', use_node_masking_probability)  # ✅ UPDATED
         print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
 
         print("Creating base train loader...")
@@ -236,7 +239,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             num_workers=2,
             prefetch_factor=2,
             pin_memory=True,
-            collate_fn=collate_without_scaling_fn,  # ✅ Uses conditional augmentation
+            collate_fn=collate_without_scaling_fn,  # Uses conditional augmentation
             worker_init_fn=seed_worker,
             drop_last=False
         )
@@ -249,7 +252,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
             num_workers=2,
             pin_memory=True,
-            collate_fn=collate_without_scaling_fn_no_aug,  # ✅ Always without augmentation
+            collate_fn=collate_without_scaling_fn_no_aug,  # Always without augmentation
             worker_init_fn=seed_worker,
             drop_last=False
         )
@@ -262,7 +265,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
             num_workers=2,
             pin_memory=True,
-            collate_fn=collate_without_scaling_fn_no_aug,  # ✅ Always without augmentation
+            collate_fn=collate_without_scaling_fn_no_aug,  # Always without augmentation
             worker_init_fn=seed_worker,
             drop_last=False
         )
@@ -276,17 +279,20 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
         collate_fn_train = partial(collate_fn, 
                                   augment_pos_rotation=use_data_augmentation, 
                                   augment_feature_noise_prob=use_feature_noise_probability,
+                                  augment_node_masking_prob=use_node_masking_probability, 
                                   filtered_feature_mapping=filtered_feature_mapping, 
                                   is_training=True)
         collate_fn_eval = partial(collate_fn, 
                                  augment_pos_rotation=False, 
                                  augment_feature_noise_prob=False,
+                                 augment_node_masking_prob=0.0,  # (disabled for evaluation)
                                  filtered_feature_mapping=filtered_feature_mapping, 
                                  is_training=False)
         
         print('Data Augmentation:', use_data_augmentation, 
               'Edge Perturbation Probability:', use_edge_perturbation_probability,
-              'Feature Noise Probability:', use_feature_noise_probability)
+              'Feature Noise Probability:', use_feature_noise_probability,
+              'Node Masking Probability:', use_node_masking_probability)  
         
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
@@ -306,6 +312,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             collate_fn_no_aug = partial(collate_fn, 
                 augment_pos_rotation=False,
                 augment_feature_noise_prob=False,
+                augment_node_masking_prob=0.0,  # (disabled for base loader for nested loader)
                 filtered_feature_mapping=filtered_feature_mapping,
                 is_training=False)
             base_train_loader = DataLoader(
@@ -356,17 +363,16 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             node_feature_filter=node_feature_filter,
             filtered_feature_mapping=filtered_feature_mapping,
             augment_pos_rotation=use_data_augmentation,
-            augment_feature_noise_prob=use_feature_noise_probability,  
+            augment_feature_noise_prob=use_feature_noise_probability,
+            augment_node_masking_prob=use_node_masking_probability, 
             is_training=True
         )
     else:
         train_loader = base_train_loader
     
-    
-    
     # COMMENTED OUT: No need to save scalers for features
     # joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-    # joblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
+    # jobjoblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
     # joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
     # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
     # Test the nested loader
@@ -407,6 +413,7 @@ def nested_dataloader(base_train_loader: DataLoader,
                      filtered_feature_mapping: dict = None,
                      augment_pos_rotation: bool = False,
                      augment_feature_noise_prob: bool = False,
+                     augment_node_masking_prob: float = 0.0,  
                      is_training: bool = True) -> DataLoader:
     """
     Create enhanced nested dataloader with on-the-fly subgraph generation and augmentation.
@@ -425,6 +432,7 @@ def nested_dataloader(base_train_loader: DataLoader,
         filtered_feature_mapping=filtered_feature_mapping,
         augment_pos_rotation=augment_pos_rotation,
         augment_feature_noise_prob=augment_feature_noise_prob,
+        augment_node_masking_prob=augment_node_masking_prob,
         is_training=is_training
     )
     
@@ -826,8 +834,8 @@ class NestedNeighborDataset(Dataset):
                  node_feature_filter: list = None,
                  filtered_feature_mapping: dict = None,
                  augment_pos_rotation: bool = False,
-                 # ❌ REMOVED: augment_edge_perturbation_prob: 0.0,
                  augment_feature_noise_prob: bool = False,
+                 augment_node_masking_prob: float = 0.0,
                  is_training: bool = True):
         
         # Store existing parameters
@@ -841,8 +849,8 @@ class NestedNeighborDataset(Dataset):
         self.node_feature_filter = node_feature_filter
         self.filtered_feature_mapping = filtered_feature_mapping
         self.augment_pos_rotation = augment_pos_rotation
-        # ❌ REMOVED: self.augment_edge_perturbation_prob = augment_edge_perturbation_prob
         self.augment_feature_noise_prob = augment_feature_noise_prob
+        self.augment_node_masking_prob = augment_node_masking_prob  
         self.is_training = is_training
         
         print(f"Initializing On-The-Fly Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
@@ -850,6 +858,7 @@ class NestedNeighborDataset(Dataset):
         print(f"Shuffle mapping: {shuffle_mapping}")
         print(f"Feature filter: {node_feature_filter}")
         print(f"Feature mapping: {filtered_feature_mapping}")
+        print(f"Node masking probability: {augment_node_masking_prob}")
         
         # Store original dataset for on-demand loading
         self.original_dataset = graph_loader.dataset
@@ -1109,8 +1118,11 @@ class NestedNeighborDataset(Dataset):
         if self.is_training and self.augment_feature_noise_prob:
             if hasattr(subgraph, 'x') and subgraph.x is not None:
                 subgraph.x = apply_gaussian_noise_to_features(subgraph.x, self.filtered_feature_mapping)
-        
-        # ❌ REMOVED: All edge perturbation logic (now handled in TransEncoder model)
+
+        # On-the-fly node masking augmentation
+        if self.is_training and self.augment_node_masking_prob > 0:
+            if hasattr(subgraph, 'x') and subgraph.x is not None:
+                subgraph.x = apply_simple_node_masking(subgraph.x, node_mask_prob=self.augment_node_masking_prob)
         
         return subgraph
     
