@@ -283,17 +283,17 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                                   filtered_feature_mapping=filtered_feature_mapping, 
                                   is_training=True)
         collate_fn_eval = partial(collate_fn, 
-                                 augment_pos_rotation=False, 
-                                 augment_feature_noise_prob=False,
-                                 augment_node_masking_prob=0.0,  # (disabled for evaluation)
-                                 filtered_feature_mapping=filtered_feature_mapping, 
-                                 is_training=False)
-        
+                             augment_pos_rotation=False, 
+                             augment_feature_noise_prob=False,
+                             augment_node_masking_prob=0.0,  # (disabled for evaluation)
+                             filtered_feature_mapping=filtered_feature_mapping, 
+                             is_training=False)
+    
         print('Data Augmentation:', use_data_augmentation, 
               'Edge Perturbation Probability:', use_edge_perturbation_probability,
               'Feature Noise Probability:', use_feature_noise_probability,
               'Node Masking Probability:', use_node_masking_probability)  
-        
+    
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
         print("Train set normalized")      
@@ -318,7 +318,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             base_train_loader = DataLoader(
                 dataset=train_set_normalized,
                 batch_size=batch_size,
-                shuffle=True,
+                shuffle=True if not use_weighted_sampling else None,  # ✅ ADD: Conditional shuffle
+                sampler=WeightedRandomSampler(get_sampling_weights(train_set_normalized), len(train_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
                 num_workers=4,
                 prefetch_factor=2,
                 pin_memory=True, 
@@ -326,15 +327,39 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                 worker_init_fn=seed_worker
                 )
         else:
-            base_train_loader = DataLoader(dataset=train_set_normalized, batch_size=batch_size, shuffle=True, num_workers=4, prefetch_factor=2, pin_memory=True, collate_fn=collate_fn_train, worker_init_fn=seed_worker)
+            base_train_loader = DataLoader(
+                dataset=train_set_normalized, 
+                batch_size=batch_size, 
+                shuffle=True if not use_weighted_sampling else None,  # ✅ ADD: Conditional shuffle
+                sampler=WeightedRandomSampler(get_sampling_weights(train_set_normalized), len(train_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
+                num_workers=4, 
+                prefetch_factor=2, 
+                pin_memory=True, 
+                collate_fn=collate_fn_train, 
+                worker_init_fn=seed_worker)
         print("Train loader created")
         
         print("Creating validation loader...")
-        val_loader = DataLoader(dataset=valid_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, pin_memory=True, collate_fn=collate_fn_eval, worker_init_fn=seed_worker)
+        val_loader = DataLoader(
+            dataset=valid_set_normalized, 
+            batch_size=batch_size, 
+            shuffle=True if not use_weighted_sampling else False,  # ✅ ADD: Conditional shuffle for validation
+            sampler=WeightedRandomSampler(get_sampling_weights(valid_set_normalized), len(valid_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
+            num_workers=4, 
+            pin_memory=True, 
+            collate_fn=collate_fn_eval, 
+            worker_init_fn=seed_worker)
         print("Validation loader created")
         
         print("Creating test loader...")
-        test_loader = DataLoader(dataset=test_set_normalized, batch_size=batch_size, shuffle=False, num_workers=4, collate_fn=collate_fn_eval, worker_init_fn=seed_worker)
+        test_loader = DataLoader(
+            dataset=test_set_normalized, 
+            batch_size=batch_size, 
+            shuffle=True if not use_weighted_sampling else False,  # ✅ ADD: Conditional shuffle for test
+            sampler=WeightedRandomSampler(get_sampling_weights(test_set_normalized), len(test_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
+            num_workers=4, 
+            collate_fn=collate_fn_eval, 
+            worker_init_fn=seed_worker)
         print("Test loader created")
         
         # ✅ ONLY SAVE TRAINING SCALERS (validation/test use same scalers)
