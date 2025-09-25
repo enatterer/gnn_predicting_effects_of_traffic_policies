@@ -87,7 +87,7 @@ def main():
     parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.") # TODO: New for GraphSAGE
     #parameter for Data Augmentation
     parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
-    parser.add_argument("--use_edge_perturbation_probability", type=float, default=0.0, help="The probability of edge perturbation (random dropout on line graph edges) during training. 0.0 means no perturbation.")
+    parser.add_argument("--use_message_dropout_probability", type=float, default=0.0, help="The probability of message dropout (random dropout on message passing) during training. 0.0 means no dropout.")
     #for Gaussian noise addition to node features
     parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
     
