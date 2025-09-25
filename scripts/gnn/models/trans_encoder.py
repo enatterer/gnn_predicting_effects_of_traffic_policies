@@ -160,7 +160,7 @@ class TransEncoder(BaseGNN):
                  pad_to: int | None = None,
                  pad_value: float = 0.0,
                  # ✅ NEW: Edge dropout parameter
-                 edge_dropout_prob: float = 0.0):
+                 message_drop_prob: float = 0.0):
 
         # DANN setup
         self.use_dann = use_dann
@@ -234,7 +234,7 @@ class TransEncoder(BaseGNN):
             self.domain_classifier_layers = domain_classifier_layers
             
         # ✅ Store edge dropout probability
-        self.edge_dropout_prob = edge_dropout_prob
+        self.message_drop_prob = message_drop_prob
 
         # Log to wandb
         if self.log_to_wandb:
@@ -264,7 +264,7 @@ class TransEncoder(BaseGNN):
                 'num_graph_conv_layers': self.num_graph_conv_layers,
                 'pad_to': pad_to,
                 'pad_value': pad_value,
-                'edge_dropout_prob': edge_dropout_prob,  # ✅ NEW
+                'message_drop_prob': message_drop_prob,  # ✅ NEW
                 'pos_dim': pos_dim,  # ✅ NEW
                 'lap_pe_dim': lap_pe_dim,
                 'lap_pe_use_dim': self.lap_pe_use_dim,  # ✅ NEW
@@ -287,7 +287,7 @@ class TransEncoder(BaseGNN):
                 conv = GATv2Conv(in_dim,
                                 hidden_dim // self.num_heads,
                                 heads=self.num_heads,
-                                dropout=self.edge_dropout_prob)
+                                dropout=self.message_drop_prob)
 
             elif self.graph_conv_type == 'graph':
                 conv = GraphConv(in_dim, hidden_dim)
@@ -296,7 +296,7 @@ class TransEncoder(BaseGNN):
                 conv = TransformerConv(in_dim,
                                     hidden_dim // self.num_heads,
                                     heads=self.num_heads,
-                                    dropout=self.edge_dropout_prob)
+                                    dropout=self.message_drop_prob)
             else:
                 raise ValueError(f"Unsupported conv type: {self.graph_conv_type}")
 
