@@ -793,8 +793,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "log_to_wandb": True,
         "use_target_standardization": getattr(config, 'use_target_standardization', False),
         "use_city_balanced_loss": use_city_balanced_loss,
-        # ✅ NEW: Add edge dropout probability
-        "edge_dropout_prob": getattr(config, 'use_edge_perturbation_probability', 0.0)
+        # ✅ NEW: Add message dropout probability
+        "message_drop_prob": getattr(config, 'use_message_dropout_probability', 0.0)
     }
 
     if gnn_arch == "point_net_transf_gat":
