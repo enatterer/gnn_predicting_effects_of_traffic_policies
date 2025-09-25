@@ -122,16 +122,18 @@ class TransEncoder(BaseGNN):
     def __init__(self,
                  in_channels: int = 5,
                  out_channels: int = 1,
-                 embed_dim: int = 96, # 128,
-                 ff_dim: int = 256, # 512,
+                 hidden_channels: list[int] = [128, 256, 128],
+                 ff_dim: int = 512, # 512,
                  num_heads: int = 4,
-                 num_layers: int = 2, # 5
+                 num_layers: int = 5, # 5
                  num_nodes: int = 31635,
                  use_pos: bool = True,
+                 pos_dim: int = 6,  # ✅ NEW: Configurable position dimensions
                  use_pos_encoding: bool = False,
                  # LapPE
-                 use_lap_pe: bool = False,
+                 use_lap_pe: bool = True,
                  lap_pe_dim: int = 8,
+                 lap_pe_use_dim: int = 8,  # ✅ NEW: How many LapPE dimensions to actually use
                  # Anchor Distance Encoding
                  use_anchor_pe: bool = False,
                  anchor_k: int = 12,
@@ -148,8 +150,8 @@ class TransEncoder(BaseGNN):
                  use_dropout: bool = False,
                  use_graph_conv: bool = True,
                  use_graph_norm: bool = False,
-                 graph_conv_type: str = 'trans_conv',
-                 num_graph_conv_layers: int = 2,
+                 graph_conv_type: str = 'trans_conv', # 'gcn', 'gatv2', 'graph'
+                 use_residuals: bool = False,
                  predict_mode_stats: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
@@ -171,19 +173,17 @@ class TransEncoder(BaseGNN):
         
         self.city_to_idx = {city: idx for idx, city in enumerate(self.city_list)}
         self.num_cities = len(self.city_list)
-        
-        # Domain classifier architecture
-        if domain_classifier_layers is None:
-            self.domain_classifier_layers = [embed_dim // 2]
-        else:
-            self.domain_classifier_layers = domain_classifier_layers
+
+        # Store new parameters
+        self.pos_dim = pos_dim
+        self.lap_pe_use_dim = min(lap_pe_use_dim, lap_pe_dim)  # Can't use more than available
 
         # Calculate effective input channels
         effective_in_channels = in_channels
         if use_pos:
-            effective_in_channels += 2  # Only middle position (x, y coordinates)
+            effective_in_channels += pos_dim  # ✅ UPDATED: Use configurable pos_dim
         if use_lap_pe:
-            effective_in_channels += 2 
+            effective_in_channels += self.lap_pe_use_dim  # ✅ UPDATED: Use configurable lap_pe_use_dim
         if use_anchor_pe:
             effective_in_channels += anchor_k * anchor_m
         if use_rwse:
@@ -201,7 +201,7 @@ class TransEncoder(BaseGNN):
             use_city_balanced_loss=use_city_balanced_loss
         )
 
-        # Store all parameters
+        # Store parameters for forward pass
         self.use_pos = use_pos
         self.use_pos_encoding = use_pos_encoding
         self.use_lap_pe = use_lap_pe
@@ -212,7 +212,8 @@ class TransEncoder(BaseGNN):
         self.use_rwse = use_rwse
         self.rwse_dim = rwse_dim
 
-        self.embed_dim = embed_dim
+        self.hidden_channels = hidden_channels
+        self.embed_dim = hidden_channels[-1]
         self.ff_dim = ff_dim
         self.num_heads = num_heads
         self.num_layers = num_layers
@@ -220,11 +221,18 @@ class TransEncoder(BaseGNN):
         self.use_graph_conv = use_graph_conv
         self.use_graph_norm = use_graph_norm
         self.graph_conv_type = graph_conv_type
-        self.num_graph_conv_layers = num_graph_conv_layers
+        self.num_graph_conv_layers = len(hidden_channels) if use_graph_conv else 0
+        self.use_residuals = use_residuals
 
         self.pad_to = pad_to
         self.pad_value = pad_value
 
+        # Domain classifier architecture
+        if domain_classifier_layers is None:
+            self.domain_classifier_layers = [self.embed_dim // 2]
+        else:
+            self.domain_classifier_layers = domain_classifier_layers
+            
         # ✅ Store edge dropout probability
         self.edge_dropout_prob = edge_dropout_prob
 
@@ -245,7 +253,7 @@ class TransEncoder(BaseGNN):
                 'num_cities': self.num_cities,
                 'domain_classifier_layers': self.domain_classifier_layers,
                 'effective_in_channels': self.in_channels,
-                'embed_dim': embed_dim,
+                'embed_dim': self.embed_dim,
                 'ff_dim': ff_dim,
                 'num_heads': num_heads,
                 'num_layers': num_layers,
@@ -253,17 +261,51 @@ class TransEncoder(BaseGNN):
                 'use_graph_conv': use_graph_conv,
                 'use_graph_norm': use_graph_norm,
                 'graph_conv_type': graph_conv_type,
-                'num_graph_conv_layers': num_graph_conv_layers,
+                'num_graph_conv_layers': self.num_graph_conv_layers,
                 'pad_to': pad_to,
                 'pad_value': pad_value,
                 'edge_dropout_prob': edge_dropout_prob,  # ✅ NEW
+                'pos_dim': pos_dim,  # ✅ NEW
+                'lap_pe_dim': lap_pe_dim,
+                'lap_pe_use_dim': self.lap_pe_use_dim,  # ✅ NEW
             }, allow_val_change=True)
 
         self.define_layers()
 
     def define_layers(self):
-        self.embed = nn.Linear(self.in_channels, self.embed_dim)
+        # Graph convolution backbone with variable hidden_channels
+        self.graph_convs = nn.ModuleList()
+        self.graph_norms = nn.ModuleList() if self.use_graph_norm else None
 
+        for i, hidden_dim in enumerate(self.hidden_channels):
+            in_dim = self.in_channels if i == 0 else self.hidden_channels[i - 1]
+
+            if self.graph_conv_type == 'gcn':
+                conv = GCNConv(in_dim, hidden_dim)
+
+            elif self.graph_conv_type == 'gatv2':
+                conv = GATv2Conv(in_dim,
+                                hidden_dim // self.num_heads,
+                                heads=self.num_heads,
+                                dropout=self.edge_dropout_prob)
+
+            elif self.graph_conv_type == 'graph':
+                conv = GraphConv(in_dim, hidden_dim)
+
+            elif self.graph_conv_type == 'trans_conv':
+                conv = TransformerConv(in_dim,
+                                    hidden_dim // self.num_heads,
+                                    heads=self.num_heads,
+                                    dropout=self.edge_dropout_prob)
+            else:
+                raise ValueError(f"Unsupported conv type: {self.graph_conv_type}")
+
+            self.graph_convs.append(conv)
+
+            if self.use_graph_norm:
+                self.graph_norms.append(GraphNorm(in_dim))
+
+        # Transformer encoder (operates after graph conv backbone)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=self.embed_dim,
             nhead=self.num_heads,
@@ -272,16 +314,17 @@ class TransEncoder(BaseGNN):
             batch_first=True)
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=self.num_layers)
 
+        # Output regression layer
         self.output = nn.Linear(self.embed_dim, 1)
 
+        # Positional embedding (optional)
         if self.use_pos_encoding:
             self.pos_embedding = nn.Embedding(self.num_nodes, self.embed_dim)
 
-        # DANN Domain Classifier
+        # DANN Domain Classifier (optional)
         if self.use_dann:
             domain_layers = []
             prev_dim = self.embed_dim
-            
             for hidden_dim in self.domain_classifier_layers:
                 domain_layers.extend([
                     nn.Linear(prev_dim, hidden_dim),
@@ -295,30 +338,9 @@ class TransEncoder(BaseGNN):
             
             self.domain_classifier = nn.Sequential(*domain_layers)
 
-        # ✅ UPDATED: Graph convolution layers with built-in attention dropout
-        if self.use_graph_conv:
-            for i in range(self.num_graph_conv_layers):
-                in_channels = self.in_channels if i == 0 else self.embed_dim
-                
-                if self.graph_conv_type == 'gcn':
-                    conv = GCNConv(in_channels, self.embed_dim)
-                elif self.graph_conv_type == 'gatv2':
-                    # ✅ Built-in attention dropout for GATv2Conv
-                    conv = GATv2Conv(in_channels, self.embed_dim, dropout=self.edge_dropout_prob)
-                elif self.graph_conv_type == 'graph':
-                    conv = GraphConv(in_channels, self.embed_dim)
-                elif self.graph_conv_type == 'trans_conv':
-                    # ✅ Built-in attention dropout for TransformerConv
-                    conv = TransformerConv(in_channels, self.embed_dim, dropout=self.edge_dropout_prob)
-                    
-                setattr(self, f'conv_{i+1}', conv)
-
-                if self.use_graph_norm:
-                    graph_norm = GraphNorm(self.embed_dim if i > 0 else self.in_channels)
-                    setattr(self, f'graph_norm_{i+1}', graph_norm)
-
         if self.use_dropout:
             self.dropout_layer = nn.Dropout(self.dropout)
+
 
     def get_city_labels(self, datalist):
         """Convert city names to indices for domain classification."""
@@ -362,28 +384,32 @@ class TransEncoder(BaseGNN):
             if self.use_pos:
                 if hasattr(d, 'pos') and d.pos is not None:
                     pos = d.pos.to(self.dtype)
-                    
-                    # Handle 3D position tensor - extract middle position or flatten
                     if pos.dim() == 3:
-                        pos = pos[:, 1, :]  # [num_nodes, 2] - middle position only
-                    
-                    xi = torch.cat([xi, pos], dim=-1)
+                        if self.pos_dim == 2:
+                            pos_features = pos[:, 1, :]
+                        elif self.pos_dim == 6:
+                            pos_features = pos.reshape(pos.size(0), -1)
+                        elif self.pos_dim == 4:
+                            pos_features = torch.cat([pos[:, 0, :], pos[:, 2, :]], dim=-1)
+                        else:
+                            raise ValueError("pos_dim must be 2, 4, or 6 when pos is 3D")
+                    else:
+                        raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
+                    xi = torch.cat([xi, pos_features], dim=-1)
                 else:
                     raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
 
-            # Add Laplacian PE (use precomputed if available)
+            # Laplacian PE
             if self.use_lap_pe:
                 if hasattr(d, 'lap_pe') and d.lap_pe is not None:
-                    # Use precomputed Laplacian PE
                     lap_pe = d.lap_pe.to(device)
-                    
-                    # Take only the first 2 Laplacian positional encodings
-                    lap_pe = lap_pe[:, :2]  # [num_nodes, 2]
-                    
-                    xi = torch.cat([xi, lap_pe], dim=-1)
+                    if lap_pe.size(1) < self.lap_pe_use_dim:
+                        raise ValueError(f"Laplacian PE has fewer dimensions ({lap_pe.size(1)}) than lap_pe_use_dim ({self.lap_pe_use_dim})")
+                    else:
+                        lap_pe_reqd_dim = lap_pe[:, :self.lap_pe_use_dim]
+                    xi = torch.cat([xi, lap_pe_reqd_dim], dim=-1)
                 else:
-                    # Fallback to on-the-fly computation if precomputed is missing
-                    print("⚠️ Warning: data.lap_pe not found")
+                    raise ValueError("Laplacian PE is enabled but 'lap_pe' attribute is missing in data.")
 
             # Add Anchor Distance Encoding
             if self.use_anchor_pe:
@@ -420,73 +446,56 @@ class TransEncoder(BaseGNN):
         # NOW apply graph convolution with correct input dimensions
         if self.use_graph_conv:
             x, edge_index = data.x, data.edge_index
-            
-            for i in range(self.num_graph_conv_layers):
+            for i, conv in enumerate(self.graph_convs):
                 if self.use_graph_norm:
-                    graph_norm = getattr(self, f'graph_norm_{i+1}')
-                    x = graph_norm(x)
-                
-                conv = getattr(self, f'conv_{i+1}')
-                
-                # ✅ CLEAN: Always call with just edge_index (attention dropout built-in)
+                    x = self.graph_norms[i](x, batch=data.batch if hasattr(data, 'batch') else None)
+
+                x_in = x
                 x = conv(x, edge_index)
-                
+
+                # residual connection (if enabled and dims match)
+                if self.use_residuals and x.shape == x_in.shape:
+                    x = x + x_in
+
                 x = nn.functional.relu(x)
                 if self.use_dropout:
                     x = self.dropout_layer(x)
-            
+
             data.x = x
 
-        # Process each graph separately through transformer
-        if isinstance(data, Batch):
-            datalist = data.to_data_list()
-        elif isinstance(data, Data):
-            datalist = [data]
+        # ----- Transformer + prediction -----
+        datalist = data.to_data_list() if isinstance(data, Batch) else [data]
+        all_predictions, all_graph_embeddings = [], []
 
-        all_predictions = []
-        all_graph_embeddings = []  # For DANN domain classification
-        
         for d in datalist:
-            x = d.x.unsqueeze(0)  # [1, num_nodes, embed_dim]
-            
-            if x.size(-1) != self.embed_dim:
-                x = self.embed(x)
-            
-            # Add positional encoding for this graph only
+            x = d.x.unsqueeze(0)  # [1, N, embed_dim]
+
+            # optional learned positional encoding
             if self.use_pos_encoding:
                 seq_len = x.size(1)
                 if seq_len <= self.num_nodes:
                     node_indices = torch.arange(seq_len, device=device).long()
-                    pos_emb = self.pos_embedding(node_indices)
-                    pos_emb = pos_emb.unsqueeze(0)  # [1, seq_len, embed_dim]
+                    pos_emb = self.pos_embedding(node_indices).unsqueeze(0)
                     x = x + pos_emb
-            
-            # Transformer encoding
-            x_transformed = self.transformer(x)  # [1, num_nodes, embed_dim]
-            
-            # Task prediction (main objective)
-            predictions = self.output(x_transformed.squeeze(0))  # [num_nodes, 1]
-            all_predictions.append(predictions.squeeze(-1))  # [num_nodes] - 1D
-            
-            # Graph-level representation for domain classification
+
+            # Transformer encoder
+            x_transformed = self.transformer(x)
+
+            # Node-level regression
+            preds = self.output(x_transformed.squeeze(0))  # [N, 1]
+            all_predictions.append(preds.squeeze(-1))
+
+            # domain classifier
             if self.use_dann:
-                # Global mean pooling for graph-level representation
-                graph_embedding = x_transformed.mean(dim=1).squeeze(0)  # [embed_dim]
+                graph_embedding = x_transformed.mean(dim=1).squeeze(0)
                 all_graph_embeddings.append(graph_embedding)
-        
-        # Concatenate all predictions
-        result = torch.cat(all_predictions, dim=0)  # [total_nodes_across_batch]
-        
+
+        result = torch.cat(all_predictions, dim=0)  # [total_nodes]
+
         if self.use_dann:
-            # Stack graph embeddings
-            graph_embeddings = torch.stack(all_graph_embeddings, dim=0)  # [batch_size, embed_dim]
-            
-            # Apply gradient reversal
+            graph_embeddings = torch.stack(all_graph_embeddings, dim=0)
             reversed_embeddings = gradient_reversal(graph_embeddings, alpha)
-            
-            # Domain classification
-            domain_logits = self.domain_classifier(reversed_embeddings)  # [batch_size, num_cities]
-            
-            return result.unsqueeze(-1), domain_logits  # [total_nodes_across_batch, 1], [batch_size, num_cities]
-        else:
-            return result.unsqueeze(-1)  # [total_nodes_across_batch, 1]
+            domain_logits = self.domain_classifier(reversed_embeddings)
+            return result.unsqueeze(-1), domain_logits
+
+        return result.unsqueeze(-1)
