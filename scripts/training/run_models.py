@@ -37,8 +37,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['bamberg','rosenheim']
-val_cities =['schweinfurt'] # Non empty implies inductive learning
+train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
+val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
 test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
@@ -102,6 +102,10 @@ def main():
     parser.add_argument("--use_city_balanced_loss", type=str_to_bool, default=False, 
                    help="Optional for inductive variant: Whether to use city-balanced loss function (based on CityBalancedGNNLoss) or not. and for transductive variant use standard node-weighted loss function (based on GNN_Loss).")
 
+    parser.add_argument("--force_training_method", type=str, default=None, 
+                    help="Force use of specific training method regardless of project name. Options: 'transductive', 'inductive', None (uses project name to decide).",
+                    choices=["transductive", "inductive", None])
+
     args = vars(parser.parse_args())
     
     # Parse neighbor_sizes from string to list
@@ -157,11 +161,23 @@ def main():
         else:
             test_data = None
 
-        if args['project_name'] == 'GNN_Transductive':
+        # ✅ DETERMINE WHICH DATA PREPARATION METHOD TO USE BASED ON FLAG OR PROJECT NAME
+        if args['force_training_method'] is not None:
+            # Flag explicitly set - use it regardless of project name for data preparation
+            use_transductive_data_prep = (args['force_training_method'] == 'transductive')
+            print(f"Data preparation method FORCED by flag: {args['force_training_method'].upper()} (project: {args['project_name']})")
+        else:
+            # No flag set - use project name to decide (default behavior)
+            use_transductive_data_prep = (args['project_name'] == 'GNN_Transductive')
+            method_name = 'TRANSDUCTIVE' if use_transductive_data_prep else 'INDUCTIVE'
+            print(f"Data preparation method determined by project name: {method_name} (project: {args['project_name']})")
+
+        if use_transductive_data_prep:
+            print("→ Using TRANSDUCTIVE data preparation (returns 3 values: train_dl, valid_dl, scalers_train)")
             train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
-                                                                             variant=args['project_name'],
+                                                                             variant='GNN_Transductive',  # Force transductive variant
                                                                              batch_size=args['batch_size'],
                                                                              path_to_save_dataloader=path_to_save_dataloader,
                                                                              use_all_features=args['use_all_features'],
@@ -178,12 +194,15 @@ def main():
                                                                              use_data_augmentation=args['use_data_augmentation'],
                                                                              use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
                                                                              use_feature_noise_probability=args['augment_feature_noise_prob'],
-                                                                             use_node_masking_probability=args['use_node_masking_probability'])  # ✅ NEW
-        else: #for 'GNN_Inductive' as project name
+                                                                             use_node_masking_probability=args['use_node_masking_probability'])
+            # Set scalers_validation to scalers_train for compatibility
+            scalers_validation = scalers_train
+        else:
+            print("→ Using INDUCTIVE data preparation (returns 4 values: train_dl, valid_dl, scalers_train, scalers_validation)")
             train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
                                                                                                         val_data=val_data,
                                                                                                         test_data=test_data,
-                                                                                                        variant=args['project_name'],
+                                                                                                        variant='GNN_Inductive',  # Force inductive variant
                                                                                                         batch_size=args['batch_size'],
                                                                                                         path_to_save_dataloader=path_to_save_dataloader,
                                                                                                         use_all_features=args['use_all_features'],
@@ -200,7 +219,7 @@ def main():
                                                                                                         use_data_augmentation=args['use_data_augmentation'],
                                                                                                         use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
                                                                                                         use_feature_noise_probability=args['augment_feature_noise_prob'],
-                                                                                                        use_node_masking_probability=args['use_node_masking_probability'])  # ✅ NEW
+                                                                                                        use_node_masking_probability=args['use_node_masking_probability'])
 
         # Create WandB config
         config = setup_wandb(args)
@@ -237,8 +256,21 @@ def main():
         # print("baseline loss mean " + str(baseline_loss_mean_target))
         # print("baseline loss no  " + str(baseline_loss) )
 
+        # ✅ DETERMINE WHICH TRAINING METHOD TO USE BASED ON FLAG OR PROJECT NAME
+        if args['force_training_method'] is not None:
+            # Flag explicitly set - use it regardless of project name
+            use_transductive_training = (args['force_training_method'] == 'transductive')
+            print(f"Training method FORCED by flag: {args['force_training_method'].upper()} (project: {args['project_name']})")
+        else:
+            # No flag set - use project name to decide (default behavior)
+            use_transductive_training = (args['project_name'] == 'GNN_Transductive')
+            method_name = 'TRANSDUCTIVE' if use_transductive_training else 'INDUCTIVE'
+            print(f"Training method determined by project name: {method_name} (project: {args['project_name']})")
+
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
-        if args['project_name'] == 'GNN_Transductive':
+
+        if use_transductive_training:
+            print("→ Using gnn_instance.train_model (TRANSDUCTIVE method)")
             best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                                  loss_fct=loss_fct,
                                                                  optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
@@ -250,16 +282,17 @@ def main():
                                                              scalers_train=scalers_train,
                                                              target_normalization=config.target_normalization)
         else:
+            print("→ Using gnn_instance.train_model_inductive (INDUCTIVE method)")
             best_val_loss, best_epoch = gnn_instance.train_model_inductive(config=config,
-                                                             loss_fct=loss_fct,
-                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-3) if config.gnn_arch != "xgboost" else None,
-                                                             train_dl=train_dl,
-                                                             valid_dl=valid_dl,
-                                                             device=device,
-                                                             early_stopping=early_stopping,
-                                                             model_save_path=model_save_path,
-                                                             scalers_train=scalers_train,
-                                                             scalers_validation=scalers_train)
+                                                                     loss_fct=loss_fct,
+                                                                     optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                                     train_dl=train_dl,
+                                                                     valid_dl=valid_dl,
+                                                                     device=device,
+                                                                     early_stopping=early_stopping,
+                                                                     model_save_path=model_save_path,
+                                                                     scalers_train=scalers_train,
+                                                                     scalers_validation=scalers_train)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
