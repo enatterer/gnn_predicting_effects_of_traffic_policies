@@ -14,31 +14,104 @@ from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 def rotate_pos(pos, theta):
     """Rotate 2D positions by theta radians, with 30% chance of random reflection."""
-    if pos is None or pos.shape[1] < 2:
+    if pos is None:
         return pos
-    rot_matrix = torch.tensor([
-        [math.cos(theta), -math.sin(theta)],
-        [math.sin(theta),  math.cos(theta)]
-    ], dtype=pos.dtype, device=pos.device)
-    pos_xy = pos[:, :2] @ rot_matrix.T
+    
+    # Handle different position tensor shapes
+    if len(pos.shape) == 3:
+        # [N, 3, 2] format - apply SAME rotation to all 3 positions per node
+        pos_rotated = pos.clone()
+        
+        if pos.shape[2] >= 2:
+            rot_matrix = torch.tensor([
+                [math.cos(theta), -math.sin(theta)],
+                [math.sin(theta),  math.cos(theta)]
+            ], dtype=pos.dtype, device=pos.device)
+            
+            # Apply the SAME rotation to all 3 positions for each node
+            for i in range(pos.shape[1]):  # Loop through the 3 positions
+                pos_xy = pos[:, i, :2] @ rot_matrix.T
+                pos_rotated[:, i, :2] = pos_xy
+                if pos.shape[2] > 2:
+                    pos_rotated[:, i, 2:] = pos[:, i, 2:]
+            
+            # Apply reflection ONCE to all positions (with 30% probability)
+            if random.random() < 0.3:
+                reflection_type = random.choice(['horizontal', 'vertical', 'diagonal1', 'diagonal2'])
+                for i in range(pos.shape[1]):
+                    if reflection_type == 'horizontal':
+                        pos_rotated[:, i, 1] = -pos_rotated[:, i, 1]
+                    elif reflection_type == 'vertical':
+                        pos_rotated[:, i, 0] = -pos_rotated[:, i, 0]
+                    elif reflection_type == 'diagonal1':  # y = x
+                        temp = pos_rotated[:, i, 0].clone()
+                        pos_rotated[:, i, 0] = pos_rotated[:, i, 1]
+                        pos_rotated[:, i, 1] = temp
+                    elif reflection_type == 'diagonal2':  # y = -x
+                        temp = pos_rotated[:, i, 0].clone()
+                        pos_rotated[:, i, 0] = -pos_rotated[:, i, 1]
+                        pos_rotated[:, i, 1] = -temp
+        
+        return pos_rotated
+    
+    elif len(pos.shape) == 2 and pos.shape[1] >= 2:
+        # [N, 2] format - original logic
+        rot_matrix = torch.tensor([
+            [math.cos(theta), -math.sin(theta)],
+            [math.sin(theta),  math.cos(theta)]
+        ], dtype=pos.dtype, device=pos.device)
+        pos_xy = pos[:, :2] @ rot_matrix.T
 
-    # With 30% probability, apply a random reflection
-    if random.random() < 0.3:
-        reflection_type = random.choice(['horizontal', 'vertical', 'diagonal1', 'diagonal2'])
-        if reflection_type == 'horizontal':
-            pos_xy[:, 1] = -pos_xy[:, 1]
-        elif reflection_type == 'vertical':
-            pos_xy[:, 0] = -pos_xy[:, 0]
-        elif reflection_type == 'diagonal1':  # y = x
-            pos_xy = pos_xy.flip(1)
-        elif reflection_type == 'diagonal2':  # y = -x
-            pos_xy = -pos_xy.flip(1)
+        # With 30% probability, apply a random reflection
+        if random.random() < 0.3:
+            reflection_type = random.choice(['horizontal', 'vertical', 'diagonal1', 'diagonal2'])
+            if reflection_type == 'horizontal':
+                pos_xy[:, 1] = -pos_xy[:, 1]
+            elif reflection_type == 'vertical':
+                pos_xy[:, 0] = -pos_xy[:, 0]
+            elif reflection_type == 'diagonal1':  # y = x
+                pos_xy = pos_xy.flip(1)
+            elif reflection_type == 'diagonal2':  # y = -x
+                pos_xy = -pos_xy.flip(1)
 
-    if pos.shape[1] > 2:
-        pos_aug = torch.cat([pos_xy, pos[:, 2:]], dim=1)
+        if pos.shape[1] > 2:
+            pos_aug = torch.cat([pos_xy, pos[:, 2:]], dim=1)
+        else:
+            pos_aug = pos_xy
+        return pos_aug
+    
     else:
-        pos_aug = pos_xy
-    return pos_aug
+        # Unsupported shape, return as-is
+        return pos
+    
+def apply_simple_node_masking(x: torch.Tensor, node_mask_prob: float = 0.05) -> torch.Tensor:
+    """
+    Simple node masking: randomly select nodes and mask ALL their features to 0.
+    Simulates complete sensor failure at intersection level.
+    
+    Args:
+        x: Node features [num_nodes, num_features]
+        node_mask_prob: Probability of masking each node completely
+    
+    Returns:
+        x_masked: Node features with some nodes completely masked to 0
+    """
+    if node_mask_prob <= 0:
+        return x
+    
+    num_nodes = x.shape[0]
+    
+    # Randomly select nodes to mask completely
+    nodes_to_mask = torch.rand(num_nodes, device=x.device) < node_mask_prob
+    
+    if nodes_to_mask.any():
+        x_masked = x.clone()
+        # Set ALL features of selected nodes to 0
+        x_masked[nodes_to_mask] = 0.0
+
+        return x_masked
+    
+    return x
 
 class GraphDataset(Dataset):
     def __init__(self, paths, labels):
@@ -153,21 +226,26 @@ def collate_fn(data_list, augment_pos_rotation=False,
     """
     Collate function with rotation, Gaussian noise, and simple node masking augmentation.
     Edge dropout is now handled in the model.
+    Position extraction is now handled in the model.
     """
     
-    # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
-    for data in data_list:
-        if hasattr(data, 'pos') and data.pos is not None:
-            if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
-                # Extract middle position (index 1)
-                data.pos = data.pos[:, 1, :].contiguous()
+    # ✅ REMOVED: Position extraction - keep entire pos tensor as-is
+    # No longer extracting middle position here - model will handle it
     
     # On-the-fly rotation augmentation
     if is_training and augment_pos_rotation:
         for data in data_list:
             if hasattr(data, 'pos') and data.pos is not None:
+                # ✅ GENERATE ONE ROTATION ANGLE PER GRAPH
                 theta = random.uniform(0, 2 * math.pi)
-                data.pos = rotate_pos(data.pos, theta)
+                
+                # Apply rotation to the appropriate dimension based on pos shape
+                if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
+                    # For [N, 3, 2] format, apply SAME rotation angle to all positions
+                    data.pos = rotate_pos(data.pos, theta)
+                elif len(data.pos.shape) == 2:
+                    # For [N, 2] format, apply rotation directly
+                    data.pos = rotate_pos(data.pos, theta)
     
     # On-the-fly feature noise augmentation
     if is_training and augment_feature_noise_prob:
@@ -241,13 +319,11 @@ def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=Fal
     """
     Collate function with rotation, Gaussian noise, and simple node masking augmentation.
     Edge dropout is now handled in the model.
+    Position extraction is now handled in the model.
     """
-    # Extract only the middle position from pos [N, 3, 2] -> [N, 2]
-    for data in batch:
-        if hasattr(data, 'pos') and data.pos is not None:
-            if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
-                # Extract middle position (index 1)
-                data.pos = data.pos[:, 1, :].contiguous()
+    
+    # ✅ REMOVED: Position extraction - keep entire pos tensor as-is
+    # No longer extracting middle position here - model will handle it
     
     # ✅ STEP 1: Filter node features FIRST (before augmentation)
     for data in batch:
@@ -259,8 +335,16 @@ def collate_without_scaling(batch, node_feature_filter, augment_pos_rotation=Fal
     if is_training and augment_pos_rotation:
         for data in batch:
             if hasattr(data, 'pos') and data.pos is not None:
+                # ✅ GENERATE ONE ROTATION ANGLE PER GRAPH
                 theta = random.uniform(0, 2 * math.pi)
-                data.pos = rotate_pos(data.pos, theta)
+                
+                # Apply rotation to the appropriate dimension based on pos shape
+                if len(data.pos.shape) == 3 and data.pos.shape[1] == 3:
+                    # For [N, 3, 2] format, apply SAME rotation angle to all positions
+                    data.pos = rotate_pos(data.pos, theta)
+                elif len(data.pos.shape) == 2:
+                    # For [N, 2] format, apply rotation directly
+                    data.pos = rotate_pos(data.pos, theta)
     
     # On-the-fly feature noise augmentation
     if is_training and augment_feature_noise_prob:
@@ -290,32 +374,3 @@ def print_model_info(model):
     print(f"Model size: {total_params * 4 / 1024 / 1024:.2f} MB")
     print("=" * 30)
 
-def apply_simple_node_masking(x: torch.Tensor, node_mask_prob: float = 0.05) -> torch.Tensor:
-    """
-    Simple node masking: randomly select nodes and mask ALL their features to 0.
-    Simulates complete sensor failure at intersection level.
-    
-    Args:
-        x: Node features [num_nodes, num_features]
-        node_mask_prob: Probability of masking each node completely
-    
-    Returns:
-        x_masked: Node features with some nodes completely masked to 0
-    """
-    if node_mask_prob <= 0:
-        return x
-    
-    num_nodes = x.shape[0]
-    
-    # Randomly select nodes to mask completely
-    nodes_to_mask = torch.rand(num_nodes, device=x.device) < node_mask_prob
-    
-    if nodes_to_mask.any():
-        x_masked = x.clone()
-        # Set ALL features of selected nodes to 0
-        x_masked[nodes_to_mask] = 0.0
-        
-        print(f"🚨 Masked {nodes_to_mask.sum().item()}/{num_nodes} nodes completely (sensor failure)")
-        return x_masked
-    
-    return x
