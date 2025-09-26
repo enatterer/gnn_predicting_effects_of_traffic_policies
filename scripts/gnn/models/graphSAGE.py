@@ -37,14 +37,21 @@ class GraphSAGE(BaseGNN):
                  log_to_wandb: bool = True,
                  use_target_standardization: bool = False,
                  
-                 # POSITIONAL ENCODING PARAMETERS
-                 use_pos: bool = False,
-                 use_pos_encoding: bool = False,
-                 use_lap_pe: bool = False,
+                 # ✅ NEW: Position parameters from TransEncoder
+                 use_pos: bool = True,
+                 pos_dim: int = 6,  # Configurable position dimensions
+                 
+                 # ✅ NEW: Laplacian PE parameters
+                 use_lap_pe: bool = True,
                  lap_pe_dim: int = 8,
+                 lap_pe_use_dim: int = 8,  # How many LapPE dimensions to actually use
+                 
+                 # ✅ NEW: Anchor Distance Encoding parameters  
                  use_anchor_pe: bool = False,
                  anchor_k: int = 12,
                  anchor_m: int = 16,
+                 
+                 # ✅ NEW: Random Walk Structural Encoding parameters
                  use_rwse: bool = False,
                  rwse_dim: int = 8,
                  
@@ -57,23 +64,24 @@ class GraphSAGE(BaseGNN):
                  update_function: str = 'relu',
                  mlp_hidden_dim: int = 1024):
                 
-        # STORE POSITIONAL ENCODING PARAMETERS
+        # ✅ UPDATED: Store positional encoding parameters
         self.use_pos = use_pos
-        self.use_pos_encoding = use_pos_encoding
+        self.pos_dim = pos_dim
         self.use_lap_pe = use_lap_pe
         self.lap_pe_dim = lap_pe_dim
+        self.lap_pe_use_dim = min(lap_pe_use_dim, lap_pe_dim)  # Can't use more than available
         self.use_anchor_pe = use_anchor_pe
         self.anchor_k = anchor_k
         self.anchor_m = anchor_m
         self.use_rwse = use_rwse
         self.rwse_dim = rwse_dim
 
-        # CALCULATE EFFECTIVE INPUT CHANNELS
+        # ✅ UPDATED: Calculate effective input channels with all encoding types
         effective_in_channels = in_channels
         if use_pos:
-            effective_in_channels += 2  # x, y coordinates
+            effective_in_channels += pos_dim  # Use configurable pos_dim
         if use_lap_pe:
-            effective_in_channels += 2  # First 2 Laplacian eigenvectors
+            effective_in_channels += self.lap_pe_use_dim  # Use configurable lap_pe_use_dim
         if use_anchor_pe:
             effective_in_channels += anchor_k * anchor_m
         if use_rwse:
@@ -107,21 +115,32 @@ class GraphSAGE(BaseGNN):
         self.use_graph_norm = use_graph_norm
         self.use_residuals = use_residuals
 
-        # WANDB LOGGING (CLEANED UP)
+        # ✅ UPDATED: WANDB LOGGING with all new parameters
         if self.log_to_wandb:
             wandb.config.update({
                 'hidden_channels': hidden_channels,
                 'in_channels': self.in_channels,
+                'effective_in_channels': self.in_channels,  # ✅ NEW
                 'mlp_hidden_dim': mlp_hidden_dim,
+                
+                # ✅ NEW: Position encoding parameters
                 'use_pos': use_pos,
-                'use_pos_encoding': use_pos_encoding,
+                'pos_dim': pos_dim,
+                
+                # ✅ NEW: Laplacian PE parameters
                 'use_lap_pe': use_lap_pe,
                 'lap_pe_dim': lap_pe_dim,
+                'lap_pe_use_dim': self.lap_pe_use_dim,
+                
+                # ✅ NEW: Anchor PE parameters
                 'use_anchor_pe': use_anchor_pe,
                 'anchor_k': anchor_k,
                 'anchor_m': anchor_m,
+                
+                # ✅ NEW: RWSE parameters
                 'use_rwse': use_rwse,
                 'rwse_dim': rwse_dim,
+                
                 'aggregator': aggregator,
                 'update_function': update_function,
                 'use_graph_norm': use_graph_norm,
@@ -153,9 +172,9 @@ class GraphSAGE(BaseGNN):
                 in_channels, self.hidden_channels[i],
                 aggr=self.aggregator,   # 'mean', 'max', or 'lstm'
                 root_weight=True,
-                normalize=False,
+                normalize=True,
                 bias=True,
-                project=False) #TODO: to change to True if we want to project the features to the hidden_channels[i]
+                project=(in_channels != self.hidden_channels[i])) #TODO: to change to True if we want to project the features to the hidden_channels[i]
             setattr(self, f'conv{i + 1}', conv)
 
             if self.use_graph_norm:
@@ -174,8 +193,6 @@ class GraphSAGE(BaseGNN):
             self.dropout_layer = nn.Dropout(self.dropout)
         
         self.fc = nn.Linear(self.hidden_channels[-1], self.out_channels)
-        
-        
 
     def forward(self, data):
         """
@@ -193,42 +210,53 @@ class GraphSAGE(BaseGNN):
 
         # ✅ ENHANCE FEATURES FOR EACH GRAPH
         enhanced_datalist = []
+        device = next(self.parameters()).device
+        
         for d in datalist:
             xi = d.x.clone()
 
             # Add coordinate features
             if self.use_pos:
                 if hasattr(d, 'pos') and d.pos is not None:
-                    pos = d.pos.to(self.dtype)
-                    # Handle different pos shapes
-                    if pos.dim() == 3 and pos.shape[1] == 3:
-                        pos = pos[:, 1, :]  # Take middle position
-                    elif pos.dim() == 2 and pos.shape[1] != 2:
-                        pos = pos.view(pos.size(0), -1)  # Flatten if needed
-                    xi = torch.cat([xi, pos], dim=-1)
+                    pos = d.pos.to(device=device, dtype=self.dtype)
+                    if pos.dim() == 3:
+                        if self.pos_dim == 2:
+                            pos_features = pos[:, 1, :]  # Middle position
+                        elif self.pos_dim == 6:
+                            pos_features = pos.reshape(pos.size(0), -1)  # All positions
+                        elif self.pos_dim == 4:
+                            pos_features = torch.cat([pos[:, 0, :], pos[:, 2, :]], dim=-1)  # Start + end
+                        else:
+                            raise ValueError("pos_dim must be 2, 4, or 6 when pos is 3D")
+                    else:
+                        raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
+                    xi = torch.cat([xi, pos_features], dim=-1)
                 else:
-                    raise ValueError("Position features enabled but 'pos' missing")
+                    raise ValueError("Position features are enabled but 'pos' attribute is missing in data.")
 
             # Add Laplacian PE
             if self.use_lap_pe:
                 if hasattr(d, 'lap_pe') and d.lap_pe is not None:
-                    lap_pe = d.lap_pe[:, :2].to(self.dtype)  # First 2 eigenvectors
-                    xi = torch.cat([xi, lap_pe], dim=-1)
+                    lap_pe = d.lap_pe.to(device)
+                    if lap_pe.size(1) < self.lap_pe_use_dim:
+                        raise ValueError(f"Laplacian PE has fewer dimensions ({lap_pe.size(1)}) than lap_pe_use_dim ({self.lap_pe_use_dim})")
+                    else:
+                        lap_pe_reqd_dim = lap_pe[:, :self.lap_pe_use_dim]
+                    xi = torch.cat([xi, lap_pe_reqd_dim], dim=-1)
                 else:
-                    print("Warning: Laplacian PE enabled but 'lap_pe' missing")
+                    raise ValueError("Laplacian PE is enabled but 'lap_pe' attribute is missing in data.")
 
             # Add Anchor Distance Encoding
             if self.use_anchor_pe:
                 if hasattr(d, 'pos') and d.pos is not None:
-                    # Simple anchor distance encoding
-                    pos = d.pos.to(next(self.parameters()).device)
+                    pos = d.pos.to(device)
                     if pos.dim() == 3:
-                        pos = pos[:, 1, :]  # Middle position
+                        pos = pos[:, 1, :]  # Use middle position
                     
-                    # Select random anchor nodes
+                    # Simple anchor distance encoding (basic version)
                     num_nodes = pos.size(0)
                     num_anchors = min(self.anchor_k, num_nodes)
-                    anchor_indices = torch.randperm(num_nodes)[:num_anchors]
+                    anchor_indices = torch.randperm(num_nodes, device=device)[:num_anchors]
                     anchors = pos[anchor_indices]
                     
                     # Compute distances to anchors
@@ -237,27 +265,25 @@ class GraphSAGE(BaseGNN):
                     # Pad or truncate to desired size
                     if distances.size(1) < self.anchor_k:
                         pad_size = self.anchor_k - distances.size(1)
-                        distances = torch.cat([distances, torch.zeros(num_nodes, pad_size, device=distances.device)], dim=1)
+                        distances = torch.cat([distances, torch.zeros(num_nodes, pad_size, device=device)], dim=1)
                     else:
                         distances = distances[:, :self.anchor_k]
                     
-                    # Simple encoding (you can make this more sophisticated)
+                    # Simple encoding (repeat to match anchor_k * anchor_m dimensions)
                     ade = distances.repeat(1, self.anchor_m // self.anchor_k + 1)[:, :self.anchor_k * self.anchor_m]
                     xi = torch.cat([xi, ade], dim=-1)
 
             # Add Random Walk Structural Encoding
             if self.use_rwse:
                 if hasattr(d, 'rw_pe') and d.rw_pe is not None:
-                    rwse = d.rw_pe.to(self.dtype)
+                    rwse = d.rw_pe.to(device)
                     # Pad or truncate to desired dimension
                     if rwse.size(1) < self.rwse_dim:
-                        pad = torch.zeros(rwse.size(0), self.rwse_dim - rwse.size(1), device=rwse.device, dtype=self.dtype)
+                        pad = torch.zeros(rwse.size(0), self.rwse_dim - rwse.size(1), device=device, dtype=self.dtype)
                         rwse = torch.cat([rwse, pad], dim=1)
                     else:
                         rwse = rwse[:, :self.rwse_dim]
                     xi = torch.cat([xi, rwse], dim=-1)
-                else:
-                    print("Warning: Random Walk SE enabled but 'rw_pe' missing")
 
             # Create enhanced data object
             d_enhanced = d.clone()
@@ -301,57 +327,3 @@ class GraphSAGE(BaseGNN):
 
         # Read out predictions
         return self.fc(x)
-    
-    '''def forward(self, data):
-        """
-        Forward pass with nested aggregator and update function.
-        Handles fixed-size x_all by using a manual pointer to extract
-        the correct target nodes for each hop.
-        """
-        # Full feature matrix for all nodes involved in the sampled subgraph
-        x_all = data.x.to(self.dtype)
-        adjs = data.adjs  # List of (edge_index, e_id, (num_src, num_dst))
-
-        # Step 1: Precompute the slices of target nodes per layer
-        ptr = 0  # Start at the beginning of x_all
-        target_slices = []
-        for i in range(len(adjs)):
-            num_src, num_dst = adjs[i][2]
-            ptr += num_src  # Skip over source nodes
-            target_slices.append((ptr, ptr + num_dst))
-        target_slices = target_slices[::-1] #reverse the list to go from farthest to closest hop
-        # Go from farthest to closest hop
-        for i in reversed(range(len(adjs))):
-            edge_index, e_id, (num_src, num_dst) = adjs[i]
-            start, end = target_slices[i]
-            x_target = x_all[start:end]
-            
-            # Optional: add self-loops only with seed nodes
-            if self.aggregator == 'gcn' and i == 0:
-                edge_index, _ = add_self_loops(
-                    edge_index,
-                    num_nodes=x_all.size(0)
-                )
-
-            # Aggregate
-            if self.aggregator == 'pool':
-                aggr_mlp = getattr(self, f'aggr_mlp{i+1}')
-                x_all = self.layers[i]((aggr_mlp(x_all), x_target), edge_index)
-            else:
-                x_all = self.layers[i]((x_all, x_target), edge_index)
-
-            # Apply update function (either ReLU or a learned MLP)
-            if self.update_function == 'relu':
-                x_all = nn.functional.relu(x_all)
-            else:
-                update_mlp = getattr(self, f'update_mlp{i+1}')
-                x_all = update_mlp(x_all)
-
-            # Apply dropout if enabled
-            if self.use_dropout:
-                x_all = self.dropout_layer(x_all)
-
-        # Final output for the seed nodes (which are the last num_dst of the last layer)
-        seed_count = adjs[0][2][1]  # num_dst of the *last layer*, i.e., number of seeds
-        out = self.fc(x_all[-seed_count:])  # Final predictions for seed nodes
-        return out'''
