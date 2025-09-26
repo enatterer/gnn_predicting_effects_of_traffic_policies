@@ -135,7 +135,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                                      use_all_features, use_bootstrapping, use_weighted_sampling,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
-                                     use_data_augmentation, use_edge_perturbation_probability, 
+                                     use_data_augmentation, use_message_dropout_probability,
                                      use_feature_noise_probability, use_node_masking_probability=0.0): 
     
     print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
@@ -226,8 +226,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
             is_training=False,  # Not training mode
             filtered_feature_mapping=filtered_feature_mapping
         )
-        
-        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability, 'Node Masking Probability:', use_node_masking_probability)  # ✅ UPDATED
+
+        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability, 'Node Masking Probability:', use_node_masking_probability, 'Message Dropout Probability:', use_message_dropout_probability)  # ✅ UPDATED
         print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
 
         print("Creating base train loader...")
@@ -290,9 +290,9 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
                              is_training=False)
     
         print('Data Augmentation:', use_data_augmentation, 
-              'Edge Perturbation Probability:', use_edge_perturbation_probability,
               'Feature Noise Probability:', use_feature_noise_probability,
-              'Node Masking Probability:', use_node_masking_probability)  
+              'Node Masking Probability:', use_node_masking_probability,
+              'Message Dropout Probability:', use_message_dropout_probability)  # ✅ UPDATED
     
         print("Normalizing train set...")
         train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
@@ -1137,7 +1137,12 @@ class NestedNeighborDataset(Dataset):
         if self.is_training and self.augment_pos_rotation:
             if hasattr(subgraph, 'pos') and subgraph.pos is not None:
                 theta = random.uniform(0, 2 * math.pi)
-                subgraph.pos = rotate_pos(subgraph.pos, theta)
+                if len(subgraph.pos.shape) == 3 and subgraph.pos.shape[1] == 3:
+                    # For [N, 3, 2] format, apply SAME rotation angle to all positions
+                    subgraph.pos = rotate_pos(subgraph.pos, theta)
+                elif len(subgraph.pos.shape) == 2:
+                    # For [N, 2] format, apply rotation directly
+                    subgraph.pos = rotate_pos(subgraph.pos, theta)
         
         # On-the-fly feature noise augmentation
         if self.is_training and self.augment_feature_noise_prob:
