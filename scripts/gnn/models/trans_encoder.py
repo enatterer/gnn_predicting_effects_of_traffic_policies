@@ -311,7 +311,7 @@ class TransEncoder(BaseGNN):
             nhead=self.num_heads,
             dim_feedforward=self.ff_dim,
             dropout=self.dropout if self.use_dropout else 0.0,
-            batch_first=True)
+            batch_first=True,norm_first=True) #set norm_first to False for post-normalization
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=self.num_layers)
 
         # Output regression layer
@@ -383,7 +383,7 @@ class TransEncoder(BaseGNN):
             # Add coordinate features
             if self.use_pos:
                 if hasattr(d, 'pos') and d.pos is not None:
-                    pos = d.pos.to(self.dtype)
+                    pos = d.pos.to(device=device, dtype=self.dtype)
                     if pos.dim() == 3:
                         if self.pos_dim == 2:
                             pos_features = pos[:, 1, :]
@@ -415,7 +415,7 @@ class TransEncoder(BaseGNN):
             if self.use_anchor_pe:
                 if hasattr(d, 'pos') and d.pos is not None:
                     # pos is already [N, 2] from collate function
-                    pos = d.pos.to(device)
+                    pos = d.pos.to(device=device, dtype=self.dtype)
                     ade = anchor_distance_encoding(pos, d.edge_index, K=self.anchor_k, M=self.anchor_m)
                     xi = torch.cat([xi, ade], dim=-1)
                 else:
