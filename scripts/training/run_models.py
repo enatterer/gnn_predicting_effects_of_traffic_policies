@@ -192,7 +192,7 @@ def main():
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                              is_eign=(args['gnn_arch'] == "eign"),
                                                                              use_data_augmentation=args['use_data_augmentation'],
-                                                                             use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
+                                                                             use_message_dropout_probability=args['use_message_dropout_probability'],
                                                                              use_feature_noise_probability=args['augment_feature_noise_prob'],
                                                                              use_node_masking_probability=args['use_node_masking_probability'])
             # Set scalers_validation to scalers_train for compatibility
@@ -217,7 +217,7 @@ def main():
                                                                                                         max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                                                         is_eign=(args['gnn_arch'] == "eign"),
                                                                                                         use_data_augmentation=args['use_data_augmentation'],
-                                                                                                        use_edge_perturbation_probability=args['use_edge_perturbation_probability'],
+                                                                                                        use_message_dropout_probability=args['use_message_dropout_probability'],
                                                                                                         use_feature_noise_probability=args['augment_feature_noise_prob'],
                                                                                                         use_node_masking_probability=args['use_node_masking_probability'])
 
