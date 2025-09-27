@@ -26,11 +26,26 @@ from tqdm import tqdm
 import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
+from scipy.sparse import csr_matrix
+from scipy.sparse.csgraph import laplacian as csgraph_laplacian
+from scipy.sparse.linalg import eigsh  # Add this import
 
 # Set seeds for reproducibility
 np.random.seed(13)
 random.seed(13)
 torch.manual_seed(13)
+
+# ✅ SET ENVIRONMENT VARIABLES FOR DETERMINISTIC BEHAVIOR
+import os
+os.environ['OMP_NUM_THREADS'] = '1'
+os.environ['OPENBLAS_NUM_THREADS'] = '1'
+os.environ['MKL_NUM_THREADS'] = '1'
+os.environ['NUMEXPR_NUM_THREADS'] = '1'
+os.environ['PYTHONHASHSEED'] = '13'
+
+# ✅ SET TORCH DETERMINISTIC BEHAVIOR
+torch.backends.cudnn.deterministic = True
+torch.backends.cudnn.benchmark = False
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -50,11 +65,13 @@ required_modes_on_links = ['car', 'car_passenger'] # Capacity will be reduced on
 use_allowed_modes = True # Flag to use allowed modes as edge features
 use_destination_activity = True # Flag to use destination activity as edge features
 use_linegraph = True # Flag to use line graph transformation
+use_laplacian_pe = True # Flag to compute Laplacian Positional Encoding
+lap_pe_dim = 8 # Dimension for Laplacian Positional Encoding
 # Test with just one city
 #all_cities = ['rosenheim','muenchen','augsburg', 'nuernberg','neuulm']  # Change this to test different cities
 #cities_1=['nuernberg', 'augsburg', 'muenchen','schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg', 'bayreuth', 'erlangen', 'fuerth', 'kempten','landshut', 'ingolstadt', 'regensburg', 'neuulm',rosenheim]
 #cities_rest=[]
-all_cities = ['schweinfurt', 'aschaffenburg', 'wuerzburg', 'bamberg']
+all_cities = ['landshut', 'ingolstadt', 'regensburg','rosenheim']
 #target_feature = 'vol_car_percentage' #other options: 'vol_car'
 #target_feature_normalization_type = 'signed_log_normalization' #other options: 'mean_std', 'min_max','none'
 x_normalization_type = 'mean_std' #other options: 'min_max', 'robust_normalization', 'mean_std'
@@ -502,14 +519,83 @@ def compute_edge_weights(vol_base_case):
 
     return w.astype(np.float32)
 
+def compute_laplacian_pe_once(edge_index, num_nodes, lap_pe_dim=16):
+    """
+    Compute Laplacian Positional Encoding once for a given graph structure.
+    
+    Args:
+        edge_index: Edge index tensor of shape [2, num_edges]
+        num_nodes: Number of nodes
+        lap_pe_dim: Dimension of Laplacian PE
+        
+    Returns:
+        torch.Tensor: Laplacian PE features of shape (num_nodes, lap_pe_dim)
+    """
+    try:
+        # ✅ SET SEEDS FOR REPRODUCIBLE EIGENVALUE DECOMPOSITION
+        np.random.seed(13)
+        torch.manual_seed(13)
+        
+        #print(f"DEBUG: Computing Laplacian PE with edge_index shape: {edge_index.shape}, num_nodes: {num_nodes}, lap_pe_dim: {lap_pe_dim}")
+        
+        # Build sparse adjacency matrix
+        row, col = edge_index
+        data = torch.ones_like(row, dtype=torch.float32)
+        adj = csr_matrix((data.cpu().numpy(), (row.cpu().numpy(), col.cpu().numpy())),
+                         shape=(num_nodes, num_nodes), dtype=np.float64)  # ✅ Use float64 for better precision
+
+        #print(f"DEBUG: Adjacency matrix created with {adj.nnz} non-zero entries.")
+
+        # Compute Laplacian
+        L = csgraph_laplacian(adj, normed=False, return_diag=False)
+        #print(f"DEBUG: Laplacian matrix computed.")
+
+        # Compute eigenvalues and eigenvectors with higher tolerance for stability
+        eigenvalues, eigenvectors = eigsh(L, k=lap_pe_dim + 1, which='SM', return_eigenvectors=True)  # ✅ Add tolerance and max iterations for stability
+        #print(f"DEBUG: Eigenvalues: {eigenvalues}")
+        #print(f"DEBUG: Eigenvectors shape: {eigenvectors.shape}")
+
+        # Sort eigenvalues and eigenvectors
+        sorted_indices = np.argsort(eigenvalues)
+        eigenvalues = eigenvalues[sorted_indices]
+        eigenvectors = eigenvectors[:, sorted_indices]
+
+        # Skip the first eigenvector (corresponding to eigenvalue 0)
+        eigenvectors_to_use = eigenvectors[:, 1:lap_pe_dim + 1]
+
+        # Handle case where we have fewer eigenvectors than requested
+        if eigenvectors_to_use.shape[1] < lap_pe_dim:
+            padding = np.zeros((num_nodes, lap_pe_dim - eigenvectors_to_use.shape[1]))
+            eigenvectors_to_use = np.concatenate([eigenvectors_to_use, padding], axis=1)
+
+        # Stabilize signs based on maximum absolute value index
+        for i in range(eigenvectors_to_use.shape[1]):
+            max_abs_idx = np.argmax(np.abs(eigenvectors_to_use[:, i]))
+            if eigenvectors_to_use[max_abs_idx, i] < 0:
+                eigenvectors_to_use[:, i] *= -1
+
+        lap_pe = torch.tensor(eigenvectors_to_use, dtype=torch.float32)
+        #print(f"DEBUG: Laplacian PE computed with shape: {lap_pe.shape}, mean: {lap_pe.mean():.6f}, std: {lap_pe.std():.6f}")
+
+    except Exception as e:
+        print(f"ERROR: Failed to compute Laplacian PE: {e}")
+        print(f"Graph info: {num_nodes} nodes, edge_index shape: {edge_index.shape}")
+        print(f"Edge index range: [{edge_index.min().item()}, {edge_index.max().item()}]")
+        if 'adj' in locals():
+            print(f"Adjacency matrix: {adj.nnz} non-zero entries")
+        raise
+
+    return lap_pe
+
 def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case,
                         gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes, 
-                        x_normalization_type, required_modes_on_links, project_root):
+                        x_normalization_type, required_modes_on_links, project_root,
+                        precomputed_lap_pe=None):  # ✅ Accept pre-computed Laplacian PE
     
     datalist = []
     linegraph_transformation = LineGraph()
 
-    vol_base_case = np.round(links_base_case['vol_car'].values) #round to integer
+    vol_base_case = np.round(links_base_case['vol_car'].values)
     
     # Save scaler parameters for this city
     save_scaler_params(city, vol_base_case, project_root)
@@ -530,6 +616,17 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
     # THEN use edges_base to create edge_index
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
 
+    # ✅ USE PRE-COMPUTED LAPLACIAN PE (DON'T RECOMPUTE)
+    if use_laplacian_pe and precomputed_lap_pe is not None:
+        #print(f"DEBUG: Using pre-computed Laplacian PE for {city}. Shape: {precomputed_lap_pe.shape}, mean: {precomputed_lap_pe.mean():.6f}")
+        lap_pe = precomputed_lap_pe
+    elif use_laplacian_pe:
+        print(f"ERROR: use_laplacian_pe=True but no pre-computed Laplacian PE provided!")
+        raise ValueError("Expected pre-computed Laplacian PE but none provided")
+    else:
+        lap_pe = None
+    
+    # Continue with the rest of the function only if we reach here successfully...
     # Filter out base_network_no_policies before the loop
     graph_items = {k: v for k, v in result_dic.items() 
                    if isinstance(v, pd.DataFrame) and k != "base_network_no_policies"}
@@ -625,12 +722,19 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
         # Compute edge weights
         edge_weights = compute_edge_weights(vol_base_case)
         
+        # Create data object with the same structure as base_data
         data = Data(edge_index=edge_index)
         data.num_nodes = len(nodes)
         if use_linegraph:
             data = linegraph_transformation(data)
         data.x = edge_tensor
         data.pos = stacked_edge_geometries_tensor
+        
+        # Add the pre-computed Laplacian PE
+        if use_laplacian_pe and lap_pe is not None:
+            #print(f"DEBUG: Adding pre-computed Laplacian PE to graph. Shape: {lap_pe.shape}, mean: {lap_pe.mean():.6f}")
+            data.lap_pe = lap_pe.clone()
+            #print(f"DEBUG: Laplacian PE cloned successfully.")
         
         # Add new data attributes (using float32 to save memory)
         data.unscaled_vol_base = torch.tensor(vol_base_case, dtype=torch.float32)
@@ -706,7 +810,10 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
                       f"min={data.unscaled_vol_base.min():.4f}, max={data.unscaled_vol_base.max():.4f}")
                 print(f"edge_weights stats: mean={data.edge_weights.mean():.4f}, std={data.edge_weights.std():.4f}, "
                       f"min={data.edge_weights.min():.4f}, max={data.edge_weights.max():.4f}")
-                
+                if hasattr(data, 'lap_pe'):
+                    print(f"lap_pe: {data.lap_pe.shape}")
+                    print(f"lap_pe stats: mean={data.lap_pe.mean():.4f}, std={data.lap_pe.std():.4f}, "
+                          f"min={data.lap_pe.min():.4f}, max={data.lap_pe.max():.4f}")
                 # Print feature statistics
                 print(f"\n--- Feature Statistics ---")
                 for i, feat_name in enumerate(feature_names):
@@ -766,12 +873,27 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
                     print("WARNING: NaN values found in unscaled_vol_base!")
                 if torch.isnan(data.edge_weights).any():
                     print("WARNING: NaN values found in edge_weights!")
+                if hasattr(data, 'lap_pe') and torch.isnan(data.lap_pe).any():
+                    print("WARNING: NaN values found in Laplacian PE!")
+                if hasattr(data, 'lap_pe') and torch.isinf(data.lap_pe).any():
+                    print("WARNING: Inf values found in Laplacian PE!")
                 print("=" * 50)
     
+    # Debug: Compare Laplacian PE across graphs in the datalist
+    '''for i, data in enumerate(datalist):
+        if i > 0:
+            print(f"DEBUG: Comparing Laplacian PE for graph {i} with graph {i-1}...")
+            identical = torch.allclose(datalist[i].lap_pe, datalist[i-1].lap_pe, atol=1e-6)
+            print(f"DEBUG: Laplacian PE identical: {identical}")
+    
+    print("\n=== Final Laplacian PE Consistency Check ===")
+    for i, data in enumerate(datalist):
+        print(f"Graph {i}: Laplacian PE stats - mean={data.lap_pe.mean():.6f}, std={data.lap_pe.std():.6f}, "
+              f"min={data.lap_pe.min():.6f}, max={data.lap_pe.max():.6f}")
+    '''
     return datalist
 
 def process_single_city(city, project_root, result_path, use_destination_activity, use_allowed_modes):
-    
     """Process a single city and save its graph data."""
     print(f"\nProcessing city: {city}\n")
     
@@ -837,18 +959,49 @@ def process_single_city(city, project_root, result_path, use_destination_activit
                 print(f"{feat}: mean={values.mean():.4f}, std={values.std():.4f}, min={values.min():.4f}, max={values.max():.4f}")
         print("=" * 30)
 
-    # Sort for reproducibility, hopefully!
+    # ✅ COMPUTE LAPLACIAN PE ONCE FOR THE CITY (OUTSIDE BATCH LOOP)
+    print(f"\n=== COMPUTING LAPLACIAN PE FOR {city.upper()} ===")
+    
+    # Get the base graph structure for Laplacian PE computation
+    vol_base_case = np.round(gdf_basecase_links['vol_car'].values)
+    capacity_base_case, freespeed_base_case = get_capacity_and_freespeed_base_case(gdf_basecase_links, required_modes_on_links)
+    
+    # Get link geometries and edges
+    _, stacked_edge_geometries_tensor, edges_base, nodes, _ = get_link_geometries(gdf_basecase_links, apply_scaling=True)
+    edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
+    
+    # Compute Laplacian PE ONCE for the entire city
+    lap_pe = None
+    if use_laplacian_pe:
+        print(f"DEBUG: Computing Laplacian PE for {city} (ONCE for all batches)...")
+        linegraph_transformation = LineGraph()
+        base_data = Data(edge_index=edge_index)
+        base_data.num_nodes = len(nodes)
+        
+        if use_linegraph:
+            print(f"DEBUG: Original graph structure for {city}: {edge_index.shape[1]} edges, {len(nodes)} nodes")
+            base_data = linegraph_transformation(base_data)
+            print(f"DEBUG: Line graph structure: {base_data.edge_index.shape[1]} edges, {base_data.num_nodes} nodes")
+        
+        lap_pe = compute_laplacian_pe_once(base_data.edge_index, base_data.num_nodes, lap_pe_dim)
+        print(f"DEBUG: Laplacian PE computed for {city}. Shape: {lap_pe.shape}, mean: {lap_pe.mean():.6f}, std: {lap_pe.std():.6f}")
+        print(f"DEBUG: Laplacian PE ID: {id(lap_pe)}")
+    
+    # Sort for reproducibility
     sim_input_paths.sort()
 
     # Some metadata, helps later in DataLoader
     idx = 1
-    metadata = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
+    metadata = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
 
+    # ✅ BATCH PROCESSING LOOP (WITHOUT LAPLACIAN PE COMPUTATION)
     for i in tqdm(range(0, len(sim_input_paths), batch_size), desc="Processing in batches ...", unit="batch"):
+        
+        print(f"DEBUG: Processing batch {i//batch_size + 1}, Laplacian PE ID: {id(lap_pe)}")
         
         sliced_inputs = sim_input_paths[i:i+batch_size]
         
-        try:        
+        try:
             if city != 'paris':
                 # Extract all tar.gz files from compressed directories (for Bavarian Simulations)
                 networks, temp_dirs = extract_and_get_networks(sliced_inputs)
@@ -861,11 +1014,19 @@ def process_single_city(city, project_root, result_path, use_destination_activit
             result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity, activity_destination_names=activity_destination_names)
             base_gdf = result_dic_output_links["base_network_no_policies"]
             
-            city_data = generate_graph_data(city, result_dic=result_dic_output_links, result_dic_mode_stats=result_dic_eqasim_trips,
-                                            links_base_case=base_gdf, gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
-                                            use_destination_activity=use_destination_activity, use_allowed_modes=use_allowed_modes,
-                                            x_normalization_type=x_normalization_type, required_modes_on_links=required_modes_on_links,
-                                            project_root=project_root)
+            city_data = generate_graph_data(
+                city, 
+                result_dic=result_dic_output_links, 
+                result_dic_mode_stats=result_dic_eqasim_trips,
+                links_base_case=base_gdf, 
+                gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
+                use_destination_activity=use_destination_activity, 
+                use_allowed_modes=use_allowed_modes,
+                x_normalization_type=x_normalization_type, 
+                required_modes_on_links=required_modes_on_links,
+                project_root=project_root,
+                precomputed_lap_pe=lap_pe  # ✅ Pass pre-computed Laplacian PE
+            )
             
             for graph in city_data:
                 filename = f'{idx:06d}.pt'
@@ -909,4 +1070,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-    
