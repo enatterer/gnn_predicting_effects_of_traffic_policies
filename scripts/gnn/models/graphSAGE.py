@@ -36,6 +36,8 @@ class GraphSAGE(BaseGNN):
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = True,
                  use_target_standardization: bool = False,
+                 use_city_balanced_loss: bool = False, 
+                 message_drop_prob: float = 0.0,  # <-- ADD THIS LINE
                  
                  # ✅ NEW: Position parameters from TransEncoder
                  use_pos: bool = True,
@@ -63,7 +65,7 @@ class GraphSAGE(BaseGNN):
                  aggregator: str = 'mean', #options: 'max', 'mean'
                  update_function: str = 'relu',
                  mlp_hidden_dim: int = 1024):
-                
+        
         # ✅ UPDATED: Store positional encoding parameters
         self.use_pos = use_pos
         self.pos_dim = pos_dim
@@ -76,12 +78,12 @@ class GraphSAGE(BaseGNN):
         self.use_rwse = use_rwse
         self.rwse_dim = rwse_dim
 
-        # ✅ UPDATED: Calculate effective input channels with all encoding types
+        # Calculate effective input channels
         effective_in_channels = in_channels
         if use_pos:
-            effective_in_channels += pos_dim  # Use configurable pos_dim
+            effective_in_channels += pos_dim
         if use_lap_pe:
-            effective_in_channels += self.lap_pe_use_dim  # Use configurable lap_pe_use_dim
+            effective_in_channels += self.lap_pe_use_dim
         if use_anchor_pe:
             effective_in_channels += anchor_k * anchor_m
         if use_rwse:
