@@ -147,8 +147,10 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
     else:
         dataset, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
                                                                                     train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-    
+    combined_indices = train_set.indices + valid_set.indices
+    combined_train_val_set = torch.utils.data.Subset(train_set.dataset, combined_indices)
     print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+    print(f"Total combined graphs (train+val): {len(combined_train_val_set)}")
 
     if use_all_features:
         node_features = []
@@ -295,7 +297,7 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
               'Message Dropout Probability:', use_message_dropout_probability)  # ✅ UPDATED
     
         print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(dataset_input=train_set, node_features=node_features, is_eign=is_eign)
+        train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_train_val_set, node_features=node_features, is_eign=is_eign)
         print("Train set normalized")      
         
         # ✅ FIX: Use training scaler for validation and test sets
@@ -503,11 +505,12 @@ def get_sampling_weights(dataset):
     return [1.0 / len(dataset)] * len(dataset)  
 
         
-def normalize_dataset(dataset_input, node_features, is_eign=False):
-    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
+def normalize_dataset(train_data_list, combined_data_list, node_features, is_eign=False):
+    train_data = [copy.deepcopy(train_data_list.dataset[idx]) for idx in train_data_list.indices]
+    combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
 
     print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(data_list, node_features) 
+    normalized_data_list, x_scaler = normalize_x_features_batched(train_data, combined_data, node_features) 
     print("x features normalized")
     
     if is_eign:
@@ -525,11 +528,14 @@ def normalize_dataset(dataset_input, node_features, is_eign=False):
     }
     return normalized_data_list, scalers_dict 
 
-def normalize_x_features_batched(data_list, node_features, batch_size=100):
+def normalize_x_features_batched(train_data_list, combined_data_list, node_features, batch_size=100):
     """
     Normalize the continuous node features (0 mean and unit variance).
     Categorical features (Allowed Modes) are left as booleans (0 or 1).
     'HIGHWAY' feature is one-hot encoded.
+    Fit scaler on combined train+val set, but apply normalization only to train set.
+    Returns normalized train set and fitted scaler.
+
 
     Finally, features are filtered to only include the ones specified in node_features. 
     """
@@ -543,14 +549,14 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
                        EdgeFeatures.LENGTH]
     
     # First pass: Fit the scaler
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting scaler"):
-        batch = data_list[i:i+batch_size]
+    for i in tqdm(range(0, len(combined_data_list), batch_size), desc="Fitting scaler"):
+        batch = combined_data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         scaler.partial_fit(batch_x)
     
     # Second pass: Transform the data
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
-        batch = data_list[i:i+batch_size]
+    for i in tqdm(range(0, len(train_data_list), batch_size), desc="Normalizing x features"):
+        batch = train_data_list[i:i+batch_size]
         batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
         batch_x_normalized = scaler.transform(batch_x)
         # Correct slicing for variable node counts
@@ -562,14 +568,14 @@ def normalize_x_features_batched(data_list, node_features, batch_size=100):
 
     # Filter features
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-    for data in data_list:
+    for data in train_data_list:
         data.x = data.x[:, node_feature_filter]
 
     # One-hot encode highway
     if "HIGHWAY" in node_features:
-        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
+        one_hot_highway(train_data_list, idx=node_features.index("HIGHWAY"))
 
-    return data_list, scaler 
+    return train_data_list, scaler
 
 def normalize_dataset_with_scaler(dataset_input, node_features, scalers, is_eign=False):
     """
