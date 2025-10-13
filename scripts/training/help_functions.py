@@ -536,7 +536,6 @@ def normalize_x_features_batched(train_data_list, combined_data_list, node_featu
     Fit scaler on combined train+val set, but apply normalization only to train set.
     Returns normalized train set and fitted scaler.
 
-
     Finally, features are filtered to only include the ones specified in node_features. 
     """
     scaler = StandardScaler()
@@ -548,12 +547,13 @@ def normalize_x_features_batched(train_data_list, combined_data_list, node_featu
                        EdgeFeatures.FREESPEED,
                        EdgeFeatures.LENGTH]
     
-    # First pass: Fit the scaler
+    # First pass: Fit the scaler incrementally, graph by graph
     for i in tqdm(range(0, len(combined_data_list), batch_size), desc="Fitting scaler"):
         batch = combined_data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        scaler.partial_fit(batch_x)
-    
+        for data in batch:
+            # Fit scaler on each graph's node features separately
+            scaler.partial_fit(data.x[:, continuous_feat].numpy())
+
     # Second pass: Transform the data
     for i in tqdm(range(0, len(train_data_list), batch_size), desc="Normalizing x features"):
         batch = train_data_list[i:i+batch_size]
