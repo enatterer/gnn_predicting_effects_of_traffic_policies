@@ -554,17 +554,15 @@ def normalize_x_features_batched(train_data_list, combined_data_list, node_featu
             # Fit scaler on each graph's node features separately
             scaler.partial_fit(data.x[:, continuous_feat].numpy())
 
-    # Second pass: Transform the data
+    # Second pass: Transform the data in batches
     for i in tqdm(range(0, len(train_data_list), batch_size), desc="Normalizing x features"):
         batch = train_data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        batch_x_normalized = scaler.transform(batch_x)
-        # Correct slicing for variable node counts
-        start = 0
+        
+        # Process each graph in the batch individually (no vstack!)
         for data in batch:
-            num_nodes = data.x.shape[0]
-            data.x[:, continuous_feat] = torch.tensor(batch_x_normalized[start:start+num_nodes], dtype=data.x.dtype)
-            start += num_nodes
+            data_x = data.x[:, continuous_feat].numpy()
+            data_x_normalized = scaler.transform(data_x)
+            data.x[:, continuous_feat] = torch.tensor(data_x_normalized, dtype=data.x.dtype)
 
     # Filter features
     node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
