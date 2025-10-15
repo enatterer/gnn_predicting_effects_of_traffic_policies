@@ -507,10 +507,10 @@ def get_sampling_weights(dataset):
         
 def normalize_dataset(train_data_list, combined_data_list, node_features, is_eign=False):
     train_data = [copy.deepcopy(train_data_list.dataset[idx]) for idx in train_data_list.indices]
-    combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
+    #combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
 
     print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(train_data, combined_data, node_features) 
+    normalized_data_list, x_scaler = normalize_x_features_batched(train_data, combined_data_list, node_features) 
     print("x features normalized")
     
     if is_eign:
@@ -549,7 +549,8 @@ def normalize_x_features_batched(train_data_list, combined_data_list, node_featu
     
     # First pass: Fit the scaler incrementally, graph by graph
     for i in tqdm(range(0, len(combined_data_list), batch_size), desc="Fitting scaler"):
-        batch = combined_data_list[i:i+batch_size]
+        batch_indices = combined_data_list.indices[i:i+batch_size]
+        batch = [combined_data_list.dataset[idx] for idx in batch_indices]
         for data in batch:
             # Fit scaler on each graph's node features separately
             scaler.partial_fit(data.x[:, continuous_feat].numpy())
