@@ -561,6 +561,7 @@ def compute_laplacian_pe_once(edge_index, num_nodes, lap_pe_dim=16):
         print(f"DEBUG: Eigenvalues: {eigenvalues}")
         print(f"DEBUG: Eigenvectors shape: {eigenvectors.shape}")
         
+         # Sort eigenvalues and eigenvectors
         sorted_indices = np.argsort(eigenvalues)
         eigenvectors = eigenvectors[:, sorted_indices[1:lap_pe_dim + 1]]  # Skip eigenvalue 0
 
@@ -736,7 +737,9 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
         
         # Add the pre-computed Laplacian PE (same for all graphs from this city)
         if use_laplacian_pe and lap_pe is not None:
-            data.lap_pe = lap_pe.clone()  # Clone to avoid sharing memory between graphs
+            #print(f"DEBUG: Adding pre-computed Laplacian PE to graph. Shape: {lap_pe.shape}, mean: {lap_pe.mean():.6f}")
+            data.lap_pe = lap_pe.clone() # Clone to avoid sharing memory between graphs
+            #print(f"DEBUG: Laplacian PE cloned successfully.")
         
         # Add new data attributes (using float32 to save memory)
         data.unscaled_vol_base = torch.tensor(vol_base_case, dtype=torch.float32)
@@ -808,6 +811,10 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
                 print(f"\n--- New Data Attributes ---")
                 print(f"unscaled_vol_base: {data.unscaled_vol_base.shape}")
                 print(f"edge_weights: {data.edge_weights.shape}")
+                print(f"unscaled_vol_base stats: mean={data.unscaled_vol_base.mean():.4f}, std={data.unscaled_vol_base.std():.4f}, "
+                      f"min={data.unscaled_vol_base.min():.4f}, max={data.unscaled_vol_base.max():.4f}")
+                print(f"edge_weights stats: mean={data.edge_weights.mean():.4f}, std={data.edge_weights.std():.4f}, "
+                      f"min={data.edge_weights.min():.4f}, max={data.edge_weights.max():.4f}")
                 if hasattr(data, 'lap_pe'):
                     print(f"lap_pe: {data.lap_pe.shape}")
                     print(f"lap_pe stats: mean={data.lap_pe.mean():.4f}, std={data.lap_pe.std():.4f}, "
@@ -878,6 +885,18 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
                     print("WARNING: Inf values found in Laplacian PE!")
                 print("=" * 50)
     
+    # Debug: Compare Laplacian PE across graphs in the datalist
+    '''for i, data in enumerate(datalist):
+        if i > 0:
+            print(f"DEBUG: Comparing Laplacian PE for graph {i} with graph {i-1}...")
+            identical = torch.allclose(datalist[i].lap_pe, datalist[i-1].lap_pe, atol=1e-6)
+            print(f"DEBUG: Laplacian PE identical: {identical}")
+    
+    print("\n=== Final Laplacian PE Consistency Check ===")
+    for i, data in enumerate(datalist):
+        print(f"Graph {i}: Laplacian PE stats - mean={data.lap_pe.mean():.6f}, std={data.lap_pe.std():.6f}, "
+              f"min={data.lap_pe.min():.6f}, max={data.lap_pe.max():.6f}")
+    '''
     return datalist
 
 def process_single_city(city, project_root, result_path, use_destination_activity, use_allowed_modes):
@@ -938,6 +957,8 @@ def process_single_city(city, project_root, result_path, use_destination_activit
         gdf_basecase_links, activity_destination_names = add_destinations_to_gdf(gdf_basecase_links, df_basecase_eqasim_trips, x_normalization_type, normalize_activities=True)
         print(f"\n=== Activity Features Added === *****BASECASE LINKS*****")
         print(f"Activity destination names: {activity_destination_names}")
+        #print(f"Base case columns: {list(gdf_basecase_links.columns)}")
+        # Check if normalized features exist
         for feat in activity_destination_names:
             if feat in gdf_basecase_links.columns:
                 values = gdf_basecase_links[feat].values
@@ -1055,7 +1076,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
 def main():
     
     # Create the result base path
-    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data','kreisfreistadt')
+    result_base_path = os.path.join(project_root, 'data', 'inductive_data', 'training_data','kreisfreistadt') # 'kreisfreistadt_norm'?
     os.makedirs(result_base_path, exist_ok=True)
     
     for city in all_cities:
