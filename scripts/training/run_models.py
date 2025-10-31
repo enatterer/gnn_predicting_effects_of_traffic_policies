@@ -14,14 +14,13 @@ python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsig
 python run_models.py --gnn_arch trans_encoder --unique_model_description encoder_trial --in_channels 5 --use_all_features True --num_epochs 20 --lr 0.0003 --early_stopping_patience 25
 '''
 
-
 from html import parser
 import os
 import sys
 import json
 import argparse
 import torch
-#from torchinfo import summary
+from pathlib import Path
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
 
 # Add the 'scripts' directory to Python Path
@@ -32,17 +31,19 @@ if scripts_path not in sys.path:
 from training.help_functions import *
 from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies,CityBalancedGNNLoss
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Repo root: repo/scripts/training/run_models.py → go two levels up
+project_root = Path(__file__).resolve().parents[2]
+DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
 # Please adjust as needed
-base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
+base_dir = (project_root / 'inductive_gnn_data_results' / 'transductive')
+
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
 train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
 val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
 test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
-    
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
@@ -114,17 +115,23 @@ def main():
     
     set_random_seeds()
     
+        # -------------------------------------------------------------------
+    # Dataset and results directory selection
+    # -------------------------------------------------------------------
     if args['gnn_arch'] == "eign":
-        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data_eign','kreisfreistadt')
-        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive_eign') # for saving results
+        dataset_path = DATA_DIR / 'inductive_data' / 'training_data_eign' / 'kreisfreistadt'
+        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive_eign'
+
     elif args['project_name'] == 'GNN_Transductive':
-        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt_norm')
-        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
-    elif args['project_name'] == 'GNN_Inductive': #for 'GNN_Inductive' as project name
-        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
-        base_dir = os.path.join(project_root, 'inductive_gnn_data_results','transductive') # for saving results
+        dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt_norm'
+        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
+
+    elif args['project_name'] == 'GNN_Inductive':  # for 'GNN_Inductive' as project name
+        dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt'
+        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
+
     else:
-        raise ValueError(f"Unknown project_name: {args['project_name']}. Supported: GNN_Transductive, GNN_Inductive")
+        raise ValueError(f"Unknown project_name or gnn_arch combination: {args}")
     
     try:
         

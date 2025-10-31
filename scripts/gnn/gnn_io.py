@@ -1,5 +1,7 @@
 import json
 from functools import lru_cache
+import os
+from pathlib import Path
 
 import numpy as np
 from sklearn.model_selection import train_test_split
@@ -11,6 +13,17 @@ import math
 import random
 from functools import partial
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
+
+# Centralized path remapping so metadata created on a colleague's machine works locally
+_BAD_PREFIX = "/home/abasu/gnn_predicting_effects_of_traffic_policies/data"
+_PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_DATA_DIR = Path(os.getenv("DATA_DIR", _PROJECT_ROOT / "data")).resolve()
+
+def _fix_path(p: str) -> str:
+    p = str(p)
+    if p.startswith(_BAD_PREFIX):
+        return str(Path(p.replace(_BAD_PREFIX, str(_DATA_DIR))))
+    return p
 
 def rotate_pos(pos, theta):
     """Rotate 2D positions by theta radians, with 30% chance of random reflection."""
@@ -115,7 +128,11 @@ def apply_simple_node_masking(x: torch.Tensor, node_mask_prob: float = 0.05) -> 
 
 class GraphDataset(Dataset):
     def __init__(self, paths, labels):
-        self.paths = paths
+        # Rewrite any absolute paths from a different machine to local DATA_DIR
+        self.paths = [
+            _fix_path(p)
+            for p in paths
+        ]
         self.labels = labels
 
     def __len__(self):

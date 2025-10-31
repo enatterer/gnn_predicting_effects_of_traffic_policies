@@ -29,17 +29,17 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from gnn.gnn_io import *
-from gnn.models.point_net_transf_gat import PointNetTransfGAT
-from gnn.models.gcn import GCN, GCN2
-from gnn.models.gat import GAT
+# from gnn.models.point_net_transf_gat import PointNetTransfGAT
+# from gnn.models.gcn import GCN, GCN2
+# from gnn.models.gat import GAT
 from gnn.models.gatv2 import GATv2
-from gnn.models.gatv3 import GATv3
+# from gnn.models.gatv3 import GATv3
 from gnn.models.trans_conv import TransConv
-from gnn.models.pnc import PNC
-from gnn.models.fc_nn import FC_NN
-from gnn.models.eign import EIGNLaplacianConv
+# from gnn.models.pnc import PNC
+# from gnn.models.fc_nn import FC_NN
+# from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
-from gnn.models.xgboost import XGBoostModel
+# from gnn.models.xgboost import XGBoostModel
 from gnn.models.trans_encoder import TransEncoder
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
@@ -801,42 +801,42 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "message_drop_prob": getattr(config, 'use_message_dropout_probability', 0.0)
     }
 
-    if gnn_arch == "point_net_transf_gat":
-        return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
+    # if gnn_arch == "point_net_transf_gat":
+    #     return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "graphSAGE":
+    if gnn_arch == "graphSAGE":
         model = GraphSAGE(**common_kwargs, **model_kwargs).to(device)
         return model
     
-    elif gnn_arch == "gcn":
-        return GCN(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "gcn":
+    #     return GCN(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "gcn2":
-        return GCN2(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "gcn2":
+    #     return GCN2(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "gat":
-        return GAT(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "gat":
+    #     return GAT(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "gatv2":
         return GATv2(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "gatv3":
-        return GATv3(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "gatv3":
+    #     return GATv3(**common_kwargs, **model_kwargs).to(device)
     
     elif gnn_arch == "trans_conv":
         return TransConv(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "pnc":
-        return PNC(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "pnc":
+    #     return PNC(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "fc_nn":
-        return FC_NN(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "fc_nn":
+    #     return FC_NN(**common_kwargs, **model_kwargs).to(device)
 
-    elif gnn_arch == "eign":
-        return EIGNLaplacianConv(**common_kwargs, **model_kwargs).to(device)
+    # elif gnn_arch == "eign":
+    #     return EIGNLaplacianConv(**common_kwargs, **model_kwargs).to(device)
     
-    elif gnn_arch == "xgboost":
-        return XGBoostModel(**common_kwargs, **model_kwargs)
+    # elif gnn_arch == "xgboost":
+    #     return XGBoostModel(**common_kwargs, **model_kwargs)
         
     elif gnn_arch == "trans_encoder":
         return TransEncoder(**common_kwargs, **model_kwargs).to(device)
