@@ -4,4 +4,4 @@ logs/
 **/.ipynb_checkpoints/
 **/__pycache__/
 scripts/evaluation/results/
-.vscode/
+.vscode/wandb.env
