@@ -107,6 +107,11 @@ def main():
                     help="Force use of specific training method regardless of project name. Options: 'transductive', 'inductive', None (uses project name to decide).",
                     choices=["transductive", "inductive", None])
 
+    # Fast-iteration: optionally cap dataset sizes per split (random subsample)
+    parser.add_argument("--limit_train_graphs", type=int, default=0, help="If >0, randomly keep only this many training graphs after reading metadata.")
+    parser.add_argument("--limit_val_graphs", type=int, default=0, help="If >0, randomly keep only this many validation graphs after reading metadata.")
+    parser.add_argument("--limit_test_graphs", type=int, default=0, help="If >0, randomly keep only this many test graphs after reading metadata.")
+
     args = vars(parser.parse_args())
     
     # Parse neighbor_sizes from string to list
@@ -154,10 +159,26 @@ def main():
         for city in sorted(train_cities):
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
+        # Optional: Subsample training graphs for faster iterations
+        if args.get('limit_train_graphs', 0) and args['limit_train_graphs'] > 0 and len(train_data['path']) > args['limit_train_graphs']:
+            import random as _rnd
+            indices = list(range(len(train_data['path'])))
+            _rnd.shuffle(indices)
+            keep = set(indices[:args['limit_train_graphs']])
+            for k in ['path','policy_region','scenario','city']:
+                train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
+
         if len(val_cities) > 0:
             val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
             for city in sorted(val_cities):
                 load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
+            if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
+                import random as _rnd
+                indices = list(range(len(val_data['path'])))
+                _rnd.shuffle(indices)
+                keep = set(indices[:args['limit_val_graphs']])
+                for k in ['path','policy_region','scenario','city']:
+                    val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
         else:
             val_data = None
 
@@ -165,6 +186,13 @@ def main():
             test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
             for city in sorted(test_cities):
                 load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
+            if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
+                import random as _rnd
+                indices = list(range(len(test_data['path'])))
+                _rnd.shuffle(indices)
+                keep = set(indices[:args['limit_test_graphs']])
+                for k in ['path','policy_region','scenario','city']:
+                    test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
         else:
             test_data = None
 
