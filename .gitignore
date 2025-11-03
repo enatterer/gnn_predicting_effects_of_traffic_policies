@@ -5,3 +5,4 @@ logs/
 **/__pycache__/
 scripts/evaluation/results/
 .vscode/
+inductive_gnn_data_results/*
