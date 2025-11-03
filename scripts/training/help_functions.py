@@ -753,7 +753,7 @@ def setup_wandb(args):
                config={k: v for k, v in args.items() if k not in ['project_name', 'unique_model_description', 'model_kwargs']})
     return wandb.config
 
-def setup_wandb_metrics(predict_mode_stats=False):
+def setup_wandb_metrics():
 
     wandb.define_metric("epoch") # Custom X-axis
     wandb.define_metric("batch_step") # Custom X-axis
@@ -765,14 +765,6 @@ def setup_wandb_metrics(predict_mode_stats=False):
     wandb.define_metric("r^2", step_metric="epoch")
     wandb.define_metric("spearman", step_metric="epoch")
     wandb.define_metric("pearson", step_metric="epoch")
-
-    if predict_mode_stats:
-        wandb.define_metric("batch_train_loss-node_predictions", step_metric="batch_step")
-        wandb.define_metric("batch_train_loss-mode_stats", step_metric="batch_step")
-        wandb.define_metric("train_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("train_loss-mode_stats", step_metric="epoch")
-        wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
 
 def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device, use_city_balanced_loss: bool = False):
     """
