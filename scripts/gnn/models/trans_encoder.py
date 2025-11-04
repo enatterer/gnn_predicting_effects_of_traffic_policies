@@ -131,7 +131,7 @@ class TransEncoder(BaseGNN):
                  pos_dim: int = 6,  # ✅ NEW: Configurable position dimensions
                  use_pos_encoding: bool = False,
                  # LapPE
-                 use_lap_pe: bool = True,
+                 use_lap_pe: bool = False, #True
                  lap_pe_dim: int = 8,
                  lap_pe_use_dim: int = 8,  # ✅ NEW: How many LapPE dimensions to actually use
                  # Anchor Distance Encoding
@@ -271,6 +271,10 @@ class TransEncoder(BaseGNN):
             }, allow_val_change=True)
 
         self.define_layers()
+        print("--------------------------------")
+        print("TransEncoder Model Parameters:")
+        print(self)
+        print("--------------------------------")
 
     def define_layers(self):
         # Graph convolution backbone with variable hidden_channels
