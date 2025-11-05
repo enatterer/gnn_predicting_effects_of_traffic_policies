@@ -484,18 +484,15 @@ def process_single_city(city, project_root, result_path, use_destination_activit
                 values = gdf_basecase_links[feat].values
                 print(f"{feat}: mean={values.mean():.4f}, std={values.std():.4f}, min={values.min():.4f}, max={values.max():.4f}")
         print("=" * 30)
-
-    # COMPUTE LAPLACIAN PE ONCE FOR THE CITY (OUTSIDE BATCH LOOP)
-    print(f"\n=== COMPUTING LAPLACIAN PE FOR {city.upper()} ===")
     
     # Get link geometries and edges
     _, _, edges_base, nodes, _ = get_link_geometries(gdf_basecase_links, apply_scaling=True)
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
     
-    # Compute Laplacian PE ONCE for the entire city
+    # COMPUTE LAPLACIAN PE ONCE FOR THE CITY (OUTSIDE BATCH LOOP)
+    print(f"\n=== COMPUTING LAPLACIAN PE FOR {city.upper()} ===")
     lap_pe = None
     if use_laplacian_pe:
-        print(f"DEBUG: Computing Laplacian PE for {city} (ONCE for all batches)...")
         linegraph_transformation = LineGraph()
         base_data = Data(edge_index=edge_index)
         base_data.num_nodes = len(nodes)

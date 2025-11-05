@@ -26,8 +26,7 @@ class BaseGNN(nn.Module, ABC):
                  use_dropout: bool = False,
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
-                 use_target_standardization: bool = False,
-                 use_city_balanced_loss: bool = False): 
+                 use_target_standardization: bool = False):
         """
         Base class for all GNN implementations.
         """
@@ -38,10 +37,7 @@ class BaseGNN(nn.Module, ABC):
         self.use_dropout = use_dropout
         self.dtype = dtype
         self.log_to_wandb = log_to_wandb
-        
-        # Target standardization parameters
         self.use_target_standardization = use_target_standardization
-        self.use_city_balanced_loss = use_city_balanced_loss
 
     @abstractmethod
     def define_layers(self):
