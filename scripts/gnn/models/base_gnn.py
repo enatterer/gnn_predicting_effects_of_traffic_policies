@@ -124,7 +124,6 @@ class BaseGNN(nn.Module, ABC):
         Basic training pipeline for GNN models, can be overridden by child classes.
 
         Parameters:
-        - model (nn.Module): The model to train.
         - config (object, optional): Configuration object containing training parameters.
         - loss_fct (nn.Module, optional): Loss function for training.
         - optimizer (optim.Optimizer, optional): Optimizer for model training.
