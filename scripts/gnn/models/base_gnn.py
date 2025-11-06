@@ -119,8 +119,7 @@ class BaseGNN(nn.Module, ABC):
             valid_dl: DataLoader = None, 
             device: torch.device = None, 
             early_stopping: object = None, 
-            model_save_path: str = None,
-            scalers_validation: dict = None) -> tuple:
+            model_save_path: str = None) -> tuple:
         """
         Basic training pipeline for GNN models, can be overridden by child classes.
 
@@ -134,7 +133,6 @@ class BaseGNN(nn.Module, ABC):
         - device (torch.device, optional): Device to use for training.
         - early_stopping (object, optional): Early stopping mechanism.
         - model_save_path (str, optional): Path to save the best model.
-        - scalers_validation (dict, optional): x and pos scalers used for validation (during training).
 
         Returns:
         - tuple: Validation loss and the best epoch.
@@ -238,8 +236,7 @@ class BaseGNN(nn.Module, ABC):
                 model=self,
                 dataset=valid_dl,
                 loss_func=loss_fct,
-                device=device,
-                scalers=scalers_validation)
+                device=device)
 
             # Epoch level logging
             wandb.log({
