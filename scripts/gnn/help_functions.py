@@ -77,24 +77,35 @@ class GNN_Loss:
             return torch.mean(loss * normalized_weights.unsqueeze(1))
         else:
             return self.loss_fct(y_pred, y_true)
+        
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 
-                 initial_lr: float, 
-                 total_steps: int):
+                 initial_lr: float = 0.0001, 
+                 total_steps: int = 1000,
+                 peak_lr: float = 0.0003,
+                 warmup_fraction: float = 0.15,
+                 min_lr_fraction: float = 0.01,
+                 cosine_decay_rate: float = 0.5):
         """
         Linear warmup and cosine decay scheduler.
 
         Parameters:
-        - initial_lr (float): Initial learning rate.
+        - peak_lr (float): Starting learning rate.
+        - initial_lr (float): Peak learning rate to reach after warmup.
         - total_steps (int): Total number of steps.
+        - warmup_fraction (float): Fraction of total steps for warmup (default: 0.15 = 15%).
+        - min_lr_fraction (float): Fraction of initial_lr to which it converges to.
+        - cosine_decay_rate (float): The rate at which the learning rate decays after warmup.
         """
         self.initial_lr = initial_lr
+        self.peak_lr = peak_lr
         self.total_steps = total_steps
+        self.cosine_decay_rate = cosine_decay_rate
+        self.min_lr_fraction = min_lr_fraction
         
-        self.min_lr = 0.01*initial_lr
-        self.warmup_steps = int(0.05*total_steps)
-        self.decay_steps = total_steps - self.warmup_steps
-        self.cosine_decay_rate = 0.5
+        self.min_lr = self.min_lr_fraction*self.initial_lr # the rate to which it converges to. Min is 1% of initial_lr.
+        self.warmup_steps = max(1, int(warmup_fraction * total_steps))  # Ensure at least 1 step to avoid division by zero
+        self.decay_steps = max(1, total_steps - self.warmup_steps)  # Ensure at least 1 step
 
     def get_lr(self, step: int) -> float:
         """
@@ -107,8 +118,13 @@ class LinearWarmupCosineDecayScheduler:
         - float: Calculated learning rate.
         """
         if step < self.warmup_steps:
-            return self.initial_lr * (step / self.warmup_steps)
+            # Linear interpolation from peak_lr to initial_lr during warmup
+            # At step 0: returns peak_lr
+            # At step warmup_steps-1: returns value slightly less than initial_lr
+            return self.peak_lr + (self.initial_lr - self.peak_lr) * (step / self.warmup_steps)
         else:
+            # Cosine decay phase
+            # At step warmup_steps: progress = 0, cosine_decay = 1.0, returns initial_lr (smooth transition)
             progress = (step - self.warmup_steps) / self.decay_steps
             cosine_decay = self.cosine_decay_rate * (1 + math.cos(math.pi * progress))
             return self.min_lr + (self.initial_lr - self.min_lr) * cosine_decay

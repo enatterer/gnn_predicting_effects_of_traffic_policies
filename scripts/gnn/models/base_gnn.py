@@ -95,7 +95,32 @@ class BaseGNN(nn.Module, ABC):
         
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
-        scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
+        # Debug: Check config values before creating scheduler
+        peak_lr_val = getattr(config, 'peak_lr', None)
+        initial_lr_val = getattr(config, 'initial_lr', None)
+        peak_lr_str = f"{peak_lr_val:.6f}" if peak_lr_val is not None else "NOT SET"
+        initial_lr_str = f"{initial_lr_val:.6f}" if initial_lr_val is not None else "NOT SET"
+        print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
+        
+        scheduler = LinearWarmupCosineDecayScheduler(
+            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            total_steps=total_steps,
+            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            warmup_fraction=config.warmup_fraction,
+            min_lr_fraction=config.min_lr_fraction,
+            cosine_decay_rate=config.cosine_decay_rate
+        )
+        
+        # Debug: Check scheduler values after creation
+        print(f"DEBUG: After scheduler creation - scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.peak_lr={scheduler.peak_lr:.6f}")
+        
+        # Initialize optimizer with peak_lr instead of config.initial_lr
+        if optimizer is not None:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = scheduler.peak_lr
+            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+            print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
+        
         best_val_loss = float('inf')
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -114,6 +139,11 @@ class BaseGNN(nn.Module, ABC):
             
             self.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
+            if optimizer is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
             if 'scaler_state_dict' in checkpoint:
                 scaler.load_state_dict(checkpoint['scaler_state_dict'])
             
@@ -143,6 +173,10 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss = 0
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
+            
+            # Capture learning rate at the START of the epoch (first batch)
+            epoch_start_step = epoch * len(train_dl)
+            epoch_start_lr = scheduler.get_lr(epoch_start_step)
 
             print(f"Starting training loop with {len(train_dl)} batches")
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
@@ -232,7 +266,7 @@ class BaseGNN(nn.Module, ABC):
                 log_dict = {
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
+                    "lr": epoch_start_lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
@@ -257,7 +291,7 @@ class BaseGNN(nn.Module, ABC):
                 log_dict = {
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
+                    "lr": epoch_start_lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
@@ -266,7 +300,7 @@ class BaseGNN(nn.Module, ABC):
                 
                 wandb.log(log_dict)
 
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {epoch_start_lr} (start), lr_end: {lr:.6f}, r^2: {r_squared}")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss   
@@ -354,7 +388,31 @@ class BaseGNN(nn.Module, ABC):
         
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
-        scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
+        # Debug: Check config values before creating scheduler
+        peak_lr_val = getattr(config, 'peak_lr', None)
+        initial_lr_val = getattr(config, 'initial_lr', None)
+        peak_lr_str = f"{peak_lr_val:.6f}" if peak_lr_val is not None else "NOT SET"
+        initial_lr_str = f"{initial_lr_val:.6f}" if initial_lr_val is not None else "NOT SET"
+        print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
+        
+        scheduler = LinearWarmupCosineDecayScheduler(
+            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            total_steps=total_steps,
+            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            warmup_fraction=config.warmup_fraction,
+            min_lr_fraction=config.min_lr_fraction,
+            cosine_decay_rate=config.cosine_decay_rate
+        )
+        
+        # Debug: Check scheduler values after creation
+        print(f"DEBUG: After scheduler creation - scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.peak_lr={scheduler.peak_lr:.6f}")
+        
+        if optimizer is not None:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+            print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
+        
         best_val_loss = float('inf')
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -374,6 +432,11 @@ class BaseGNN(nn.Module, ABC):
             
             self.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
+            if optimizer is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
             if 'scaler_state_dict' in checkpoint:
                 scaler.load_state_dict(checkpoint['scaler_state_dict'])
             
@@ -404,12 +467,20 @@ class BaseGNN(nn.Module, ABC):
             epoch_train_loss_node_predictions = 0
             epoch_train_loss_mode_stats = 0
             epoch_train_domain_loss = 0
+            
+            # Capture learning rate at the START of the epoch (first batch)
+            epoch_start_step = epoch * len(train_dl)
+            epoch_start_lr = scheduler.get_lr(epoch_start_step)
 
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
+                if step == 0:
+                    print(f"DEBUG: Step 0 - scheduler.get_lr(0)={lr:.6f}, optimizer.param_groups[0]['lr'] before update={optimizer.param_groups[0]['lr']:.6f}")
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
+                if step == 0:
+                    print(f"DEBUG: Step 0 - optimizer.param_groups[0]['lr'] after update={optimizer.param_groups[0]['lr']:.6f}")
                     
                 data = data.to(device)
                 targets_node_predictions = select_target_tensor(data, config.target_type)
@@ -484,7 +555,7 @@ class BaseGNN(nn.Module, ABC):
                 wandb.log({
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
+                    "lr": epoch_start_lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
@@ -501,11 +572,12 @@ class BaseGNN(nn.Module, ABC):
                     device=device,
                     scalers=scalers_validation
                 )
-                # Epoch level logging
+                # Epoch level logging - use epoch_start_lr (LR at start of epoch) for consistent plotting
+                # This shows the LR value at the beginning of each epoch, making the graph start at peak_lr
                 wandb.log({
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
+                    "lr": epoch_start_lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
@@ -524,18 +596,19 @@ class BaseGNN(nn.Module, ABC):
                     device=device,
                     scalers=scalers_validation
                 )
-                # Epoch level logging
+                # Epoch level logging - use epoch_start_lr (LR at start of epoch) for consistent plotting
+                # This shows the LR value at the beginning of each epoch, making the graph start at peak_lr
                 wandb.log({
                     "val_loss": val_loss,
                     "train_loss": epoch_train_loss / len(train_dl),
-                    "lr": lr,
+                    "lr": epoch_start_lr,
                     "r^2": r_squared,
                     "spearman": spearman_corr,
                     "pearson": pearson_corr,
                     "epoch": epoch
                 })
 
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {epoch_start_lr} (start), lr_end: {lr:.6f}, r^2: {r_squared}")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss   
