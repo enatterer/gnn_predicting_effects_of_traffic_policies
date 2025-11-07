@@ -2,26 +2,18 @@ import os
 import sys
 import copy
 import random
+import json
 import joblib
 import subprocess
 from functools import partial
-from collections import Counter
 
+import wandb
 import numpy as np
 from tqdm import tqdm
-import wandb
 from sklearn.preprocessing import StandardScaler
-import torch
-import psutil
-import gc
-import json
-import math
 
-from torch.utils.data import IterableDataset, Dataset, DataLoader, WeightedRandomSampler
-from torch_geometric.data import Batch, Data
-from torch_geometric.loader import NeighborLoader
-from torch_geometric.utils import subgraph
-from gnn.gnn_io import rotate_pos, apply_gaussian_noise_to_features, apply_simple_node_masking
+import torch
+from torch.utils.data import DataLoader, WeightedRandomSampler
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -29,25 +21,20 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from gnn.gnn_io import *
-# from gnn.models.point_net_transf_gat import PointNetTransfGAT
-# from gnn.models.gcn import GCN, GCN2
-# from gnn.models.gat import GAT
 from gnn.models.gatv2 import GATv2
-# from gnn.models.gatv3 import GATv3
 from gnn.models.trans_conv import TransConv
-# from gnn.models.pnc import PNC
-# from gnn.models.fc_nn import FC_NN
-# from gnn.models.eign import EIGNLaplacianConv
 from gnn.models.graphSAGE import GraphSAGE
-# from gnn.models.xgboost import XGBoostModel
 from gnn.models.trans_encoder import TransEncoder
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
-#####control center parameters#####
+########## Control Center #########
 use_allowed_modes = False
 use_destination_activity = False
 use_highway = False
 ###################################
+
+
+################################################# ↓ GPU + Randomness ↓ #################################################
 
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
@@ -73,14 +60,6 @@ def select_best_gpu(gpus):
 def set_cuda_visible_device(gpu_index):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_index)
     print(f"Using GPU {gpu_index} with CUDA_VISIBLE_DEVICES={os.environ['CUDA_VISIBLE_DEVICES']}")
-
-def str_to_bool(value):
-    if isinstance(value, str):
-        if value.lower() in ['true', '1', 'yes', 'y']:
-            return True
-        elif value.lower() in ['false', '0', 'no', 'n']:
-            return False
-    raise ValueError(f"Cannot convert {value} to a boolean.")
     
 def set_random_seeds(seed_value=42):
     # Set environment variable for reproducibility
@@ -111,7 +90,18 @@ def seed_worker(worker_id):
     worker_seed = torch.initial_seed() % 2**32
     np.random.seed(worker_seed)
     random.seed(worker_seed)
-        
+
+
+################################################# ↓ Misc Setup Helpers ↓ #################################################
+
+def str_to_bool(value):
+    if isinstance(value, str):
+        if value.lower() in ['true', '1', 'yes', 'y']:
+            return True
+        elif value.lower() in ['false', '0', 'no', 'n']:
+            return False
+    raise ValueError(f"Cannot convert {value} to a boolean.")
+
 def get_paths(base_dir: str, unique_model_description: str, model_save_path: str = 'trained_model/model.pth'):
     data_path = os.path.join(base_dir, unique_model_description)
     os.makedirs(data_path, exist_ok=True)
@@ -121,631 +111,15 @@ def get_paths(base_dir: str, unique_model_description: str, model_save_path: str
     os.makedirs(path_to_save_dataloader, exist_ok=True)
     return model_save_to, path_to_save_dataloader
 
-def get_memory_info():
-    """Get memory information using psutil."""
-    import psutil
-    total_memory = psutil.virtual_memory().total / (1024 ** 3)  # Convert to GB
-    available_memory = psutil.virtual_memory().available / (1024 ** 3)  # Convert to GB
-    used_memory = total_memory - available_memory
-    return total_memory, available_memory, used_memory
+# TODO: Validate Pass by Reference 
+def load_metadata_from_disk(data, metadata_path):
 
-# test_data implies use of complete inductive testing
-def prepare_data_with_graph_features(train_data, val_data, test_data, variant,
-                                     batch_size, path_to_save_dataloader,
-                                     use_all_features, use_bootstrapping, use_weighted_sampling,
-                                     use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
-                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy, is_eign,
-                                     use_data_augmentation, use_message_dropout_probability,
-                                     use_feature_noise_probability, use_node_masking_probability=0.0): 
+    city_data = json.load(open(metadata_path, 'r'))
     
-    print(f"Preparing data with {len(train_data['path']) + (len(test_data['path']) if test_data is not None else 0)} items")
-    
-    print("Splitting into subsets...")
-
-    if use_bootstrapping:
-        train_set, valid_set, test_set = split_into_subsets_with_bootstrapping(dataset=train_data, test_ratio=0.1, bootstrap_seed=4)
-    else:
-        dataset, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
-                                                                                    train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
-    combined_indices = train_set.indices + valid_set.indices
-    combined_train_val_set = torch.utils.data.Subset(train_set.dataset, combined_indices)
-    print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
-    print(f"Total combined graphs (train+val): {len(combined_train_val_set)}")
-
-    if use_all_features:
-        node_features = []
-        for feat in EdgeFeatures:
-            name = feat.name
-            if not use_allowed_modes and name.startswith("ALLOWED_MODE"):
-                continue
-            if not use_destination_activity and name in {
-                "HOME", "WORK", "EDUCATION", "LEISURE", "SHOP", "OTHER", "OUTSIDE" ,'IS_IN_EQASIM_TRIPS'
-            }:
-                continue
-            if not use_highway and name.startswith("HIGHWAY"):
-                continue
-            node_features.append(name)
-    else:
-        node_features = [
-            "VOL_BASE_CASE",
-            "CAPACITY_BASE_CASE",
-            "CAPACITY_REDUCTION",
-            "FREESPEED",
-            "LENGTH",
-        ]
-    print(node_features)
-
-    # CREATE FEATURE MAPPING ONCE - BEFORE NORMALIZATION
-    filtered_feature_mapping = {}
-    current_idx = 0
-    
-    for feature_name in node_features:
-        if feature_name == "HIGHWAY":
-            # Highway gets one-hot encoded into 6 classes
-            filtered_feature_mapping[EdgeFeatures.HIGHWAY.value] = list(range(current_idx, current_idx + 6))
-            current_idx += 6
-        else:
-            filtered_feature_mapping[EdgeFeatures[feature_name].value] = current_idx
-            current_idx += 1
-    
-    print(f"Global feature mapping: {filtered_feature_mapping}")
-
-    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-
-    if variant == 'GNN_Transductive':
-        if use_nested_neighbor_loader:
-            # For nested neighbor loader: disable augmentation in base loader
-            collate_without_scaling_fn = partial(
-                collate_without_scaling, 
-                node_feature_filter=node_feature_filter,
-                augment_pos_rotation=False,  # DISABLE rotation for base loader
-                augment_feature_noise_prob=False,  # DISABLE noise for base loader
-                augment_node_masking_prob=0.0,  # DISABLE node masking for base loader for nested loader
-                is_training=False,  # NOT training mode for base loader
-                filtered_feature_mapping=filtered_feature_mapping
-            )
-            print('Base loader augmentation DISABLED (will be applied in nested loader)')
-        else:
-            # For standard loader: enable augmentation in base loader
-            collate_without_scaling_fn = partial(
-                collate_without_scaling, 
-                node_feature_filter=node_feature_filter,
-                augment_pos_rotation=use_data_augmentation,  # Enable rotation augmentation
-                augment_feature_noise_prob=use_feature_noise_probability,  # Enable Gaussian noise augmentation  
-                augment_node_masking_prob=use_node_masking_probability,  # Enable node masking
-                is_training=True,  # Training mode
-                filtered_feature_mapping=filtered_feature_mapping
-            )
-            print('Base loader augmentation ENABLED')
-        
-        # For validation/test, always disable augmentation
-        collate_without_scaling_fn_no_aug = partial(
-            collate_without_scaling,
-            node_feature_filter=node_feature_filter,
-            augment_pos_rotation=False,  # Disable rotation for validation/test
-            augment_feature_noise_prob=False,  # Disable noise for validation/test
-            augment_node_masking_prob=0.0,  # Disable node masking for validation/test
-            is_training=False,  # Not training mode
-            filtered_feature_mapping=filtered_feature_mapping
-        )
-
-        print('Data Augmentation:', use_data_augmentation, 'Feature Noise Probability:', use_feature_noise_probability, 'Node Masking Probability:', use_node_masking_probability, 'Message Dropout Probability:', use_message_dropout_probability)  # ✅ UPDATED
-        print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
-
-        print("Creating base train loader...")
-        base_train_loader = DataLoader(
-            dataset=train_set,
-            batch_size=batch_size,
-            shuffle=True if not use_weighted_sampling else None,
-            sampler=WeightedRandomSampler(get_sampling_weights(train_set), len(train_set)) if use_weighted_sampling else None,
-            num_workers=2,
-            prefetch_factor=2,
-            pin_memory=True,
-            collate_fn=collate_without_scaling_fn,  # Uses conditional augmentation
-            worker_init_fn=seed_worker,
-            drop_last=False
-        )
-
-        print("Creating validation loader...")
-        val_loader = DataLoader(
-            dataset=valid_set,
-            batch_size=batch_size,
-            shuffle=True if not use_weighted_sampling else None,
-            sampler=WeightedRandomSampler(get_sampling_weights(valid_set), len(valid_set)) if use_weighted_sampling else None,
-            num_workers=2,
-            pin_memory=True,
-            collate_fn=collate_without_scaling_fn_no_aug,  # Always without augmentation
-            worker_init_fn=seed_worker,
-            drop_last=False
-        )
-
-        print("Creating test loader...")
-        test_loader = DataLoader(
-            dataset=test_set,
-            batch_size=batch_size,
-            shuffle=True if not use_weighted_sampling else None,
-            sampler=WeightedRandomSampler(get_sampling_weights(test_set), len(test_set)) if use_weighted_sampling else None,
-            num_workers=2,
-            pin_memory=True,
-            collate_fn=collate_without_scaling_fn_no_aug,  # Always without augmentation
-            worker_init_fn=seed_worker,
-            drop_last=False
-        )
-
-        print("Loaders created")
-        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-        print("Test Dataloader saved since Transductive Variant. No scalers needed.")
-        
-    else:
-        collate_fn_train = partial(collate_fn, 
-                                  augment_pos_rotation=use_data_augmentation, 
-                                  augment_feature_noise_prob=use_feature_noise_probability,
-                                  augment_node_masking_prob=use_node_masking_probability, 
-                                  filtered_feature_mapping=filtered_feature_mapping, 
-                                  is_training=True)
-        collate_fn_eval = partial(collate_fn, 
-                             augment_pos_rotation=False, 
-                             augment_feature_noise_prob=False,
-                             augment_node_masking_prob=0.0,  # (disabled for evaluation)
-                             filtered_feature_mapping=filtered_feature_mapping, 
-                             is_training=False)
-    
-        print('Data Augmentation:', use_data_augmentation, 
-              'Feature Noise Probability:', use_feature_noise_probability,
-              'Node Masking Probability:', use_node_masking_probability,
-              'Message Dropout Probability:', use_message_dropout_probability)  # ✅ UPDATED
-    
-        print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_train_val_set, node_features=node_features, is_eign=is_eign)
-        print("Train set normalized")      
-        
-        # ✅ FIX: Use training scaler for validation and test sets
-        print("Normalizing validation set with TRAINING scaler...")
-        valid_set_normalized = normalize_dataset_with_scaler(dataset_input=valid_set, node_features=node_features, scalers=scalers_train, is_eign=is_eign)
-        print("Validation set normalized")
-        
-        print("Normalizing test set with TRAINING scaler...")
-        test_set_normalized = normalize_dataset_with_scaler(dataset_input=test_set, node_features=node_features, scalers=scalers_train, is_eign=is_eign)
-        print("Test set normalized")
-        
-        print("Creating train loader...")
-        if use_nested_neighbor_loader:
-            collate_fn_no_aug = partial(collate_fn, 
-                augment_pos_rotation=False,
-                augment_feature_noise_prob=False,
-                augment_node_masking_prob=0.0,  # (disabled for base loader for nested loader)
-                filtered_feature_mapping=filtered_feature_mapping,
-                is_training=False)
-            base_train_loader = DataLoader(
-                dataset=train_set_normalized,
-                batch_size=batch_size,
-                shuffle=True if not use_weighted_sampling else None,  # ✅ ADD: Conditional shuffle
-                sampler=WeightedRandomSampler(get_sampling_weights(train_set_normalized), len(train_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
-                num_workers=4,
-                prefetch_factor=2,
-                pin_memory=True, 
-                collate_fn=collate_fn_no_aug,  # ← No augmentation here
-                worker_init_fn=seed_worker
-                )
-        else:
-            base_train_loader = DataLoader(
-                dataset=train_set_normalized, 
-                batch_size=batch_size, 
-                shuffle=True if not use_weighted_sampling else None,  # ✅ ADD: Conditional shuffle
-                sampler=WeightedRandomSampler(get_sampling_weights(train_set_normalized), len(train_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
-                num_workers=4, 
-                prefetch_factor=2, 
-                pin_memory=True, 
-                collate_fn=collate_fn_train, 
-                worker_init_fn=seed_worker)
-        print("Train loader created")
-        
-        print("Creating validation loader...")
-        val_loader = DataLoader(
-            dataset=valid_set_normalized, 
-            batch_size=batch_size, 
-            shuffle=True if not use_weighted_sampling else False,  # ✅ ADD: Conditional shuffle for validation
-            sampler=WeightedRandomSampler(get_sampling_weights(valid_set_normalized), len(valid_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
-            num_workers=4, 
-            pin_memory=True, 
-            collate_fn=collate_fn_eval, 
-            worker_init_fn=seed_worker)
-        print("Validation loader created")
-        
-        print("Creating test loader...")
-        test_loader = DataLoader(
-            dataset=test_set_normalized, 
-            batch_size=batch_size, 
-            shuffle=True if not use_weighted_sampling else False,  # ✅ ADD: Conditional shuffle for test
-            sampler=WeightedRandomSampler(get_sampling_weights(test_set_normalized), len(test_set_normalized)) if use_weighted_sampling else None,  # ✅ ADD: Weighted sampling support
-            num_workers=4, 
-            collate_fn=collate_fn_eval, 
-            worker_init_fn=seed_worker)
-        print("Test loader created")
-        
-        # ✅ ONLY SAVE TRAINING SCALERS (validation/test use same scalers)
-        joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-        if is_eign and 'x_signed_scaler' in scalers_train:
-            joblib.dump(scalers_train['x_signed_scaler'], os.path.join(path_to_save_dataloader, 'train_x_signed_scaler.pkl'))
-        
-        # ✅ REMOVE: No longer need separate validation/test scalers
-        # joblib.dump(scalers_validation['x_scaler'], ...)
-        # joblib.dump(scalers_test['x_scaler'], ...)
-        
-        # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-        print("Test dataloader NOT saved since Inductive Variant. Scalers are saved.")
-    
-    if use_nested_neighbor_loader:
-        train_loader = nested_dataloader(
-            base_train_loader, 
-            neighbor_sizes=neighbor_sizes, 
-            subgraphs_per_graph=subgraphs_per_graph, 
-            seed_size=seed_size,  
-            final_batch_size=batch_size*subgraphs_per_graph, 
-            sampling_strategy=sampling_strategy, 
-            min_subgraph_nodes=min_subgraph_nodes,
-            max_subgraph_nodes=max_subgraph_nodes,
-            node_feature_filter=node_feature_filter,
-            filtered_feature_mapping=filtered_feature_mapping,
-            augment_pos_rotation=use_data_augmentation,
-            augment_feature_noise_prob=use_feature_noise_probability,
-            augment_node_masking_prob=use_node_masking_probability, 
-            is_training=True
-        )
-    else:
-        train_loader = base_train_loader
-    
-    # COMMENTED OUT: No need to save scalers for features
-    # joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-    # jobjoblib.dump(scalers_train['modestats_scaler'], os.path.join(path_to_save_dataloader, 'train_mode_stats_scaler.pkl'))
-    # joblib.dump(scalers_test['x_scaler'], os.path.join(path_to_save_dataloader, 'test_x_scaler.pkl'))
-    # joblib.dump(scalers_test['modestats_scaler'], os.path.join(path_to_save_dataloader, 'test_mode_stats_scaler.pkl'))  
-    # Test the nested loader
-    if use_nested_neighbor_loader:
-        print("\n=== Testing Nested Loader ===")
-        for batch in train_loader:
-            print(f"Total subgraphs in batch: {batch.num_graphs}")
-            
-            # Check individual subgraphs
-            individual_graphs = batch.to_data_list()
-            if len(individual_graphs) > 0:
-                graph = individual_graphs[0]
-                print(f"First subgraph - Nodes: {graph.num_nodes}, Edges: {graph.num_edges}")
-                if hasattr(graph, 'sampling_strategy'):
-                    print(f"Sampling strategy: {graph.sampling_strategy}")
-            break
-    
-    #save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-    #save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-    print("Test dataloader saved.")
-    
-    # MODIFIED: Return None for scalers since we don't need them
-    if variant=='GNN_Transductive':
-        return train_loader, val_loader, test_loader
-    else:
-        # ✅ ONLY RETURN TRAINING SCALERS (no validation scalers needed)
-        return train_loader, val_loader, scalers_train, scalers_train  # Use training scalers for both
-
-def nested_dataloader(base_train_loader: DataLoader,
-                     neighbor_sizes: list[int] = [15, 10, 5],
-                     subgraphs_per_graph: int = 3,
-                     seed_size: int = 1,
-                     final_batch_size: int = 24,
-                     sampling_strategy: str = 'neighbor_sampling',
-                     min_subgraph_nodes: int = 10,
-                     max_subgraph_nodes: int = 100,
-                     node_feature_filter: list = None,
-                     filtered_feature_mapping: dict = None,
-                     augment_pos_rotation: bool = False,
-                     augment_feature_noise_prob: bool = False,
-                     augment_node_masking_prob: float = 0.0,  
-                     is_training: bool = True) -> DataLoader:
-    """
-    Create enhanced nested dataloader with on-the-fly subgraph generation and augmentation.
-    """
-    
-    nested_dataset = NestedNeighborDataset(
-        graph_loader=base_train_loader,
-        neighbor_sizes=neighbor_sizes,
-        subgraphs_per_graph=subgraphs_per_graph,
-        seed_size=seed_size,    
-        sampling_strategy=sampling_strategy,
-        min_subgraph_nodes=min_subgraph_nodes,
-        max_subgraph_nodes=max_subgraph_nodes,
-        shuffle_mapping=False, ## Set to True for two layer randomization in combination with outer dataloader shuffle
-        node_feature_filter=node_feature_filter,
-        filtered_feature_mapping=filtered_feature_mapping,
-        augment_pos_rotation=augment_pos_rotation,
-        augment_feature_noise_prob=augment_feature_noise_prob,
-        augment_node_masking_prob=augment_node_masking_prob,
-        is_training=is_training
-    )
-    
-    nested_loader = DataLoader(
-        nested_dataset,
-        batch_size=final_batch_size,
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True,
-        collate_fn=Batch.from_data_list,  # Simple, no augmentation here
-        drop_last=False,
-    )
-    
-    print(f"Created nested dataloader with {len(nested_dataset)} subgraphs")
-    print(f"Final batches will contain {final_batch_size} subgraphs each")
-    
-    return nested_loader
-def fit_global_scaler(dataset, batch_size=128):
-    
-    scaler = StandardScaler()
-
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       EdgeFeatures.CAPACITY_REDUCTION,
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
-    
-    # First pass: Fit the scaler
-    for i in tqdm(range(0, len(dataset), batch_size), desc="Fitting global scaler ..."):
-        batch = dataset[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        scaler.partial_fit(batch_x)
-    
-    return {"x_scaler":scaler}, continuous_feat
-
-def get_sampling_weights(dataset):
-    
-    # Add any other BANGER logic here
-    # labels (city + policy_region) can be accessed as dataset.labels
-
-    # Uniform weights for all samples
-    return [1.0 / len(dataset)] * len(dataset)  
-
-        
-def normalize_dataset(train_data_list, combined_data_list, node_features, is_eign=False):
-    train_data = [copy.deepcopy(train_data_list.dataset[idx]) for idx in train_data_list.indices]
-    combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
-
-    print("Fitting and normalizing x features...")
-    normalized_data_list, x_scaler = normalize_x_features_batched(train_data, combined_data, node_features) 
-    print("x features normalized")
-    
-    if is_eign:
-        print("Fitting and normalizing x_signed features...")
-        normalized_data_list, x_signed_scaler = normalize_x_signed_features_batched(
-            normalized_data_list
-        )
-        print("x_signed features normalized")
-        
-    scalers_dict = {
-        "x_scaler": x_scaler,
-        "x_signed_scaler": x_signed_scaler,
-    } if is_eign else {
-        "x_scaler": x_scaler,
-    }
-    return normalized_data_list, scalers_dict 
-
-def normalize_x_features_batched(train_data_list, combined_data_list, node_features, batch_size=100):
-    """
-    Normalize the continuous node features (0 mean and unit variance).
-    Categorical features (Allowed Modes) are left as booleans (0 or 1).
-    'HIGHWAY' feature is one-hot encoded.
-    Fit scaler on combined train+val set, but apply normalization only to train set.
-    Returns normalized train set and fitted scaler.
-
-    Finally, features are filtered to only include the ones specified in node_features. 
-    """
-    scaler = StandardScaler()
-
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       #EdgeFeatures.CAPACITY_REDUCTION, since this is binary, no normalization
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
-    
-    # First pass: Fit the scaler incrementally, graph by graph
-    for i in tqdm(range(0, len(combined_data_list), batch_size), desc="Fitting scaler"):
-        batch = combined_data_list[i:i+batch_size]
-        for data in batch:
-            # Fit scaler on each graph's node features separately
-            scaler.partial_fit(data.x[:, continuous_feat].numpy())
-
-    # Second pass: Transform the data in batches
-    for i in tqdm(range(0, len(train_data_list), batch_size), desc="Normalizing x features"):
-        batch = train_data_list[i:i+batch_size]
-        
-        # Process each graph in the batch individually (no vstack!)
-        for data in batch:
-            data_x = data.x[:, continuous_feat].numpy()
-            data_x_normalized = scaler.transform(data_x)
-            data.x[:, continuous_feat] = torch.tensor(data_x_normalized, dtype=data.x.dtype)
-
-    # Filter features
-    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-    for data in train_data_list:
-        data.x = data.x[:, node_feature_filter]
-
-    # One-hot encode highway
-    if "HIGHWAY" in node_features:
-        one_hot_highway(train_data_list, idx=node_features.index("HIGHWAY"))
-
-    return train_data_list, scaler
-
-def normalize_dataset_with_scaler(dataset_input, node_features, scalers, is_eign=False):
-    """
-    Normalize dataset using pre-fitted scalers (for validation/test sets).
-    """
-    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
-
-    print("Normalizing x features with existing scaler...")
-    normalized_data_list = normalize_x_features_with_scaler(data_list, node_features, scalers['x_scaler'])
-    print("x features normalized")
-    
-    if is_eign and 'x_signed_scaler' in scalers:
-        print("Normalizing x_signed features with existing scaler...")
-        normalized_data_list = normalize_x_signed_features_with_scaler(normalized_data_list, scalers['x_signed_scaler'])
-        print("x_signed features normalized")
-    
-    return normalized_data_list
-
-def normalize_x_features_with_scaler(data_list, node_features, x_scaler, batch_size=100):
-    """
-    Normalize the continuous node features with a given scaler.
-    Categorical features (Allowed Modes) are left as booleans (0 or 1).
-    'HIGHWAY' feature is one-hot encoded.
-
-    Finally, features are filtered to only include the ones specified in node_features. 
-    """
-
-    # Continuous features to normalize
-    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
-                       EdgeFeatures.CAPACITY_BASE_CASE,
-                       #EdgeFeatures.CAPACITY_REDUCTION,
-                       EdgeFeatures.FREESPEED,
-                       EdgeFeatures.LENGTH]
-    
-    # ✅ FIX: Handle variable node counts correctly
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
-        batch = data_list[i:i+batch_size]
-        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
-        batch_x_normalized = x_scaler.transform(batch_x)
-        
-        # ✅ CORRECT: Use proper indexing for variable node counts
-        start = 0
-        for data in batch:
-            num_nodes = data.x.shape[0]
-            data.x[:,continuous_feat] = torch.tensor(
-                batch_x_normalized[start:start+num_nodes], 
-                dtype=data.x.dtype
-            )
-            start += num_nodes
-
-    # Filter features
-    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
-    for data in data_list:
-        data.x = data.x[:, node_feature_filter]
-
-    # One-hot encode highway
-    if "HIGHWAY" in node_features:
-        one_hot_highway(data_list, idx=node_features.index("HIGHWAY"))
-    
-    return data_list
-
-def normalize_x_signed_features_batched(data_list, batch_size=1000):
-    """
-    Normalize the x_signed features (0 mean and unit variance).
-    x_signed typically has shape (num_nodes, 1) for EIGN models.
-    """
-    scaler = StandardScaler()
-
-    # Get number of nodes in the graph
-    num_nodes = (
-        data_list[0].x_signed.shape[0]
-        if hasattr(data_list[0], "x_signed") and data_list[0].x_signed is not None
-        else 0
-    )
-
-    # Skip if no x_signed features
-    if num_nodes == 0:
-        return data_list, None
-
-    # First pass: Fit the scaler
-    for i in tqdm(range(0, len(data_list), batch_size), desc="Fitting x_signed scaler"):
-        batch = data_list[i : i + batch_size]
-        batch_x_signed = np.vstack(
-            [
-                data.x_signed.numpy().reshape(-1, 1)
-                for data in batch
-                if hasattr(data, "x_signed") and data.x_signed is not None
-            ]
-        )
-        if batch_x_signed.size > 0:
-            scaler.partial_fit(batch_x_signed)
-
-    # Second pass: Transform the data
-    for i in tqdm(
-        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
-    ):
-        batch = data_list[i : i + batch_size]
-        for data in batch:
-            if hasattr(data, "x_signed") and data.x_signed is not None:
-                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
-                x_signed_normalized = scaler.transform(x_signed_reshaped)
-                data.x_signed = torch.tensor(
-                    x_signed_normalized.reshape(data.x_signed.shape),
-                    dtype=data.x_signed.dtype,
-                )
-
-    return data_list, scaler
-
-def normalize_x_signed_features_with_scaler(
-    data_list, x_signed_scaler, batch_size=1000
-):
-    """
-    Normalize the x_signed features with a given scaler.
-    x_signed typically has shape (num_nodes, 1) for EIGN models.
-    """
-    # Skip if no scaler provided or no x_signed features
-    if x_signed_scaler is None:
-        return data_list
-
-    # Check if any data has x_signed features
-    has_x_signed = any(
-        hasattr(data, "x_signed") and data.x_signed is not None for data in data_list
-    )
-
-    if not has_x_signed:
-        return data_list
-
-    # Transform the data using the provided scaler
-    for i in tqdm(
-        range(0, len(data_list), batch_size), desc="Normalizing x_signed features"
-    ):
-        batch = data_list[i : i + batch_size]
-        for data in batch:
-            if hasattr(data, "x_signed") and data.x_signed is not None:
-                x_signed_reshaped = data.x_signed.numpy().reshape(-1, 1)
-                x_signed_normalized = x_signed_scaler.transform(x_signed_reshaped)
-                data.x_signed = torch.tensor(
-                    x_signed_normalized.reshape(data.x_signed.shape),
-                    dtype=data.x_signed.dtype,
-                )
-    return data_list
-
-def one_hot_highway(datalist, idx):
-
-    """
-    One-hot encodes the 'HIGHWAY' feature and removes the original one.
-    Cluster into 6 major classes to reduce dimensionality. (defined with n_types and mapping, originaly 10 classes)
-    """
-    
-    n_types = 6
-    mapping = {
-        -1: 4, # pt
-        0: 5, # other
-        1: 0, # primary
-        2: 1, # secondary
-        3: 2, # tertiary
-        4: 3, # residential
-        5: 5,
-        6: 5,
-        7: 5,
-        8: 5,
-        9: 5
-    }
-
-    for data in datalist:
-        
-        highway = data.x[:, idx].numpy()
-        mapped_highway = np.vectorize(mapping.get)(highway)
-        one_hot = np.eye(n_types)[mapped_highway]
-
-        data.x = torch.cat((data.x[:, :idx], torch.tensor(one_hot, dtype=data.x.dtype), data.x[:, idx+1:]), dim=1)
-
+    data['path'].extend(city_data['path'])
+    data['policy_region'].extend(city_data['policy_region'])
+    data['scenario'].extend(city_data['scenario'])
+    data['city'].extend(city_data['city'])
 
 def setup_wandb(args):
     wandb.login()
@@ -753,7 +127,7 @@ def setup_wandb(args):
                config={k: v for k, v in args.items() if k not in ['project_name', 'unique_model_description', 'model_kwargs']})
     return wandb.config
 
-def setup_wandb_metrics(predict_mode_stats=False):
+def setup_wandb_metrics():
 
     wandb.define_metric("epoch") # Custom X-axis
     wandb.define_metric("batch_step") # Custom X-axis
@@ -766,400 +140,6 @@ def setup_wandb_metrics(predict_mode_stats=False):
     wandb.define_metric("spearman", step_metric="epoch")
     wandb.define_metric("pearson", step_metric="epoch")
 
-    if predict_mode_stats:
-        wandb.define_metric("batch_train_loss-node_predictions", step_metric="batch_step")
-        wandb.define_metric("batch_train_loss-mode_stats", step_metric="batch_step")
-        wandb.define_metric("train_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("train_loss-mode_stats", step_metric="epoch")
-        wandb.define_metric("val_loss-node_predictions", step_metric="epoch")
-        wandb.define_metric("val_loss-mode_stats", step_metric="epoch")
-
-def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device, use_city_balanced_loss: bool = False):
-    """
-    Factory function to create the specified model architecture.
-    
-    Args:
-    - gnn_arch (str): The architecture of the GNN model to create.
-    - config (object): WandB config with run arguments.
-    - device (torch.device): The device to which the model should be moved (CPU or GPU).
-    
-    Returns:
-    - Initialized model on the specified device
-    """
-
-    common_kwargs = {
-        "in_channels": config.in_channels,
-        "out_channels": config.out_channels,
-        "use_dropout": config.use_dropout,
-        "dropout": config.dropout,
-        "predict_mode_stats": config.predict_mode_stats,
-        "dtype": torch.float32,
-        "log_to_wandb": True,
-        "use_target_standardization": getattr(config, 'use_target_standardization', False),
-        "use_city_balanced_loss": use_city_balanced_loss,
-        # ✅ NEW: Add message dropout probability
-        "message_drop_prob": getattr(config, 'use_message_dropout_probability', 0.0)
-    }
-
-    # if gnn_arch == "point_net_transf_gat":
-    #     return PointNetTransfGAT(**common_kwargs, **model_kwargs).to(device)
-    
-    if gnn_arch == "graphSAGE":
-        model = GraphSAGE(**common_kwargs, **model_kwargs).to(device)
-        return model
-    
-    # elif gnn_arch == "gcn":
-    #     return GCN(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "gcn2":
-    #     return GCN2(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "gat":
-    #     return GAT(**common_kwargs, **model_kwargs).to(device)
-    
-    elif gnn_arch == "gatv2":
-        return GATv2(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "gatv3":
-    #     return GATv3(**common_kwargs, **model_kwargs).to(device)
-    
-    elif gnn_arch == "trans_conv":
-        return TransConv(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "pnc":
-    #     return PNC(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "fc_nn":
-    #     return FC_NN(**common_kwargs, **model_kwargs).to(device)
-
-    # elif gnn_arch == "eign":
-    #     return EIGNLaplacianConv(**common_kwargs, **model_kwargs).to(device)
-    
-    # elif gnn_arch == "xgboost":
-    #     return XGBoostModel(**common_kwargs, **model_kwargs)
-        
-    elif gnn_arch == "trans_encoder":
-        return TransEncoder(**common_kwargs, **model_kwargs).to(device)
-        
-    else:
-        raise ValueError(f"Unknown architecture: {gnn_arch}")
-
-
-class NestedNeighborDataset(Dataset):
-    '''
-    On-the-fly subgraph generation with Dataset interface.
-    Generates fresh subgraphs every epoch using neighbor sampling,
-    providing better variety and following modern GNN practices.
-    '''
-    def __init__(self,
-                 graph_loader: DataLoader,
-                 neighbor_sizes: list,
-                 subgraphs_per_graph: int,
-                 seed_size: int,  
-                 sampling_strategy: str,
-                 min_subgraph_nodes: int,
-                 max_subgraph_nodes: int,
-                 shuffle_mapping: bool = False,
-                 node_feature_filter: list = None,
-                 filtered_feature_mapping: dict = None,
-                 augment_pos_rotation: bool = False,
-                 augment_feature_noise_prob: bool = False,
-                 augment_node_masking_prob: float = 0.0,
-                 is_training: bool = True):
-        
-        # Store existing parameters
-        self.neighbor_sizes = neighbor_sizes
-        self.subgraphs_per_graph = subgraphs_per_graph
-        self.seed_size = seed_size  
-        self.sampling_strategy = sampling_strategy
-        self.min_subgraph_nodes = min_subgraph_nodes
-        self.max_subgraph_nodes = max_subgraph_nodes
-        self.shuffle_mapping = shuffle_mapping
-        self.node_feature_filter = node_feature_filter
-        self.filtered_feature_mapping = filtered_feature_mapping
-        self.augment_pos_rotation = augment_pos_rotation
-        self.augment_feature_noise_prob = augment_feature_noise_prob
-        self.augment_node_masking_prob = augment_node_masking_prob  
-        self.is_training = is_training
-        
-        print(f"Initializing On-The-Fly Nested Dataset with {subgraphs_per_graph} subgraphs per graph")
-        print(f"Using single sampling strategy: {self.sampling_strategy}")
-        print(f"Shuffle mapping: {shuffle_mapping}")
-        print(f"Feature filter: {node_feature_filter}")
-        print(f"Feature mapping: {filtered_feature_mapping}")
-        print(f"Node masking probability: {augment_node_masking_prob}")
-        
-        # Store original dataset for on-demand loading
-        self.original_dataset = graph_loader.dataset
-        
-        # Pre-compute the mapping from subgraph index to original graph
-        self._compute_subgraph_mapping()
-        
-        print(f"Total subgraphs to generate on-the-fly: {len(self.subgraph_mapping)}")
-    
-    def _compute_subgraph_mapping(self):
-        """Pre-compute which original graph each subgraph index corresponds to."""
-        self.subgraph_mapping = []
-        
-        # Direct iteration over dataset (much simpler!)
-        for graph_idx in range(len(self.original_dataset)):
-            for subgraph_idx in range(self.subgraphs_per_graph):
-                self.subgraph_mapping.append({
-                    'original_graph_idx': graph_idx,
-                    'subgraph_idx': subgraph_idx
-                })
-        
-        # Shuffle mapping if requested (for better randomization)
-        if self.shuffle_mapping:
-            import random
-            random.shuffle(self.subgraph_mapping)
-            print("Shuffled subgraph mapping for better randomization")
-        
-        print(f"Processed {len(self.original_dataset)} original graphs")
-    
-    def _sample_subgraphs_from_single_graph(self, graph: Data, subgraph_idx: int) -> Data:
-        """Sample a single subgraph from a graph."""
-        
-        # Skip if graph is too small
-        if graph.num_nodes < self.min_subgraph_nodes:
-            # For small graphs, just replicate the original graph
-            subgraph = graph.clone()
-            subgraph.sampling_strategy = self.sampling_strategy
-            subgraph.subgraph_idx = subgraph_idx
-            return subgraph
-        
-        try:
-            if self.sampling_strategy == "neighbor_sampling":
-                subgraph = self._neighbor_sampling_subgraph(graph)
-            elif self.sampling_strategy == "random_walk":
-                subgraph = self._random_walk_subgraph(graph)
-            else:
-                raise ValueError(f"Invalid sampling strategy: {self.sampling_strategy}")
-            
-            # Add metadata to subgraph
-            subgraph.sampling_strategy = self.sampling_strategy
-            subgraph.subgraph_idx = subgraph_idx
-            
-            # Validate subgraph size
-            if subgraph.num_nodes > self.max_subgraph_nodes:
-                subgraph = self._truncate_subgraph(subgraph, self.max_subgraph_nodes)
-            
-            return subgraph
-            
-        except Exception as e:
-            print(f"Error sampling subgraph {subgraph_idx}: {e}")
-            # Fallback to original graph
-            subgraph = graph.clone()
-            subgraph.sampling_strategy = self.sampling_strategy
-            subgraph.subgraph_idx = subgraph_idx
-            return subgraph
-    
-    def _neighbor_sampling_subgraph(self, graph: Data) -> Data:
-        """
-        Use NeighborLoader for subgraph sampling.
-        
-        Each subgraph contains:
-        - 1 seed node (seed_size=1)   
-        - Neighbors sampled according to neighbor_sizes [15, 10, 5]
-        - Total nodes: ~1 + 15 + 15*10 + 15*10*5 = ~800 nodes max
-        """
-        all_nodes = torch.arange(graph.num_nodes)
-        
-        # Create neighbor loader for this specific graph
-        neigh_loader = NeighborLoader(
-            data=graph,
-            num_neighbors=self.neighbor_sizes,
-            input_nodes=all_nodes,
-            batch_size=self.seed_size,  # 1 seed per subgraph
-            shuffle=True,
-            # Remove return_e_id parameter as it's not available in this version
-        )
-        
-        # Get first subgraph from the loader
-        for subgraph in neigh_loader:
-            if hasattr(subgraph, 'pos') and hasattr(subgraph, 'n_id'):
-                subgraph.pos = graph.pos[subgraph.n_id]
-            return subgraph
-    
-    def _random_walk_subgraph(self, graph: Data, walk_length: int = 13, num_walks: int = 4) -> Data:
-        """Sample subgraph using random walks."""
-        if graph.num_nodes == 0:
-            return graph.clone()
-        
-        # Start from random nodes
-        start_nodes = torch.randperm(graph.num_nodes)[:min(num_walks, graph.num_nodes)]
-        visited_nodes = set()
-        
-        for start_node in start_nodes:
-            current_node = start_node.item()
-            visited_nodes.add(current_node)
-            
-            for _ in range(walk_length):
-                # Get neighbors
-                edge_mask = (graph.edge_index[0] == current_node)
-                neighbors = graph.edge_index[1][edge_mask]
-                
-                if len(neighbors) == 0:
-                    break
-                
-                # Random walk step
-                next_node = neighbors[torch.randint(len(neighbors), (1,))].item()
-                visited_nodes.add(next_node)
-                current_node = next_node
-                
-                # Stop if we have enough nodes
-                if len(visited_nodes) >= self.max_subgraph_nodes:
-                    break
-            
-            if len(visited_nodes) >= self.max_subgraph_nodes:
-                break
-        
-        # Create subgraph from visited nodes
-        if len(visited_nodes) < self.min_subgraph_nodes:
-            return self._fallback_subgraph(graph)
-        
-        subset = torch.tensor(list(visited_nodes), dtype=torch.long)
-        return self._create_subgraph_from_nodes(graph, subset)
-    
-    def _create_subgraph_from_nodes(self, graph: Data, subset: torch.Tensor) -> Data:
-        """Create subgraph from node subset."""
-        if len(subset) == 0:
-            return self._fallback_subgraph(graph)
-        
-        # Get subgraph edges
-        edge_index, edge_attr = subgraph(
-            subset, graph.edge_index, 
-            edge_attr=graph.edge_attr if hasattr(graph, 'edge_attr') else None,
-            relabel_nodes=True,
-            num_nodes=graph.num_nodes
-        )
-        
-        # Create new data object with properly subsetted features
-        subgraph_data = Data(
-            x=graph.x[subset] if graph.x is not None else None,
-            edge_index=edge_index,
-            edge_attr=edge_attr,
-        )
-        
-        # Handle positional features - subset them properly
-        if hasattr(graph, 'pos') and graph.pos is not None:
-            subgraph_data.pos = graph.pos[subset]  # Only keep positions of selected nodes
-        
-        # LapPE: copy from original graph for subset nodes
-        if hasattr(graph, 'lap_pe') and graph.lap_pe is not None:
-            subgraph_data.lap_pe = graph.lap_pe[subset]
-        
-        # City attribute for DANN
-        if hasattr(graph, 'city'):
-            subgraph_data.city = graph.city
-    
-        # Handle target values - subset them properly 
-        if hasattr(graph, 'y') and graph.y is not None:
-            subgraph_data.y = graph.y[subset]  # Only keep targets of selected nodes
-        
-        # Copy other attributes selectively (avoid copying node-level attributes)
-        node_level_attrs = {'x', 'edge_index', 'edge_attr', 'y', 'pos', 'lap_pe', 'city', 'num_nodes', 'num_edges'}
-        for key, value in graph.items():
-            if key not in node_level_attrs:
-                # Only copy graph-level attributes, not node-level ones
-                if not torch.is_tensor(value) or value.size(0) != graph.num_nodes:
-                    setattr(subgraph_data, key, value)
-        
-        subgraph_data.orig_subset = subset  # Store original node indices for edge_weights mapping
-        return subgraph_data
-    
-    def _truncate_subgraph(self, subgraph: Data, max_nodes: int) -> Data:
-        """Truncate subgraph to maximum number of nodes."""
-        if subgraph.num_nodes <= max_nodes:
-            return subgraph
-        
-        # Randomly select nodes to keep
-        keep_nodes = torch.randperm(subgraph.num_nodes)[:max_nodes]
-        return self._create_subgraph_from_nodes(subgraph, keep_nodes)
-    
-    def _extract_subgraph_edge_weights(self, subgraph: Data, original_graph: Data) -> torch.Tensor:
-        """Extract node weights (road segment weights) for subgraph nodes."""
-        # Check if original graph has edge_weights
-        if not hasattr(original_graph, 'edge_weights') or original_graph.edge_weights is None:
-            raise ValueError(f"Original graph missing 'edge_weights' attribute. Available attributes: {list(original_graph.keys())}")
-
-        # Neighbor sampling: use n_id
-        if hasattr(subgraph, 'n_id') and subgraph.n_id is not None:
-            return original_graph.edge_weights[subgraph.n_id]
-        # Random walk: use mapping from subgraph nodes to original nodes
-        elif hasattr(subgraph, 'orig_subset') and subgraph.orig_subset is not None:
-            return original_graph.edge_weights[subgraph.orig_subset]
-        # Fallback: if subgraph nodes are a subset of original nodes in order
-        elif hasattr(subgraph, 'x') and subgraph.x.shape[0] <= original_graph.edge_weights.shape[0]:
-            # Try to use the subset indices if stored
-            if hasattr(subgraph, 'subset_indices'):
-                return original_graph.edge_weights[subgraph.subset_indices]
-            else:
-                # If not, just take the first N weights (not always correct!)
-                return original_graph.edge_weights[:subgraph.x.shape[0]]
-        else:
-            raise ValueError(f"Cannot map subgraph nodes to original graph for edge_weights. Subgraph attributes: {list(subgraph.keys())}")
-        
-    def _fallback_subgraph(self, graph: Data) -> Data:
-        """Fallback subgraph for small graphs."""
-        return graph.clone()
-    
-    def __len__(self):
-        return len(self.subgraph_mapping)
-    
-    def __getitem__(self, idx):
-        """Generate subgraph on-the-fly using neighbor sampling and data augmentation."""
-        mapping = self.subgraph_mapping[idx]
-        
-        # Load the original graph on-demand (direct indexing)
-        original_graph = self.original_dataset[mapping['original_graph_idx']]
-        
-        # Generate the subgraph dynamically (fresh every epoch)
-        subgraph = self._sample_subgraphs_from_single_graph(
-            graph=original_graph,
-            subgraph_idx=mapping['subgraph_idx']
-        )
-        
-        # Apply augmentation to the subgraph
-        subgraph = self._apply_augmentation(subgraph)
-        
-        # Extract edge weights for subgraph
-        subgraph.edge_weights = self._extract_subgraph_edge_weights(subgraph, original_graph)
-        
-        # Apply feature filtering to the subgraph
-        if hasattr(self, 'node_feature_filter') and self.node_feature_filter is not None:
-            # Only filter if number of features is greater than max index in filter
-            if subgraph.x.shape[1] > len(self.node_feature_filter):
-                subgraph.x = subgraph.x[:, self.node_feature_filter]
-        
-        return subgraph
-    
-    def _apply_augmentation(self, subgraph: Data) -> Data:
-        """Apply augmentation to a single subgraph."""
-    
-        # On-the-fly rotation augmentation
-        if self.is_training and self.augment_pos_rotation:
-            if hasattr(subgraph, 'pos') and subgraph.pos is not None:
-                theta = random.uniform(0, 2 * math.pi)
-                if len(subgraph.pos.shape) == 3 and subgraph.pos.shape[1] == 3:
-                    # For [N, 3, 2] format, apply SAME rotation angle to all positions
-                    subgraph.pos = rotate_pos(subgraph.pos, theta)
-                elif len(subgraph.pos.shape) == 2:
-                    # For [N, 2] format, apply rotation directly
-                    subgraph.pos = rotate_pos(subgraph.pos, theta)
-        
-        # On-the-fly feature noise augmentation
-        if self.is_training and self.augment_feature_noise_prob:
-            if hasattr(subgraph, 'x') and subgraph.x is not None:
-                subgraph.x = apply_gaussian_noise_to_features(subgraph.x, self.filtered_feature_mapping)
-
-        # On-the-fly node masking augmentation
-        if self.is_training and self.augment_node_masking_prob > 0:
-            if hasattr(subgraph, 'x') and subgraph.x is not None:
-                subgraph.x = apply_simple_node_masking(subgraph.x, node_mask_prob=self.augment_node_masking_prob)
-        
-        return subgraph
-    
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):
         self.patience = patience
@@ -1181,32 +161,363 @@ class EarlyStopping:
             self.best_loss = val_loss
             self.counter = 0
 
-def load_metadata_from_disk(data, metadata_path):
 
-    city_data = json.load(open(metadata_path, 'r'))
+################################################# ↓ Data Normalization ↓ #################################################
+
+def normalize_dataset(train_data_list, combined_data_list):
+    """
+    train_data_list: Subset on which to apply normalization (train set)
+    combined_data_list: Subset for fitting scaler (train + val)
+    """
+    train_data = [copy.deepcopy(train_data_list.dataset[idx]) for idx in train_data_list.indices]
+    # combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
+
+    print("Fitting and normalizing x features...")
+    normalized_data_list, x_scaler = normalize_x_features_batched(train_data, combined_data_list) 
+    print("x features normalized")
+        
+    scalers_dict = {"x_scaler": x_scaler}
+    return normalized_data_list, scalers_dict 
+
+def normalize_x_features_batched(train_data_list, combined_data_list, batch_size=100):
+    """
+    Normalize the continuous node features (0 mean and unit variance).
+    Categorical features (Allowed Modes, Highway etc.) are left as booleans (0 or 1).
+    Fit scaler on combined train+val set, but apply normalization only to train set.
+    Returns normalized train set and fitted scaler.
+    """
+    scaler = StandardScaler()
+
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       #EdgeFeatures.CAPACITY_REDUCTION, Since this is binary, no normalization
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
     
-    data['path'].extend(city_data['path'])
-    data['policy_region'].extend(city_data['policy_region'])
-    data['scenario'].extend(city_data['scenario'])
-    data['city'].extend(city_data['city'])
+    # First pass: Fit the scaler incrementally, graph by graph
+    for i in tqdm(range(0, len(combined_data_list), batch_size), desc="Fitting scaler"):
+        batch_indices = combined_data_list.indices[i:i+batch_size]
+        batch = [combined_data_list.dataset[idx] for idx in batch_indices]
+        for data in batch:
+            # Fit scaler on each graph's node features separately
+            scaler.partial_fit(data.x[:, continuous_feat].numpy())
+
+    # Second pass: Transform the data in batches
+    for i in tqdm(range(0, len(train_data_list), batch_size), desc="Normalizing x features"):
+        batch = train_data_list[i:i+batch_size]
+        
+        # TODO: WHY?
+        # Process each graph in the batch individually (no vstack!)
+        for data in batch:
+            data_x = data.x[:, continuous_feat].numpy()
+            data_x_normalized = scaler.transform(data_x)
+            data.x[:, continuous_feat] = torch.tensor(data_x_normalized, dtype=data.x.dtype)
+
+    return train_data_list, scaler
+
+def normalize_dataset_with_scaler(dataset_input, scalers):
+    """
+    Normalize dataset using pre-fitted scalers (for validation/test sets).
+    """
+    data_list = [copy.deepcopy(dataset_input.dataset[idx]) for idx in dataset_input.indices]
+
+    print("Normalizing x features with existing scaler...")
+    normalized_data_list = normalize_x_features_with_scaler(data_list, scalers['x_scaler'])
+    print("x features normalized")
+    
+    return normalized_data_list
+
+def normalize_x_features_with_scaler(data_list, x_scaler, batch_size=100):
+    """
+    Normalize the continuous node features with a given scaler.
+    Categorical features (Allowed Modes, Highway etc.) are left as booleans (0 or 1).
+    """
+
+    # Continuous features to normalize
+    continuous_feat = [EdgeFeatures.VOL_BASE_CASE,
+                       EdgeFeatures.CAPACITY_BASE_CASE,
+                       #EdgeFeatures.CAPACITY_REDUCTION,
+                       EdgeFeatures.FREESPEED,
+                       EdgeFeatures.LENGTH]
+    
+    # FIX: Handle variable node counts correctly
+    for i in tqdm(range(0, len(data_list), batch_size), desc="Normalizing x features"):
+        batch = data_list[i:i+batch_size]
+        batch_x = np.vstack([data.x[:,continuous_feat].numpy() for data in batch])
+        batch_x_normalized = x_scaler.transform(batch_x)
+        
+        # CORRECT: Use proper indexing for variable node counts
+        start = 0
+        for data in batch:
+            num_nodes = data.x.shape[0]
+            data.x[:,continuous_feat] = torch.tensor(
+                batch_x_normalized[start:start+num_nodes], 
+                dtype=data.x.dtype)
+            start += num_nodes
+    
+    return data_list
 
 
-def estimate_average_graph_memory(graph_loader, num_samples=5):
-    gc.collect()
-    torch.cuda.empty_cache()
+################################################# ↓ Graph DATA + Model Setup ↓ #################################################
 
-    process = psutil.Process()
-    mem_before = process.memory_info().rss
+# For training batches
+# Control freak, so avoided
+def get_sampling_weights(dataset):
+    
+    # Add any other BANGER logic here
+    # labels (city + policy_region) can be accessed as dataset.labels
 
-    memory_usages = []
-    iterator = iter(graph_loader)
+    # Uniform weights for all samples
+    return [1.0 / len(dataset)] * len(dataset)
 
-    for _ in range(num_samples):
-        _ = next(iterator)  # Load one graph
-        mem_after = process.memory_info().rss
-        memory_usages.append(mem_after - mem_before)
-        mem_before = mem_after
+# TODO: Adapt based on split type?
+# Weighted sampling not necessarily needed for validation/test?
+def create_split_dataloader(data_subset, batch_size, use_weighted_batches, collate_fn_type):
+    return DataLoader(
+        dataset=data_subset, 
+        batch_size=batch_size, 
+        shuffle=True if not use_weighted_batches else None,
+        sampler=WeightedRandomSampler(get_sampling_weights(data_subset), len(data_subset)) if use_weighted_batches else None,
+        num_workers=4, # Check
+        prefetch_factor=2, # Check
+        pin_memory=False, # Check
+        collate_fn=collate_fn_type,  
+        worker_init_fn=seed_worker,
+        drop_last=False) # Check
 
-    avg_memory = sum(memory_usages) / len(memory_usages)
-    print(f"Average memory per graph: {avg_memory / (1024 ** 2):.2f} MB")
-    return avg_memory
+# test_data implies use of complete inductive testing
+def prepare_data_with_graph_features(train_data, val_data, test_data, use_inductive_variant,
+                                     batch_size, path_to_save_dataloader,
+                                     use_all_features, use_weighted_batches,
+                                     use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
+                                     min_subgraph_nodes, max_subgraph_nodes, sampling_strategy,
+                                     aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0): 
+    
+    print(f"Preparing data with {len(train_data['path']) + (len(val_data['path']) if val_data is not None else 0) + (len(test_data['path']) if test_data is not None else 0)} items")
+    
+    print("Splitting into subsets...")
+
+    _, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
+                                                                         train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+    
+    combined_indices = train_set.indices + valid_set.indices
+    combined_train_val_set = torch.utils.data.Subset(train_set.dataset, combined_indices)
+    
+    print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
+
+    if use_all_features:
+        node_features = []
+        for feat in EdgeFeatures:
+            name = feat.name
+            if not use_allowed_modes and name.startswith("ALLOWED_MODE"):
+                continue
+            if not use_destination_activity and name in {
+                "HOME", "WORK", "EDUCATION", "LEISURE", "SHOP", "OTHER", "OUTSIDE" ,'IS_IN_EQASIM_TRIPS'
+            }:
+                continue
+            if not use_highway and name.startswith("HIGHWAY"):
+                continue
+            node_features.append(name)
+    else:
+        node_features = [
+            "VOL_BASE_CASE",
+            "CAPACITY_BASE_CASE",
+            "CAPACITY_REDUCTION",
+            "FREESPEED",
+            "LENGTH"]
+    
+    print(node_features)
+
+    # CREATE FEATURE MAPPING ONCE - BEFORE NORMALIZATION
+    filtered_feature_mapping = {}
+    current_idx = 0
+    
+    for feature_name in node_features:
+        filtered_feature_mapping[EdgeFeatures[feature_name].value] = current_idx
+        current_idx += 1
+    
+    print(f"Global feature mapping: {filtered_feature_mapping}")
+
+    node_feature_filter = [EdgeFeatures[feature].value for feature in node_features]
+
+    # With augmentation, ideal for training (when not using nested loader)
+    collate_fn_with_aug = partial(collate_fn,
+                                  node_feature_filter=node_feature_filter,
+                                  filtered_feature_mapping=filtered_feature_mapping,
+                                  augment_pos_rotation=aug_pos_rotation,
+                                  augment_feature_noise=aug_feature_noise,
+                                  augment_node_masking_prob=aug_node_masking_probability,
+                                  is_training=True)
+
+
+    # Without augmentation, ideal for evaluation
+    collate_fn_with_no_aug = partial(collate_fn,
+                                     node_feature_filter=node_feature_filter,
+                                     filtered_feature_mapping=filtered_feature_mapping,
+                                     is_training=False)
+    
+    print('Data Augmentation Settings:')
+    print('Pos Rotation Augmentation:', aug_pos_rotation, 'Feature Noise Augmentation:', aug_feature_noise, 'Node Masking Probability:', aug_node_masking_probability)
+    print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
+
+    # IF TRANSDUCTIVE
+    if use_inductive_variant == False:
+
+        print("Creating base train loader...")
+        base_train_loader = create_split_dataloader(data_subset=train_set,
+                                                    batch_size=batch_size,
+                                                    use_weighted_batches=use_weighted_batches,
+                                                    # Uses conditional augmentation
+                                                    collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
+
+        print("Creating validation loader...")
+        val_loader = create_split_dataloader(data_subset=valid_set,
+                                             batch_size=batch_size,
+                                             use_weighted_batches=use_weighted_batches,
+                                             collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+
+        print("Creating test loader...")
+        test_loader = create_split_dataloader(data_subset=test_set,
+                                              batch_size=batch_size,
+                                              use_weighted_batches=use_weighted_batches,
+                                              collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+
+        print("Loaders created")
+        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        print("Test Dataloader saved since Transductive Variant. No scalers needed.")
+        
+    else:
+        
+        # TODO: WHY?
+        # ✅ FIX: Use training+val scaler for all splits
+        print("Normalizing train set...")
+        train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_train_val_set)
+        print("Train set normalized")      
+        
+        print("Normalizing validation set with TRAINING scaler...")
+        valid_set_normalized = normalize_dataset_with_scaler(dataset_input=valid_set, scalers=scalers_train)
+        print("Validation set normalized")
+        
+        print("Normalizing test set with TRAINING scaler...")
+        test_set_normalized = normalize_dataset_with_scaler(dataset_input=test_set, scalers=scalers_train)
+        print("Test set normalized")
+        
+        print("Creating train loader...")
+        base_train_loader = create_split_dataloader(
+            data_subset=train_set_normalized,
+            batch_size=batch_size,
+            use_weighted_batches=use_weighted_batches,
+            # Uses conditional augmentation
+            collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
+        print("Train loader created")
+        
+        print("Creating validation loader...")
+        val_loader = create_split_dataloader(
+            data_subset=valid_set_normalized,
+            batch_size=batch_size,
+            use_weighted_batches=use_weighted_batches,
+            collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        print("Validation loader created")
+        
+        print("Creating test loader...")
+        test_loader = create_split_dataloader(
+            data_subset=test_set_normalized,
+            batch_size=batch_size,
+            use_weighted_batches=use_weighted_batches,
+            collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        print("Test loader created")
+        
+        # ONLY SAVE TRAINING SCALERS (validation/test use same scalers)
+        joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
+        
+        # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+        # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+        print("Test dataloader NOT saved since Inductive Variant. Scalers are saved.")
+    
+    if use_nested_neighbor_loader:
+        train_loader = nested_dataloader(
+            base_train_loader, 
+            neighbor_sizes=neighbor_sizes, 
+            subgraphs_per_graph=subgraphs_per_graph, 
+            seed_size=seed_size,  
+            final_batch_size=batch_size*subgraphs_per_graph, 
+            sampling_strategy=sampling_strategy, 
+            min_subgraph_nodes=min_subgraph_nodes,
+            max_subgraph_nodes=max_subgraph_nodes,
+            node_feature_filter=node_feature_filter,
+            filtered_feature_mapping=filtered_feature_mapping,
+            augment_pos_rotation=aug_pos_rotation,
+            augment_feature_noise=aug_feature_noise,
+            augment_node_masking_prob=aug_node_masking_probability,
+            is_training=True
+        )
+    else:
+        train_loader = base_train_loader
+     
+    # Test the nested loader
+    if use_nested_neighbor_loader:
+        print("\n=== Testing Nested Loader ===")
+        for batch in train_loader:
+            print(f"Total subgraphs in batch: {batch.num_graphs}")
+            
+            # Check individual subgraphs
+            individual_graphs = batch.to_data_list()
+            if len(individual_graphs) > 0:
+                graph = individual_graphs[0]
+                print(f"First subgraph - Nodes: {graph.num_nodes}, Edges: {graph.num_edges}")
+                if hasattr(graph, 'sampling_strategy'):
+                    print(f"Sampling strategy: {graph.sampling_strategy}")
+            break
+    
+    #save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+    #save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+    # print("Test dataloader saved.")
+    
+    # MODIFIED: Return None for scalers since we don't need them
+    if use_inductive_variant == False:
+        return train_loader, val_loader, None
+    else:
+        # ✅ ONLY RETURN TRAINING SCALERS
+        return train_loader, val_loader, scalers_train
+
+def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: torch.device):
+    """
+    Factory function to create the specified model architecture.
+    
+    Args:
+    - gnn_arch (str): The architecture of the GNN model to create.
+    - config (object): WandB config with run arguments.
+    - device (torch.device): The device to which the model should be moved (CPU or GPU).
+    - model_kwargs (dict): Additional keyword arguments specific to the model.
+    
+    Returns:
+    - Initialized model on the specified device
+    """
+
+    common_kwargs = {
+        "in_channels": config.in_channels,
+        "out_channels": config.out_channels,
+        "use_dropout": config.use_dropout,
+        "dropout": config.dropout,
+        "dtype": torch.float32,
+        "log_to_wandb": True,
+        "use_target_standardization": getattr(config, 'use_target_standardization', False)
+    }
+    
+    if gnn_arch == "graphSAGE":
+        return GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "gatv2":
+        return GATv2(**common_kwargs, **model_kwargs).to(device)
+    
+    elif gnn_arch == "trans_conv":
+        return TransConv(**common_kwargs, **model_kwargs).to(device)
+        
+    elif gnn_arch == "trans_encoder":
+        return TransEncoder(**common_kwargs, **model_kwargs).to(device)
+        
+    else:
+        raise ValueError(f"Unknown architecture: {gnn_arch}")
+    

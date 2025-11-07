@@ -19,8 +19,11 @@ import os
 import sys
 import json
 import argparse
+
 import torch
 from pathlib import Path
+
+# TODO: Check if this helps
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
 
 # Add the 'scripts' directory to Python Path
@@ -29,43 +32,46 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from training.help_functions import *
-from gnn.help_functions import GNN_Loss, compute_baseline_of_mean_target, compute_baseline_of_no_policies,CityBalancedGNNLoss
+from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss
 
 # Repo root: repo/scripts/training/run_models.py → go two levels up
 project_root = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
 # Please adjust as needed
-base_dir = (project_root / 'inductive_gnn_data_results' / 'transductive')
+base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
-#cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['wuerzburg','rosenheim','regensburg','bayreuth','erlangen','fuerth','kempten','neuulm', 'augsburg', 'bamberg', 'nuernberg', 'ingolstadt']
-val_cities =['aschaffenburg','landshut'] # Non empty implies inductive learning
-test_cities = ['schweinfurt'] # Non empty implies inductive learning. What is in test_cities here, can be used as "cities" parameter in finetune_models.py
-     
+# ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
+train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
+val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
+test_cities = ['schweinfurt'] # Non empty implies inductive learning
+    
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
-                        choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost","trans_encoder"])  # Add more as you implement them
+                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder"])  # Add more as you implement them
     parser.add_argument("--project_name", type=str, default="GNN_Transductive",
                         help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
+    parser.add_argument("--use_inductive_variant", type=str_to_bool, default=True,
+                        help="Whether to perform inductive or transductive training.")
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
-    parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features(True) or a subset of features(False).")
+    parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features or 5 core features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
                         'If not provided, defaults params will be used.') 
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
-    parser.add_argument("--target_normalization", type=str_to_bool, default=False, help="Whether targets are normalized during preprocessing.")
-    parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
+    parser.add_argument("--use_city_balanced_loss", type=str_to_bool, default=False,
+                        help="Optional for inductive variant: Whether to use city-balanced loss function (based on CityBalancedGNNLoss) or not. \
+                            For transductive variant use standard node-weighted loss function (based on GNN_Loss).")
+    parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="Whether to use target standardization during training.")
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
-    parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
-    parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
+    parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     
@@ -84,35 +90,21 @@ def main():
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
     parser.add_argument("--base_checkpoint_path", type=str, default=None, help="Path to the checkpoint to continue training from.")
-    #parameters for the GraphSAGE
-    parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False, help="Whether to use nested neighbor loader.") # TODO: New for GraphSAGE
-    parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).") # TODO: New for GraphSAGE
-    parser.add_argument("--subgraphs_per_graph", type=int, default=2, help="The number of subgraphs to sample per graph.") # TODO: New for GraphSAGE
-    parser.add_argument("--seed_size", type=int, default=10, help="The number of seed nodes in each subgraph.") # TODO: New for GraphSAGE
-    parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
-                        choices=["neighbor_sampling", "random_walk"]) # TODO: New for GraphSAGE
-    parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.") # TODO: New for GraphSAGE
-    parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.") # TODO: New for GraphSAGE
-    #parameter for Data Augmentation
-    parser.add_argument("--use_data_augmentation", type=str_to_bool, default=False, help="Whether to use data augmentation.")
-    parser.add_argument("--use_message_dropout_probability", type=float, default=0.0, help="The probability of message dropout (random dropout on message passing) during training. 0.0 means no dropout.")
-    #for Gaussian noise addition to node features
-    parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
     
-    # node masking parameter augmentation
-    parser.add_argument("--use_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
-
-    #parser for DANN
-    parser.add_argument("--use_dann", type=str_to_bool, default=False, help="Whether to use Domain Adversarial Neural Network.")
-    parser.add_argument("--domain_lambda", type=float, default=0.0, help="Weight for domain adversarial loss.")
-    parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="Whether to use target standardization during training.")
-
-    parser.add_argument("--use_city_balanced_loss", type=str_to_bool, default=False, 
-                   help="Optional for inductive variant: Whether to use city-balanced loss function (based on CityBalancedGNNLoss) or not. and for transductive variant use standard node-weighted loss function (based on GNN_Loss).")
-
-    parser.add_argument("--force_training_method", type=str, default=None, 
-                    help="Force use of specific training method regardless of project name. Options: 'transductive', 'inductive', None (uses project name to decide).",
-                    choices=["transductive", "inductive", None])
+    # Parameters for the GraphSAGE
+    parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False, help="Whether to use nested neighbor loader.")
+    parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).")
+    parser.add_argument("--subgraphs_per_graph", type=int, default=2, help="The number of subgraphs to sample per graph.")
+    parser.add_argument("--seed_size", type=int, default=10, help="The number of seed nodes in each subgraph.")
+    parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
+                        choices=["neighbor_sampling", "random_walk"])
+    parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.")
+    parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.")
+    
+    # Parameters for Data Augmentation
+    parser.add_argument("--aug_pos_rotation", type=str_to_bool, default=False, help="Whether to use Position Rotation augmentation.")
+    parser.add_argument("--aug_feature_noise", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
+    parser.add_argument("--aug_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
 
     # Fast-iteration: optionally cap dataset sizes per split (random subsample)
     parser.add_argument("--limit_train_graphs", type=int, default=0, help="If >0, randomly keep only this many training graphs after reading metadata.")
@@ -127,23 +119,10 @@ def main():
     
     set_random_seeds()
     
-        # -------------------------------------------------------------------
-    # Dataset and results directory selection
-    # -------------------------------------------------------------------
-    if args['gnn_arch'] == "eign":
-        dataset_path = DATA_DIR / 'inductive_data' / 'training_data_eign' / 'kreisfreistadt'
-        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive_eign'
-
-    elif args['project_name'] == 'GNN_Transductive':
-        dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt_norm'
-        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
-
-    elif args['project_name'] == 'GNN_Inductive':  # for 'GNN_Inductive' as project name
-        dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt'
-        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
-
+    if args['use_inductive_variant'] == False:
+        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt_norm')
     else:
-        raise ValueError(f"Unknown project_name or gnn_arch combination: {args}")
+        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
     
     try:
         
@@ -203,28 +182,15 @@ def main():
         else:
             test_data = None
 
-        # ✅ DETERMINE WHICH DATA PREPARATION METHOD TO USE BASED ON FLAG OR PROJECT NAME
-        if args['force_training_method'] is not None:
-            # Flag explicitly set - use it regardless of project name for data preparation
-            use_transductive_data_prep = (args['force_training_method'] == 'transductive')
-            print(f"Data preparation method FORCED by flag: {args['force_training_method'].upper()} (project: {args['project_name']})")
-        else:
-            # No flag set - use project name to decide (default behavior)
-            use_transductive_data_prep = (args['project_name'] == 'GNN_Transductive')
-            method_name = 'TRANSDUCTIVE' if use_transductive_data_prep else 'INDUCTIVE'
-            print(f"Data preparation method determined by project name: {method_name} (project: {args['project_name']})")
-
-        if use_transductive_data_prep:
-            print("→ Using TRANSDUCTIVE data preparation (returns 3 values: train_dl, valid_dl, scalers_train)")
-            train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
+        print(f"Using {"INDUCTIVE" if args['use_inductive_variant'] else "TRANSDUCTIVE"} data preparation!")
+        train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
-                                                                             variant='GNN_Transductive',  # Force transductive variant
+                                                                             use_inductive_variant=args['use_inductive_variant'], # Conditional (Transductive/Inductive)
                                                                              batch_size=args['batch_size'],
                                                                              path_to_save_dataloader=path_to_save_dataloader,
                                                                              use_all_features=args['use_all_features'],
-                                                                             use_bootstrapping=args['use_bootstrapping'],
-                                                                             use_weighted_sampling=args['use_weighted_sampling'],
+                                                                             use_weighted_batches=args['use_weighted_batches'],
                                                                              use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
                                                                              neighbor_sizes=args['neighbor_sizes'],
                                                                              subgraphs_per_graph=args['subgraphs_per_graph'],
@@ -232,36 +198,9 @@ def main():
                                                                              sampling_strategy=args['sampling_strategy'],
                                                                              min_subgraph_nodes=args['min_subgraph_nodes'],
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
-                                                                             is_eign=(args['gnn_arch'] == "eign"),
-                                                                             use_data_augmentation=args['use_data_augmentation'],
-                                                                             use_message_dropout_probability=args['use_message_dropout_probability'],
-                                                                             use_feature_noise_probability=args['augment_feature_noise_prob'],
-                                                                             use_node_masking_probability=args['use_node_masking_probability'])
-            # Set scalers_validation to scalers_train for compatibility
-            scalers_validation = scalers_train
-        else:
-            print("→ Using INDUCTIVE data preparation (returns 4 values: train_dl, valid_dl, scalers_train, scalers_validation)")
-            train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(train_data=train_data,
-                                                                                                        val_data=val_data,
-                                                                                                        test_data=test_data,
-                                                                                                        variant='GNN_Inductive',  # Force inductive variant
-                                                                                                        batch_size=args['batch_size'],
-                                                                                                        path_to_save_dataloader=path_to_save_dataloader,
-                                                                                                        use_all_features=args['use_all_features'],
-                                                                                                        use_bootstrapping=args['use_bootstrapping'],
-                                                                                                        use_weighted_sampling=args['use_weighted_sampling'],
-                                                                                                        use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
-                                                                                                        neighbor_sizes=args['neighbor_sizes'],
-                                                                                                        subgraphs_per_graph=args['subgraphs_per_graph'],
-                                                                                                        seed_size=args['seed_size'],
-                                                                                                        sampling_strategy=args['sampling_strategy'],
-                                                                                                        min_subgraph_nodes=args['min_subgraph_nodes'],
-                                                                                                        max_subgraph_nodes=args['max_subgraph_nodes'],
-                                                                                                        is_eign=(args['gnn_arch'] == "eign"),
-                                                                                                        use_data_augmentation=args['use_data_augmentation'],
-                                                                                                        use_message_dropout_probability=args['use_message_dropout_probability'],
-                                                                                                        use_feature_noise_probability=args['augment_feature_noise_prob'],
-                                                                                                        use_node_masking_probability=args['use_node_masking_probability'])
+                                                                             aug_pos_rotation=args['aug_pos_rotation'],
+                                                                             aug_feature_noise=args['aug_feature_noise'],
+                                                                             aug_node_masking_probability=args['aug_node_masking_probability'])
 
         # Create WandB config
         config = setup_wandb(args)
@@ -276,9 +215,9 @@ def main():
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
                                         config=config,
                                         model_kwargs=model_kwargs,
-                                        device=device).to(device)  # ✅ REMOVE use_city_balanced_loss parameter
+                                        device=device)
 
-        # ✅ LOSS FUNCTION STILL WORKS - it doesn't need model support
+        # LOSS FUNCTION
         if args.get('use_city_balanced_loss', False):
             loss_fct = CityBalancedGNNLoss(loss_fct=config.loss_fct, 
                                            device=device, 
@@ -286,55 +225,23 @@ def main():
                                            num_nodes=train_dl.dataset[0].x.shape[0])
             print("Using city-balanced loss function- INDUCTIVE VARIANT")
         else:
-            loss_fct = GNN_Loss(loss_fct=config.loss_fct, 
-                                num_nodes=train_dl.dataset[0].x.shape[0],
+            loss_fct = GNN_Loss(loss_fct=config.loss_fct,
                                 device=device, 
-                                weighted=config.use_weighted_loss)
+                                weighted=config.use_weighted_loss,
+                                num_nodes=train_dl.dataset[0].x.shape[0])
             print("Using standard loss function- TRANSDUCTIVE VARIANT")
-
-        ## Not needed now, Naive MSE doesn't tell anything!
-        # baseline_loss_mean_target = compute_baseline_of_mean_target(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
-        # baseline_loss = compute_baseline_of_no_policies(dataset=train_dl, loss_fct=loss_fct, device=device, scalers=scalers_train)
-        # print("baseline loss mean " + str(baseline_loss_mean_target))
-        # print("baseline loss no  " + str(baseline_loss) )
-
-        # ✅ DETERMINE WHICH TRAINING METHOD TO USE BASED ON FLAG OR PROJECT NAME
-        if args['force_training_method'] is not None:
-            # Flag explicitly set - use it regardless of project name
-            use_transductive_training = (args['force_training_method'] == 'transductive')
-            print(f"Training method FORCED by flag: {args['force_training_method'].upper()} (project: {args['project_name']})")
-        else:
-            # No flag set - use project name to decide (default behavior)
-            use_transductive_training = (args['project_name'] == 'GNN_Transductive')
-            method_name = 'TRANSDUCTIVE' if use_transductive_training else 'INDUCTIVE'
-            print(f"Training method determined by project name: {method_name} (project: {args['project_name']})")
 
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
 
-        if use_transductive_training:
-            print("→ Using gnn_instance.train_model (TRANSDUCTIVE method)")
-            best_val_loss, best_epoch = gnn_instance.train_model(config=config,
-                                                                 loss_fct=loss_fct,
-                                                                 optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
-                                                                 train_dl=train_dl,
-                                                                 valid_dl=valid_dl,
+        print(f"Training method: {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'}")
+        best_val_loss, best_epoch = gnn_instance.train_model(config=config,
+                                                             loss_fct=loss_fct,
+                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                             train_dl=train_dl,
+                                                             valid_dl=valid_dl,
                                                              device=device,
                                                              early_stopping=early_stopping,
-                                                             model_save_path=model_save_path,
-                                                             scalers_train=scalers_train,
-                                                             target_normalization=config.target_normalization)
-        else:
-            print("→ Using gnn_instance.train_model_inductive (INDUCTIVE method)")
-            best_val_loss, best_epoch = gnn_instance.train_model_inductive(config=config,
-                                                                     loss_fct=loss_fct,
-                                                                     optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
-                                                                     train_dl=train_dl,
-                                                                     valid_dl=valid_dl,
-                                                                     device=device,
-                                                                     early_stopping=early_stopping,
-                                                                     model_save_path=model_save_path,
-                                                                     scalers_train=scalers_train,
-                                                                     scalers_validation=scalers_train)
+                                                             model_save_path=model_save_path)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
