@@ -103,6 +103,10 @@ class TransEncoder(BaseGNN):
             }, allow_val_change=True)
 
         self.define_layers()
+        print("--------------------------------")
+        print("TransEncoder Model Parameters:")
+        print(self)
+        print("--------------------------------")
 
     def define_layers(self):
         

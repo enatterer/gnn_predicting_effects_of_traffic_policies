@@ -84,14 +84,254 @@ class BaseGNN(nn.Module, ABC):
         # Concatenate all targets
         y_train = torch.cat(all_targets, dim=0)
         
-        # Compute statistics
-        self.target_mean = y_train.mean().to(device)
-        self.target_std = y_train.std().clamp_min(1e-6).to(device)  # Avoid division by zero
+        scaler = GradScaler()
+        total_steps = config.num_epochs * len(train_dl)
+        # Debug: Check config values before creating scheduler
+        peak_lr_val = getattr(config, 'peak_lr', None)
+        initial_lr_val = getattr(config, 'initial_lr', None)
+        peak_lr_str = f"{peak_lr_val:.6f}" if peak_lr_val is not None else "NOT SET"
+        initial_lr_str = f"{initial_lr_val:.6f}" if initial_lr_val is not None else "NOT SET"
+        print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
         
-        print(f"Target Statistics - Mean: {self.target_mean:.4f}, Std: {self.target_std:.4f}")
+        scheduler = LinearWarmupCosineDecayScheduler(
+            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            total_steps=total_steps,
+            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            warmup_fraction=config.warmup_fraction,
+            min_lr_fraction=config.min_lr_fraction,
+            cosine_decay_rate=config.cosine_decay_rate
+        )
+        
+        # Debug: Check scheduler values after creation
+        print(f"DEBUG: After scheduler creation - scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.peak_lr={scheduler.peak_lr:.6f}")
+        
+        # Initialize optimizer with peak_lr instead of config.initial_lr
+        if optimizer is not None:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = scheduler.peak_lr
+            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+            print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
+        
+        best_val_loss = float('inf')
+        checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
+        os.makedirs(checkpoint_dir, exist_ok=True)
 
-        torch.save({'target_mean': self.target_mean.cpu(),
-                    'target_std': self.target_std.cpu()}, save_path)
+        # TODO: Maybe add as a parameter later?
+        # Separate loss for mode stats
+        mode_stats_loss = nn.MSELoss().to(dtype=torch.float32).to(device)
+
+        # Define WandB Logging Metrics
+        from training.help_functions import setup_wandb_metrics
+        setup_wandb_metrics(predict_mode_stats=config.predict_mode_stats)
+
+        if config.continue_training:
+            # Load checkpoint
+            checkpoint = torch.load(config.base_checkpoint_path)
+            
+            self.load_state_dict(checkpoint['model_state_dict'])
+            optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
+            if optimizer is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
+            if 'scaler_state_dict' in checkpoint:
+                scaler.load_state_dict(checkpoint['scaler_state_dict'])
+            
+            best_val_loss = checkpoint['best_val_loss']
+            start_epoch = checkpoint['epoch'] + 1
+            
+            # Load target statistics when continuing training
+            if self.use_target_standardization:
+                if 'target_mean' in checkpoint and 'target_std' in checkpoint:
+                    self.target_mean = checkpoint['target_mean'].to(device)
+                    self.target_std = checkpoint['target_std'].to(device)
+                    print("Target statistics loaded from checkpoint")
+                else:
+                    print("Target statistics not found in checkpoint, recomputing...")
+                    self.compute_target_statistics(train_dl, config, device)
+            
+            print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
+        else:
+            # ✅ ADD THIS: Initialize for new training
+            start_epoch = 0
+
+        for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
+            super().train()
+            optimizer.zero_grad()
+
+            # Total loss
+            epoch_train_loss = 0
+            epoch_train_loss_node_predictions = 0
+            epoch_train_loss_mode_stats = 0
+            
+            # Capture learning rate at the START of the epoch (first batch)
+            epoch_start_step = epoch * len(train_dl)
+            epoch_start_lr = scheduler.get_lr(epoch_start_step)
+
+            print(f"Starting training loop with {len(train_dl)} batches")
+            for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
+                step = epoch * len(train_dl) + idx
+                lr = scheduler.get_lr(step)
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = lr
+                    
+                data = data.to(device)
+                
+                # Select target based on configuration
+                targets_node_predictions = select_target_tensor(data, config.target_type)
+                
+                # STANDARDIZE TARGET
+                targets_node_predictions = self.standardize_target(targets_node_predictions)
+
+                if config.predict_mode_stats:
+                    targets_mode_stats = data.mode_stats
+            
+                with autocast():
+                    # Forward pass
+                    if config.predict_mode_stats:
+                        predicted, mode_stats_pred = self(data)
+                        # Debug prints for shape mismatch
+                        print(f"DEBUG TRAIN MODE: predicted.shape = {predicted.shape}")
+                        print(f"DEBUG TRAIN MODE: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                        print(f"DEBUG TRAIN MODE: x_unscaled.shape = {data.x.shape}")
+                        print(f"DEBUG TRAIN MODE: data.batch.shape = {data.batch.shape}")
+                        train_loss_node_predictions = loss_fct(predicted, targets_node_predictions, data, data.batch)
+                        train_loss_mode_stats = mode_stats_loss(mode_stats_pred, targets_mode_stats)
+                        train_loss = train_loss_node_predictions + train_loss_mode_stats
+                    else:
+                        predicted = self(data)
+                        # Debug prints for shape mismatch
+                        #print(f"DEBUG TRAIN: predicted.shape = {predicted.shape}")
+                        #print(f"DEBUG TRAIN: targets_node_predictions.shape = {targets_node_predictions.shape}")
+                        #print(f"DEBUG TRAIN: data.x.shape = {data.x.shape}")
+                        #print(f"DEBUG TRAIN: data.batch.shape = {data.batch.shape}")
+                        #print(f"DEBUG TRAIN: data.batch.dtype = {data.batch.dtype}")
+                        #print(f"DEBUG TRAIN: About to call loss_fct with data.x type={type(data.x)}, data.x={data.x if isinstance(data.x, int) else 'Tensor'}")
+                        train_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
+
+                # Total loss
+                epoch_train_loss += train_loss.item()
+                if config.predict_mode_stats:
+                    epoch_train_loss_node_predictions += train_loss_node_predictions.item()
+                    epoch_train_loss_mode_stats += train_loss_mode_stats.item()
+        
+                # Backward pass
+                scaler.scale(train_loss).backward() 
+                
+                # Gradient clipping
+                if config.use_gradient_clipping:
+                    torch.nn.utils.clip_grad_norm_(self.parameters(), max_norm=1.0)
+
+                if (idx + 1) % config.gradient_accumulation_steps == 0:
+                    scaler.step(optimizer)
+                    scaler.update()
+                    optimizer.zero_grad()
+                    
+                # Batch level logging
+                if config.predict_mode_stats:
+                    wandb.log({"batch_train_loss": train_loss.item(),
+                               "batch_train_loss-node_predictions": train_loss_node_predictions.item(),
+                               "batch_train_loss-mode_stats": train_loss_mode_stats.item(),
+                               "batch_step":step})
+                else:   
+                    wandb.log({"batch_train_loss": train_loss.item(),
+                               "batch_step":step})
+            
+            if len(train_dl) % config.gradient_accumulation_steps != 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+                
+            # Validation step
+            if config.predict_mode_stats:
+                val_loss, r_squared, spearman_corr, pearson_corr, val_loss_node_predictions, val_loss_mode_stats = validate_model_during_training(
+                    config=config,
+                    model=self,
+                    dataset=valid_dl,
+                    loss_func=loss_fct,
+                    device=device,
+                    scalers=scalers_train
+                )
+                # Epoch level logging
+                log_dict = {
+                    "val_loss": val_loss,
+                    "train_loss": epoch_train_loss / len(train_dl),
+                    "lr": epoch_start_lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr,
+                    "train_loss-node_predictions": epoch_train_loss_node_predictions / len(train_dl),
+                    "train_loss-mode_stats": epoch_train_loss_mode_stats / len(train_dl),
+                    "val_loss-node_predictions": val_loss_node_predictions,
+                    "val_loss-mode_stats": val_loss_mode_stats,
+                    "epoch": epoch
+                }
+                
+                wandb.log(log_dict)
+            else:
+                val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
+                    config=config,
+                    model=self,
+                    dataset=valid_dl,
+                    loss_func=loss_fct,
+                    device=device,
+                    scalers=scalers_train
+                )
+                # Epoch level logging
+                log_dict = {
+                    "val_loss": val_loss,
+                    "train_loss": epoch_train_loss / len(train_dl),
+                    "lr": epoch_start_lr,
+                    "r^2": r_squared,
+                    "spearman": spearman_corr,
+                    "pearson": pearson_corr,
+                    "epoch": epoch
+                }
+                
+                wandb.log(log_dict)
+
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {epoch_start_lr} (start), lr_end: {lr:.6f}, r^2: {r_squared}")
+            
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss   
+                if model_save_path:         
+                    torch.save(self.state_dict(), model_save_path)
+                    print(f'Best model saved to {model_save_path} with validation loss: {val_loss}')
+                    
+                    # ✅ ADD THIS: Save target statistics with best model
+                    if self.use_target_standardization and self.target_mean is not None:
+                        stats_path = model_save_path.replace('.pt', '_target_stats.pt')
+                        self.save_target_statistics(stats_path)
+            
+            # Save checkpoint
+            if epoch % 20 == 0:
+                checkpoint_path = os.path.join(checkpoint_dir, f"checkpoint_epoch_{epoch}.pt")
+                checkpoint_dict = {
+                    'epoch': epoch,
+                    'model_state_dict': self.state_dict(),
+                    'optimizer_state_dict': optimizer.state_dict(),
+                    'scaler_state_dict': scaler.state_dict(),
+                    'best_val_loss': best_val_loss,
+                    'val_loss': val_loss,
+                }
+                
+                # ✅ ADD THIS: Include target statistics in checkpoints
+                if self.use_target_standardization and self.target_mean is not None:
+                    checkpoint_dict['target_mean'] = self.target_mean.cpu()
+                    checkpoint_dict['target_std'] = self.target_std.cpu()
+                
+                torch.save(checkpoint_dict, checkpoint_path)
+                print(f'Checkpoint saved to {checkpoint_path}')
+            
+            early_stopping(val_loss)
+            if early_stopping.early_stop:
+                print("Early stopping triggered. Stopping training.")
+                break
+        
+        print("Best validation loss: ", best_val_loss)
+        wandb.summary["best_val_loss"] = best_val_loss
+        wandb.finish()
         
         print(f"Target statistics saved to {save_path}")
     
@@ -146,7 +386,31 @@ class BaseGNN(nn.Module, ABC):
         
         scaler = GradScaler()
         total_steps = config.num_epochs * len(train_dl)
-        scheduler = LinearWarmupCosineDecayScheduler(initial_lr=config.lr, total_steps=total_steps)
+        # Debug: Check config values before creating scheduler
+        peak_lr_val = getattr(config, 'peak_lr', None)
+        initial_lr_val = getattr(config, 'initial_lr', None)
+        peak_lr_str = f"{peak_lr_val:.6f}" if peak_lr_val is not None else "NOT SET"
+        initial_lr_str = f"{initial_lr_val:.6f}" if initial_lr_val is not None else "NOT SET"
+        print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
+        
+        scheduler = LinearWarmupCosineDecayScheduler(
+            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            total_steps=total_steps,
+            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            warmup_fraction=config.warmup_fraction,
+            min_lr_fraction=config.min_lr_fraction,
+            cosine_decay_rate=config.cosine_decay_rate
+        )
+        
+        # Debug: Check scheduler values after creation
+        print(f"DEBUG: After scheduler creation - scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.peak_lr={scheduler.peak_lr:.6f}")
+        
+        if optimizer is not None:
+            for param_group in optimizer.param_groups:
+                param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+            print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
+        
         best_val_loss = float('inf')
         checkpoint_dir = os.path.join(os.path.dirname(model_save_path), "checkpoints")
         os.makedirs(checkpoint_dir, exist_ok=True)
@@ -161,6 +425,11 @@ class BaseGNN(nn.Module, ABC):
             
             self.load_state_dict(checkpoint['model_state_dict'])
             optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
+            if optimizer is not None:
+                for param_group in optimizer.param_groups:
+                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
             if 'scaler_state_dict' in checkpoint:
                 scaler.load_state_dict(checkpoint['scaler_state_dict'])
             
@@ -185,12 +454,23 @@ class BaseGNN(nn.Module, ABC):
 
             # Total loss
             epoch_train_loss = 0
+            epoch_train_loss_node_predictions = 0
+            epoch_train_loss_mode_stats = 0
+            epoch_train_domain_loss = 0
+            
+            # Capture learning rate at the START of the epoch (first batch)
+            epoch_start_step = epoch * len(train_dl)
+            epoch_start_lr = scheduler.get_lr(epoch_start_step)
 
             for idx, data in tqdm(enumerate(train_dl), total=len(train_dl), desc=f"Epoch {epoch+1}/{config.num_epochs}"):
                 step = epoch * len(train_dl) + idx
                 lr = scheduler.get_lr(step)
+                if step == 0:
+                    print(f"DEBUG: Step 0 - scheduler.get_lr(0)={lr:.6f}, optimizer.param_groups[0]['lr'] before update={optimizer.param_groups[0]['lr']:.6f}")
                 for param_group in optimizer.param_groups:
                     param_group['lr'] = lr
+                if step == 0:
+                    print(f"DEBUG: Step 0 - optimizer.param_groups[0]['lr'] after update={optimizer.param_groups[0]['lr']:.6f}")
                     
                 data = data.to(device)
                 
@@ -248,7 +528,7 @@ class BaseGNN(nn.Module, ABC):
                 "epoch": epoch
             })
 
-            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {lr}, r^2: {r_squared}")
+            print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {epoch_start_lr} (start), lr_end: {lr:.6f}, r^2: {r_squared}")
             
             if val_loss < best_val_loss:
                 best_val_loss = val_loss   

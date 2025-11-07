@@ -1,9 +1,27 @@
+'''
+Run GNN model training with configurable architecture and hyperparameters.
+
+'dataset_path' and 'base_dir' need to be adjusted to the correct paths.
+All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
+
+Example usage with default architecture, dropout, and most significant features found using ablation tests:
+`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --peak_lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
+
+Our use case:
+python run_models.py --gnn_arch gatv2 --unique_model_description trial13 --in_channels 5 --use_all_features True --num_epochs 2 --peak_lr 0.003 --early_stopping_patience 25
+python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3 --use_nested_neighbor_loader True --neighbor_sizes 5,5,5,5,5 
+python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsigned --in_channels 5 --use_all_features True --num_epochs 2 --peak_lr 0.003 --early_stopping_patience 25 
+python run_models.py --gnn_arch trans_encoder --unique_model_description encoder_trial --in_channels 5 --use_all_features True --num_epochs 20 --peak_lr 0.0003 --early_stopping_patience 25
+'''
+
+from html import parser
 import os
 import sys
 import json
 import argparse
 
 import torch
+from pathlib import Path
 
 # TODO: Check if this helps
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
@@ -16,7 +34,9 @@ if scripts_path not in sys.path:
 from training.help_functions import *
 from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss
 
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
+# Repo root: repo/scripts/training/run_models.py → go two levels up
+project_root = Path(__file__).resolve().parents[2]
+DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
@@ -27,7 +47,6 @@ val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
 test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
-    
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
                         help="The GNN architecture to use.",
@@ -55,8 +74,15 @@ def main():
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
+    
+    #parameters for the learning rate scheduler
+    parser.add_argument("--peak_lr", type=float, default=0.0003, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.0001, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--warmup_fraction", type=float, default=0.15, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
+    parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
+    parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
     parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
+    
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
@@ -79,6 +105,11 @@ def main():
     parser.add_argument("--aug_pos_rotation", type=str_to_bool, default=False, help="Whether to use Position Rotation augmentation.")
     parser.add_argument("--aug_feature_noise", type=str_to_bool, default=False, help="Whether to use Gaussian noise addition to node features as data augmentation.")
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
+
+    # Fast-iteration: optionally cap dataset sizes per split (random subsample)
+    parser.add_argument("--limit_train_graphs", type=int, default=0, help="If >0, randomly keep only this many training graphs after reading metadata.")
+    parser.add_argument("--limit_val_graphs", type=int, default=0, help="If >0, randomly keep only this many validation graphs after reading metadata.")
+    parser.add_argument("--limit_test_graphs", type=int, default=0, help="If >0, randomly keep only this many test graphs after reading metadata.")
 
     args = vars(parser.parse_args())
     
@@ -114,10 +145,26 @@ def main():
         for city in sorted(train_cities):
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
+        # Optional: Subsample training graphs for faster iterations
+        if args.get('limit_train_graphs', 0) and args['limit_train_graphs'] > 0 and len(train_data['path']) > args['limit_train_graphs']:
+            import random as _rnd
+            indices = list(range(len(train_data['path'])))
+            _rnd.shuffle(indices)
+            keep = set(indices[:args['limit_train_graphs']])
+            for k in ['path','policy_region','scenario','city']:
+                train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
+
         if len(val_cities) > 0:
             val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
             for city in sorted(val_cities):
                 load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
+            if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
+                import random as _rnd
+                indices = list(range(len(val_data['path'])))
+                _rnd.shuffle(indices)
+                keep = set(indices[:args['limit_val_graphs']])
+                for k in ['path','policy_region','scenario','city']:
+                    val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
         else:
             val_data = None
 
@@ -125,6 +172,13 @@ def main():
             test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
             for city in sorted(test_cities):
                 load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
+            if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
+                import random as _rnd
+                indices = list(range(len(test_data['path'])))
+                _rnd.shuffle(indices)
+                keep = set(indices[:args['limit_test_graphs']])
+                for k in ['path','policy_region','scenario','city']:
+                    test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
         else:
             test_data = None
 
