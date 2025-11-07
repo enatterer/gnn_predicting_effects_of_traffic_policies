@@ -9,7 +9,7 @@ The idea is that the finetuning is done transductively, i.e. training and valida
 For example, if in run_models the test_cities is schweinfurt, then in finetune_models the cities is schweinfurt.
 
 Example usage:
-python finetune_models.py --run_name base_run --gnn_arch trans_encoder --cities schweinfurt
+python finetune_models.py --run_name base_run --gnn_arch trans_encoder --cities schweinfurt --project_name GNN_Inductive --start_from_scratch False
 '''
 
 import os
@@ -19,6 +19,7 @@ import argparse
 import re
 import torch
 from pathlib import Path
+import random as _rnd
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
 
 # Add the 'scripts' directory to Python Path
@@ -49,8 +50,7 @@ def main():
                         help="Comma-separated list of cities to use for finetuning (e.g., 'wuerzburg,rosenheim,regensburg').")
     
     # Project name (defaults to GNN_Inductive based on the path structure)
-    parser.add_argument("--project_name", type=str, default="GNN_Inductive",
-                        help="The name of the project (default: GNN_Inductive).")
+    parser.add_argument("--project_name", type=str, default="GNN_Inductive", help="The name of the project (default: GNN_Inductive).")
     
     # Hyperparameters (all optional, with defaults matching run_models.py)
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
@@ -108,16 +108,15 @@ def main():
     # Unique model description for finetuning (optional, defaults to run_name + _finetuned)
     parser.add_argument("--unique_model_description", type=str, default=None, help="Unique description for the finetuned run (default: {run_name}_finetuned).")
 
-    parser.add_argument("--start_from_scratch", type=str_to_bool, default=False,
-                        help="If True, initialize model weights randomly instead of loading a checkpoint.")
+    parser.add_argument("--start_from_scratch", type=str_to_bool, default=False,help="If True, initialize model weights randomly instead of loading a checkpoint.")
 
     args = vars(parser.parse_args())
     
     # Parse city lists from comma-separated strings
     cities = [city.strip() for city in args['cities'].split(',') if city.strip()]
-    val_cities = [city.strip() for city in args['cities'].split(',') if city.strip()]
-    train_cities = [city.strip() for city in args['cities'].split(',') if city.strip()]
-    test_cities = [city.strip() for city in args['cities'].split(',') if city.strip()]
+    val_cities = cities.copy()
+    train_cities = cities.copy()
+    test_cities = cities.copy()
     
     # Parse neighbor_sizes from string to list
     if isinstance(args.get('neighbor_sizes', '5,5,5'), str):
@@ -193,7 +192,6 @@ def main():
             print(f"Loaded {len(all_data['path'])} total graphs from {train_cities}")
             
             # Shuffle and split into train, val, and test
-            import random as _rnd
             _rnd.seed(42)  # For reproducibility
             indices = list(range(len(all_data['path'])))
             _rnd.shuffle(indices)
@@ -246,56 +244,8 @@ def main():
             print(f"Split data: {len(train_data['path'])} training graphs, {len(val_data['path'])} validation graphs, {len(test_data['path'])} test graphs")
             
         else:
-            # Different cities for train and val - load separately
-            train_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-            for city in sorted(train_cities):
-                load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
+            raise ValueError(f"Different cities for train and val are not supported for finetuning.")
 
-            # Optional: Subsample training graphs for faster iterations
-            if args.get('limit_train_graphs', 0) and args['limit_train_graphs'] > 0 and len(train_data['path']) > args['limit_train_graphs']:
-                import random as _rnd
-                indices = list(range(len(train_data['path'])))
-                _rnd.shuffle(indices)
-                keep = set(indices[:args['limit_train_graphs']])
-                for k in ['path','policy_region','scenario','city']:
-                    train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
-
-            if len(val_cities) > 0:
-                val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-                for city in sorted(val_cities):
-                    load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
-                    import random as _rnd
-                    indices = list(range(len(val_data['path'])))
-                    _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_val_graphs']])
-                    for k in ['path','policy_region','scenario','city']:
-                        val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
-            else:
-                val_data = None
-
-        # Handle test_data only if cities are different (already handled in the all_same_cities case above)
-        if not all_same_cities:
-            if len(test_cities) > 0:
-                test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
-                for city in sorted(test_cities):
-                    load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
-                    import random as _rnd
-                    indices = list(range(len(test_data['path'])))
-                    _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_test_graphs']])
-                    for k in ['path','policy_region','scenario','city']:
-                        test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
-            else:
-                test_data = None
-        
-        # CRITICAL: If test_data is empty (0 graphs), set it to None to avoid DataLoader errors
-        # load_data_and_split_into_subsets now handles None test_data when val_data is provided
-        if test_data is not None and len(test_data['path']) == 0:
-            test_data = None
-            print("Note: test_data is empty (0 graphs), setting to None to avoid DataLoader errors")
-        
         print("→ Using INDUCTIVE-style data preparation for finetuning (returns train_dl, valid_dl, scalers_train, scalers_validation)")
         train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(
             train_data=train_data,
@@ -321,11 +271,7 @@ def main():
             use_node_masking_probability=args['use_node_masking_probability']
         )
         
-        test_dl = None
-        
-        # Create WandB config
         config = setup_wandb(args)
-        
         if args["model_kwargs"] is not None:
             with open(args["model_kwargs"], 'r') as f:
                 model_kwargs = json.load(f)
@@ -376,7 +322,7 @@ def main():
         # Note: Checkpoints will be saved to finetuned_model/checkpoints/ automatically
         # because model_save_path is set to finetuned_model/model.pth        
         
-        print("→ Using gnn_instance.train_model (TRANSDUCTIVE method)")
+        print("→ Using gnn_instance.train_model (INDUCTIVE method)")
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                             loss_fct=loss_fct,
                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
@@ -394,8 +340,6 @@ def main():
         
     except Exception as e:
         print(f"Error: {e}")
-        import traceback
-        traceback.print_exc()
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
 
@@ -456,7 +400,6 @@ def get_finetuned_model_paths(base_dir, project_name, run_name):
     os.makedirs(path_to_save_dataloader, exist_ok=True)
     
     return model_save_path, path_to_save_dataloader, checkpoint_dir
-
 
 if __name__ == '__main__':
     main()
