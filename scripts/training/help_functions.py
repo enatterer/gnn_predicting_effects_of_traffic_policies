@@ -5,6 +5,7 @@ import random
 import json
 import joblib
 import subprocess
+from pathlib import Path
 from functools import partial
 
 import wandb
@@ -114,9 +115,19 @@ def get_paths(base_dir: str, unique_model_description: str, model_save_path: str
 # TODO: Validate Pass by Reference 
 def load_metadata_from_disk(data, metadata_path):
 
-    city_data = json.load(open(metadata_path, 'r'))
-    
-    data['path'].extend(city_data['path'])
+    with open(metadata_path, 'r') as f:
+        city_data = json.load(f)
+
+    metadata_dir = Path(metadata_path).parent
+
+    resolved_paths = []
+    for p in city_data['path']:
+        if os.path.exists(p):
+            resolved_paths.append(p)
+        else:
+            resolved_paths.append(str(metadata_dir / Path(p).name))
+
+    data['path'].extend(resolved_paths)
     data['policy_region'].extend(city_data['policy_region'])
     data['scenario'].extend(city_data['scenario'])
     data['city'].extend(city_data['city'])

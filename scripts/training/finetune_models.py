@@ -246,17 +246,16 @@ def main():
         else:
             raise ValueError(f"Different cities for train and val are not supported for finetuning.")
 
-        print("→ Using INDUCTIVE-style data preparation for finetuning (returns train_dl, valid_dl, scalers_train, scalers_validation)")
-        train_dl, valid_dl, scalers_train, scalers_validation = prepare_data_with_graph_features(
+        print("→ Using INDUCTIVE-style data preparation for finetuning (returns train_dl, valid_dl, scalers_train)")
+        train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(
             train_data=train_data,
             val_data=val_data,
             test_data=test_data,
-            variant='GNN_Inductive',  # Reuse normalization/scaling from base training
+            use_inductive_variant=True,
             batch_size=args['batch_size'],
             path_to_save_dataloader=path_to_save_dataloader,
             use_all_features=args['use_all_features'],
-            use_bootstrapping=args['use_bootstrapping'],
-            use_weighted_sampling=args['use_weighted_sampling'],
+            use_weighted_batches=args.get('use_weighted_sampling', False),
             use_nested_neighbor_loader=args['use_nested_neighbor_loader'],
             neighbor_sizes=args['neighbor_sizes'],
             subgraphs_per_graph=args['subgraphs_per_graph'],
@@ -264,13 +263,11 @@ def main():
             sampling_strategy=args['sampling_strategy'],
             min_subgraph_nodes=args['min_subgraph_nodes'],
             max_subgraph_nodes=args['max_subgraph_nodes'],
-            is_eign=(args['gnn_arch'] == "eign"),
-            use_data_augmentation=args['use_data_augmentation'],
-            use_message_dropout_probability=args['use_message_dropout_probability'],
-            use_feature_noise_probability=args['augment_feature_noise_prob'],
-            use_node_masking_probability=args['use_node_masking_probability']
+            aug_pos_rotation=args['use_data_augmentation'],
+            aug_feature_noise=args['augment_feature_noise_prob'],
+            aug_node_masking_probability=args['use_node_masking_probability']
         )
-        
+
         config = setup_wandb(args)
         if args["model_kwargs"] is not None:
             with open(args["model_kwargs"], 'r') as f:
@@ -330,10 +327,7 @@ def main():
                                                             valid_dl=valid_dl,
                                                             device=device,
                                                             early_stopping=early_stopping,
-                                                            model_save_path=model_save_path,
-                                                            scalers_train=scalers_train,
-                                                            scalers_validation=scalers_validation,
-                                                            target_normalization=config.target_normalization)
+                                                            model_save_path=model_save_path)
         
         print(f'Finetuned model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')
         print_model_info(gnn_instance)

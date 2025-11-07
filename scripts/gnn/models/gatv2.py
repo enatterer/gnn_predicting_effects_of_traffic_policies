@@ -45,7 +45,7 @@ class GATv2(BaseGNN):
         if use_pos:
             effective_in_channels += 2  # x, y coordinates
         if use_lap_pe:
-            effective_in_channels += self.lap_pe_dim
+            effective_in_channels += lap_pe_dim
 
         # Call parent class constructor
         super().__init__(

@@ -182,7 +182,7 @@ def main():
         else:
             test_data = None
 
-        print(f"Using {"INDUCTIVE" if args['use_inductive_variant'] else "TRANSDUCTIVE"} data preparation!")
+        print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
@@ -236,7 +236,7 @@ def main():
         print(f"Training method: {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'}")
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                              loss_fct=loss_fct,
-                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
                                                              train_dl=train_dl,
                                                              valid_dl=valid_dl,
                                                              device=device,

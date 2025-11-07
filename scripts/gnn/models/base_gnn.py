@@ -94,9 +94,9 @@ class BaseGNN(nn.Module, ABC):
         print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
         
         scheduler = LinearWarmupCosineDecayScheduler(
-            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            initial_lr=config.initial_lr,  # starting LR
             total_steps=total_steps,
-            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            peak_lr=config.peak_lr,        # LR reached after warmup
             warmup_fraction=config.warmup_fraction,
             min_lr_fraction=config.min_lr_fraction,
             cosine_decay_rate=config.cosine_decay_rate
@@ -105,11 +105,11 @@ class BaseGNN(nn.Module, ABC):
         # Debug: Check scheduler values after creation
         print(f"DEBUG: After scheduler creation - scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.peak_lr={scheduler.peak_lr:.6f}")
         
-        # Initialize optimizer with peak_lr instead of config.initial_lr
+        # Initialize optimizer with the starting learning rate
         if optimizer is not None:
             for param_group in optimizer.param_groups:
-                param_group['lr'] = scheduler.peak_lr
-            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+                param_group['lr'] = scheduler.initial_lr
+            print(f"DEBUG: Set optimizer LR to scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
             print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
         
         best_val_loss = float('inf')
@@ -133,8 +133,8 @@ class BaseGNN(nn.Module, ABC):
             # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
             if optimizer is not None:
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
-                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
+                    param_group['lr'] = scheduler.initial_lr
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.initial_lr={scheduler.initial_lr:.6f}")
             if 'scaler_state_dict' in checkpoint:
                 scaler.load_state_dict(checkpoint['scaler_state_dict'])
             
@@ -394,9 +394,9 @@ class BaseGNN(nn.Module, ABC):
         print(f"DEBUG: Before scheduler creation - config.peak_lr={peak_lr_str}, config.initial_lr={initial_lr_str}")
         
         scheduler = LinearWarmupCosineDecayScheduler(
-            initial_lr=config.peak_lr,  # initial_lr in scheduler = peak LR (after warmup)
+            initial_lr=config.initial_lr,
             total_steps=total_steps,
-            peak_lr=config.initial_lr,  # peak_lr in scheduler = starting LR
+            peak_lr=config.peak_lr,
             warmup_fraction=config.warmup_fraction,
             min_lr_fraction=config.min_lr_fraction,
             cosine_decay_rate=config.cosine_decay_rate
@@ -407,8 +407,8 @@ class BaseGNN(nn.Module, ABC):
         
         if optimizer is not None:
             for param_group in optimizer.param_groups:
-                param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
-            print(f"DEBUG: Set optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
+                param_group['lr'] = scheduler.initial_lr
+            print(f"DEBUG: Set optimizer LR to scheduler.initial_lr={scheduler.initial_lr:.6f}, scheduler.get_lr(0)={scheduler.get_lr(0):.6f}")
             print(f"DEBUG: Optimizer param_groups[0]['lr'] after setting: {optimizer.param_groups[0]['lr']:.6f}")
         
         best_val_loss = float('inf')
@@ -428,8 +428,8 @@ class BaseGNN(nn.Module, ABC):
             # After loading checkpoint, reset LR to peak_lr (starting LR) for new training schedule
             if optimizer is not None:
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = scheduler.peak_lr  # peak_lr is the starting LR
-                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.peak_lr={scheduler.peak_lr:.6f}")
+                    param_group['lr'] = scheduler.initial_lr
+                print(f"DEBUG: After checkpoint load, reset optimizer LR to scheduler.initial_lr={scheduler.initial_lr:.6f}")
             if 'scaler_state_dict' in checkpoint:
                 scaler.load_state_dict(checkpoint['scaler_state_dict'])
             

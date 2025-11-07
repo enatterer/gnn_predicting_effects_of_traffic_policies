@@ -50,7 +50,7 @@ class GraphSAGE(BaseGNN):
         if use_pos:
             effective_in_channels += pos_dim
         if use_lap_pe:
-            effective_in_channels += self.lap_pe_dim
+            effective_in_channels += lap_pe_dim
 
         # Call parent class constructor
         super().__init__(
