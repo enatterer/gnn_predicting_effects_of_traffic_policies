@@ -5,13 +5,13 @@ Run GNN model training with configurable architecture and hyperparameters.
 All the other parameters can be passed as command line arguments. Run `python run_models.py --help` to see the list of available arguments.
 
 Example usage with default architecture, dropout, and most significant features found using ablation tests:
-`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
+`python run_models.py --in_channels 5 --use_all_features False --num_epochs 500 --peak_lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3`
 
 Our use case:
-python run_models.py --gnn_arch gatv2 --unique_model_description trial13 --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25
+python run_models.py --gnn_arch gatv2 --unique_model_description trial13 --in_channels 5 --use_all_features True --num_epochs 2 --peak_lr 0.003 --early_stopping_patience 25
 python run_models.py --gnn_arch graphSAGE --unique_model_description graphSAGE_5_features_16_cities_retina --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 --use_dropout True --dropout 0.3 --use_nested_neighbor_loader True --neighbor_sizes 5,5,5,5,5 
-python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsigned --in_channels 5 --use_all_features True --num_epochs 2 --lr 0.003 --early_stopping_patience 25 
-python run_models.py --gnn_arch trans_encoder --unique_model_description encoder_trial --in_channels 5 --use_all_features True --num_epochs 20 --lr 0.0003 --early_stopping_patience 25
+python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsigned --in_channels 5 --use_all_features True --num_epochs 2 --peak_lr 0.003 --early_stopping_patience 25 
+python run_models.py --gnn_arch trans_encoder --unique_model_description encoder_trial --in_channels 5 --use_all_features True --num_epochs 20 --peak_lr 0.0003 --early_stopping_patience 25
 '''
 
 from html import parser
@@ -39,10 +39,10 @@ DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 base_dir = (project_root / 'inductive_gnn_data_results' / 'transductive')
 
 #cities = ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
-val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
-test_cities = ['schweinfurt'] # Non empty implies inductive learning
-    
+train_cities = ['wuerzburg','rosenheim','regensburg','bayreuth','erlangen','fuerth','kempten','neuulm', 'augsburg', 'bamberg', 'nuernberg', 'ingolstadt']
+val_cities =['aschaffenburg','landshut'] # Non empty implies inductive learning
+test_cities = ['schweinfurt'] # Non empty implies inductive learning. What is in test_cities here, can be used as "cities" parameter in finetune_models.py
+     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_conv",
@@ -68,8 +68,15 @@ def main():
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
     parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
-    parser.add_argument("--lr", type=float, default=0.001, help="The learning rate for the model.")
+    
+    #parameters for the learning rate scheduler
+    parser.add_argument("--peak_lr", type=float, default=0.0003, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.0001, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--warmup_fraction", type=float, default=0.15, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
+    parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
+    parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
     parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
+    
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
     parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
@@ -308,7 +315,7 @@ def main():
             print("→ Using gnn_instance.train_model (TRANSDUCTIVE method)")
             best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                                  loss_fct=loss_fct,
-                                                                 optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                                 optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
                                                                  train_dl=train_dl,
                                                                  valid_dl=valid_dl,
                                                              device=device,
@@ -320,7 +327,7 @@ def main():
             print("→ Using gnn_instance.train_model_inductive (INDUCTIVE method)")
             best_val_loss, best_epoch = gnn_instance.train_model_inductive(config=config,
                                                                      loss_fct=loss_fct,
-                                                                     optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                                     optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
                                                                      train_dl=train_dl,
                                                                      valid_dl=valid_dl,
                                                                      device=device,
