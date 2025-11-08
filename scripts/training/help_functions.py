@@ -139,11 +139,7 @@ def setup_wandb(args):
     return wandb.config
 
 def setup_wandb_metrics():
-
     wandb.define_metric("epoch") # Custom X-axis
-    wandb.define_metric("batch_step") # Custom X-axis
-    
-    wandb.define_metric("batch_train_loss", step_metric="batch_step")
     wandb.define_metric("train_loss", step_metric="epoch")
     wandb.define_metric("val_loss", step_metric="epoch")
     wandb.define_metric("lr", step_metric="epoch")

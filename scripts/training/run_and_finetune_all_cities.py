@@ -241,6 +241,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Optional comma-separated subset of cities to run. Defaults to all.",
     )
     parser.add_argument(
+        "--run_peak_lr",
+        type=float,
+        default=0.0002,
+        help="Override peak learning rate used for run_models.py (defaults to shared value).",
+    )
+    parser.add_argument(
+        "--run_initial_lr",
+        type=float,
+        default=0.0001,
+        help="Override initial learning rate used for run_models.py (defaults to shared value).",
+    )
+    parser.add_argument(
+        "--run_num_epochs",
+        type=int,
+        default=40,
+        help="Override number of epochs for run_models.py (defaults to shared value).",
+    )
+    parser.add_argument(
         "--run_limit_train_graphs",
         type=int,
         default=500,
@@ -275,6 +293,24 @@ def create_parser() -> argparse.ArgumentParser:
         type=int,
         default=10,
         help="Override for finetune_models.py --limit_test_graphs (defaults to shared value).",
+    )
+    parser.add_argument(
+        "--finetune_peak_lr",
+        type=float,
+        default=0.0006,
+        help="Override peak learning rate used for finetune_models.py (defaults to shared value).",
+    )
+    parser.add_argument(
+        "--finetune_initial_lr",
+        type=float,
+        default=0.0002,
+        help="Override initial learning rate used for finetune_models.py (defaults to shared value).",
+    )
+    parser.add_argument(
+        "--finetune_num_epochs",
+        type=int,
+        default=50,
+        help="Override number of epochs for finetune_models.py (defaults to shared value).",
     )
 
     return parser
@@ -427,23 +463,37 @@ def main() -> None:
         if args.finetune_limit_test_graphs is not None
         else getattr(args, "limit_test_graphs", 0)
     )
+    if args.run_peak_lr is not None:
+        run_base_args["peak_lr"] = args.run_peak_lr
+    if args.run_initial_lr is not None:
+        run_base_args["initial_lr"] = args.run_initial_lr
+    if args.run_num_epochs is not None:
+        run_base_args["num_epochs"] = args.run_num_epochs
+
+    if args.finetune_peak_lr is not None:
+        finetune_base_args["peak_lr"] = args.finetune_peak_lr
+    if args.finetune_initial_lr is not None:
+        finetune_base_args["initial_lr"] = args.finetune_initial_lr
+    if args.finetune_num_epochs is not None:
+        finetune_base_args["num_epochs"] = args.finetune_num_epochs
 
     for idx, test_city in enumerate(city_sequence, start=1):
         remaining_cities = [city for city in city_sequence if city != test_city]
         train_cities, val_cities = split_cities(rng, remaining_cities, args.train_fraction)
 
-        training_run_name = f"run_and_finetune_{test_city}"
-        comparison_run_name = f"finetune_{test_city}"
+        pretrain_run_name = f"pretrain_{test_city}"
+        finetune_run_name = f"finetune_{test_city}"
+        scratch_run_name = f"run_without_pretrain_{test_city}"
 
         print("=" * 80)
         print(f"[{idx}/{len(city_sequence)}] Test city: {test_city}")
         print(f"Train cities ({len(train_cities)}): {train_cities}")
         print(f"Validation cities ({len(val_cities)}): {val_cities}")
-        print(f"Training run name: {training_run_name}")
+        print(f"Pretraining run name: {pretrain_run_name}")
         print("=" * 80)
 
         run_args = dict(run_base_args)
-        run_args["unique_model_description"] = training_run_name
+        run_args["unique_model_description"] = pretrain_run_name
 
         call_run_models(run_args, train_cities, val_cities, [test_city])
 
@@ -451,23 +501,23 @@ def main() -> None:
 
         finetune_args_checkpoint = dict(finetune_base_args)
         finetune_args_checkpoint.update(shared_values)
-        finetune_args_checkpoint["run_name"] = training_run_name
+        finetune_args_checkpoint["run_name"] = pretrain_run_name
         finetune_args_checkpoint["cities"] = test_city
         finetune_args_checkpoint["start_from_scratch"] = False
-        finetune_args_checkpoint["unique_model_description"] = None
+        finetune_args_checkpoint["unique_model_description"] = finetune_run_name
 
         call_finetune_models(finetune_args_checkpoint)
 
         print("-" * 80)
-        print(f"Comparison finetune from scratch: {comparison_run_name}")
+        print(f"Comparison finetune from scratch: {scratch_run_name}")
         print("-" * 80)
 
         finetune_args_scratch = dict(finetune_base_args)
         finetune_args_scratch.update(shared_values)
-        finetune_args_scratch["run_name"] = comparison_run_name
+        finetune_args_scratch["run_name"] = scratch_run_name
         finetune_args_scratch["cities"] = test_city
         finetune_args_scratch["start_from_scratch"] = True
-        finetune_args_scratch["unique_model_description"] = None
+        finetune_args_scratch["unique_model_description"] = scratch_run_name
 
         call_finetune_models(finetune_args_scratch)
 

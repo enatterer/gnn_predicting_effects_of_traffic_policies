@@ -501,8 +501,10 @@ class BaseGNN(nn.Module, ABC):
                     optimizer.zero_grad()
                     
                 # Batch level logging
-                wandb.log({"batch_train_loss": train_loss.item(),
-                           "batch_step":step})
+                wandb.log({
+                    "batch_train_loss": train_loss.item(),
+                    "batch_step": step,
+                })
             
             if len(train_dl) % config.gradient_accumulation_steps != 0:
                 scaler.step(optimizer)
@@ -521,7 +523,7 @@ class BaseGNN(nn.Module, ABC):
             wandb.log({
                 "val_loss": val_loss,
                 "train_loss": epoch_train_loss / len(train_dl),
-                "lr": lr,
+                "lr": epoch_start_lr,
                 "r^2": r_squared,
                 "spearman": spearman_corr,
                 "pearson": pearson_corr,
