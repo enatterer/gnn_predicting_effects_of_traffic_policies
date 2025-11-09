@@ -157,23 +157,25 @@ def main():
         latest_checkpoint_path = None
 
         original_run_dir = os.path.join(base_dir, args['project_name'], args['run_name'])
-        if not os.path.exists(original_run_dir):
-            candidate_projects = []
-            for candidate in (args['project_name'], 'GNN_Inductive', 'GNN_Transductive'):
-                if candidate not in candidate_projects:
-                    candidate_projects.append(candidate)
 
-            for candidate in candidate_projects:
-                candidate_dir = os.path.join(base_dir, candidate, args['run_name'])
-                if os.path.exists(candidate_dir):
-                    if candidate != args['project_name']:
-                        print(f"Original run directory not found under project '{args['project_name']}'. Using '{candidate}' instead.")
-                    args['project_name'] = candidate
-                    original_run_dir = candidate_dir
-                    break
+        if not args['start_from_scratch']:
+            if not os.path.exists(original_run_dir):
+                candidate_projects = []
+                for candidate in (args['project_name'], 'GNN_Inductive', 'GNN_Transductive'):
+                    if candidate not in candidate_projects:
+                        candidate_projects.append(candidate)
 
-        if not os.path.exists(original_run_dir):
-            raise ValueError(f"Original run directory does not exist under any known project name for run '{args['run_name']}'. Checked {candidate_projects}.")
+                for candidate in candidate_projects:
+                    candidate_dir = os.path.join(base_dir, candidate, args['run_name'])
+                    if os.path.exists(candidate_dir):
+                        if candidate != args['project_name']:
+                            print(f"Original run directory not found under project '{args['project_name']}'. Using '{candidate}' instead.")
+                        args['project_name'] = candidate
+                        original_run_dir = candidate_dir
+                        break
+
+            if not os.path.exists(original_run_dir):
+                raise ValueError(f"Original run directory does not exist under any known project name for run '{args['run_name']}'. Checked {candidate_projects}.")
 
         original_checkpoint_dir = os.path.join(original_run_dir, 'trained_model', 'checkpoints')
 
