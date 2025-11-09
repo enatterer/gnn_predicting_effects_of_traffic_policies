@@ -104,6 +104,7 @@ FINETUNE_ARGS = [
     "gnn_arch",
     "cities",
     "project_name",
+    "pretraining_inductive",
     "in_channels",
     "use_all_features",
     "out_channels",
@@ -158,7 +159,6 @@ def create_parser() -> argparse.ArgumentParser:
     # Arguments shared between run_models.py and finetune_models.py
     # ------------------------------------------------------------------
     parser.add_argument("--gnn_arch", type=str, default="trans_encoder")
-    parser.add_argument("--project_name", type=str, default="GNN_Inductive")
     parser.add_argument("--in_channels", type=int, default=5)
     parser.add_argument("--use_all_features", type=str_to_bool, default=True)
     parser.add_argument("--out_channels", type=int, default=1)
@@ -166,13 +166,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss_fct", type=str, default="mse")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False)
     parser.add_argument("--target_type", type=str, default="abs_vol_car")
-    # parser.add_argument("--num_epochs", type=int, default=100)
-    # parser.add_argument("--batch_size", type=int, default=8)
-    # parser.add_argument("--peak_lr", type=float, default=0.0003)
     parser.add_argument("--warmup_fraction", type=float, default=0.1)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
-    # parser.add_argument("--initial_lr", type=float, default=0.0001)
     parser.add_argument("--early_stopping_patience", type=int, default=20)
     parser.add_argument("--use_dropout", type=str_to_bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.3)
@@ -205,9 +201,9 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--continue_training", type=str_to_bool, default=False)
     parser.add_argument("--base_checkpoint_path", type=str, default=None)
-    parser.add_argument("--run_peak_lr", type=float, default=0.0002)
-    parser.add_argument("--run_initial_lr", type=float, default=0.0001)
-    parser.add_argument("--run_num_epochs", type=int, default=40)
+    parser.add_argument("--run_peak_lr", type=float, default=0.001)
+    parser.add_argument("--run_initial_lr", type=float, default=0.0003)
+    parser.add_argument("--run_num_epochs", type=int, default=101)
     parser.add_argument("--run_limit_train_graphs", type=int, default=500)
     parser.add_argument("--run_limit_val_graphs", type=int, default=100)
     parser.add_argument("--run_limit_test_graphs", type=int, default=10)
@@ -224,8 +220,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False)
     parser.add_argument("--use_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--start_from_scratch", type=str_to_bool, default=False)
-    parser.add_argument("--finetune_peak_lr", type=float, default=0.0006)
-    parser.add_argument("--finetune_initial_lr", type=float, default=0.0003)
+    parser.add_argument("--pretraining_inductive", type=str_to_bool, default=None,
+                        help="Set to True if finetuning should load inductive pretraining checkpoints, False for transductive. Defaults to the value used in run_models.")
+    parser.add_argument("--finetune_peak_lr", type=float, default=0.001)
+    parser.add_argument("--finetune_initial_lr", type=float, default=0.0005)
     parser.add_argument("--finetune_num_epochs", type=int, default=100)
     parser.add_argument("--finetune_limit_train_graphs", type=int, default=100)
     parser.add_argument("--finetune_limit_val_graphs", type=int, default=20)
@@ -489,6 +487,9 @@ def main() -> None:
     if args.finetune_num_epochs is not None:
         finetune_base_args["num_epochs"] = args.finetune_num_epochs
 
+    if finetune_base_args.get("pretraining_inductive") is None:
+        finetune_base_args["pretraining_inductive"] = run_base_args.get("use_inductive_variant", True)
+
     for idx, test_city in enumerate(city_sequence, start=1):
         remaining_cities = [city for city in city_sequence if city != test_city]
         train_cities, val_cities = split_cities(rng, remaining_cities, args.train_fraction)
@@ -515,6 +516,8 @@ def main() -> None:
         for key, value in shared_values.items():
             if key not in finetune_args_checkpoint or finetune_args_checkpoint[key] is None:
                 finetune_args_checkpoint[key] = value
+        if finetune_args_checkpoint.get("pretraining_inductive") is None:
+            finetune_args_checkpoint["pretraining_inductive"] = run_args.get("use_inductive_variant", True)
         finetune_args_checkpoint["run_name"] = pretrain_run_name
         finetune_args_checkpoint["cities"] = test_city
         finetune_args_checkpoint["start_from_scratch"] = False
@@ -530,6 +533,8 @@ def main() -> None:
         for key, value in shared_values.items():
             if key not in finetune_args_scratch or finetune_args_scratch[key] is None:
                 finetune_args_scratch[key] = value
+        if finetune_args_scratch.get("pretraining_inductive") is None:
+            finetune_args_scratch["pretraining_inductive"] = run_args.get("use_inductive_variant", True)
         finetune_args_scratch["run_name"] = scratch_run_name
         finetune_args_scratch["cities"] = test_city
         finetune_args_scratch["start_from_scratch"] = True

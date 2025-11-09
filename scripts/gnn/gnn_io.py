@@ -64,8 +64,40 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
         labels = [f"{city}_{policy_region}" for city, policy_region in zip(train_data['city'], train_data['policy_region'])]
 
         indices = list(range(len(paths)))
-        train_indices, test_indices = train_test_split(indices, test_size=test_ratio, random_state=seed, stratify=labels)
-        train_indices, val_indices = train_test_split(train_indices, test_size=val_ratio/(train_ratio + val_ratio), random_state=seed, stratify=[labels[i] for i in train_indices])
+
+        try:
+            train_indices, test_indices = train_test_split(
+                indices,
+                test_size=test_ratio,
+                random_state=seed,
+                stratify=labels
+            )
+        except ValueError:
+            print("Warning: Stratified train/test split not possible (class with <2 samples). Falling back to unstratified split.")
+            train_indices, test_indices = train_test_split(
+                indices,
+                test_size=test_ratio,
+                random_state=seed,
+                stratify=None
+            )
+
+        train_labels = [labels[i] for i in train_indices]
+
+        try:
+            train_indices, val_indices = train_test_split(
+                train_indices,
+                test_size=val_ratio/(train_ratio + val_ratio),
+                random_state=seed,
+                stratify=train_labels
+            )
+        except ValueError:
+            print("Warning: Stratified train/val split not possible (class with <2 samples). Falling back to unstratified split.")
+            train_indices, val_indices = train_test_split(
+                train_indices,
+                test_size=val_ratio/(train_ratio + val_ratio),
+                random_state=seed,
+                stratify=None
+            )
 
     else:
         

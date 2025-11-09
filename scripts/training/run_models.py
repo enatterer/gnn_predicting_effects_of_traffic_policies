@@ -51,10 +51,10 @@ def main():
     parser.add_argument("--gnn_arch", type=str, default="trans_encoder",
                         help="The GNN architecture to use.",
                         choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder"])  # Add more as you implement them
-    parser.add_argument("--project_name", type=str, default="GNN_Transductive",
-                        help="The name of the project, used for saving the corresponding runs, and as the WandB project name.")
     parser.add_argument("--use_inductive_variant", type=str_to_bool, default=True,
                         help="Whether to perform inductive or transductive training.")
+    parser.add_argument("--project_name", type=str, default=None,
+                        help="Override for project directory/WandB project. Defaults automatically based on use_inductive_variant.")
     parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
@@ -121,8 +121,13 @@ def main():
     
     if args['use_inductive_variant'] == False:
         dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt_norm')
+        default_project_name = "GNN_Transductive"
     else:
         dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
+        default_project_name = "GNN_Inductive"
+
+    if args.get('project_name') is None:
+        args['project_name'] = default_project_name
     
     try:
         
