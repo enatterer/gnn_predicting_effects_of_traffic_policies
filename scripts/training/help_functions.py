@@ -378,22 +378,29 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
                                                     # Uses conditional augmentation
                                                     collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
 
-        print("Creating validation loader...")
-        val_loader = create_split_dataloader(data_subset=valid_set,
-                                             batch_size=batch_size,
-                                             use_weighted_batches=use_weighted_batches,
-                                             collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        if len(valid_set) > 0:
+            print("Creating validation loader...")
+            val_loader = create_split_dataloader(data_subset=valid_set,
+                                                 batch_size=batch_size,
+                                                 use_weighted_batches=use_weighted_batches,
+                                                 collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        else:
+            print("Validation subset empty; skipping validation loader.")
+            val_loader = None
 
-        print("Creating test loader...")
-        test_loader = create_split_dataloader(data_subset=test_set,
-                                              batch_size=batch_size,
-                                              use_weighted_batches=use_weighted_batches,
-                                              collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        if len(test_set) > 0:
+            print("Creating test loader...")
+            test_loader = create_split_dataloader(data_subset=test_set,
+                                                  batch_size=batch_size,
+                                                  use_weighted_batches=use_weighted_batches,
+                                                  collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+            save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+            save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+            print("Test Dataloader saved since Transductive Variant. No scalers needed.")
+        else:
+            print("Test subset empty; skipping test loader.")
 
         print("Loaders created")
-        save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-        print("Test Dataloader saved since Transductive Variant. No scalers needed.")
         
     else:
         

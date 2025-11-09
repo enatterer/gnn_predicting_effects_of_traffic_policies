@@ -50,7 +50,10 @@ def main():
                         help="Comma-separated list of cities to use for finetuning (e.g., 'wuerzburg,rosenheim,regensburg').")
     
     # Project name (defaults to GNN_Inductive based on the path structure)
-    parser.add_argument("--project_name", type=str, default="GNN_Inductive", help="The name of the project (default: GNN_Inductive).")
+    parser.add_argument("--project_name", type=str, default=None,
+                        help="Name of the original project directory. Defaults to GNN_Inductive for inductive finetuning and GNN_Transductive for transductive finetuning.")
+    parser.add_argument("--pretraining_inductive", type=str_to_bool, default=True,
+                        help="Whether the finetune should start from an inductive (True) or transductive (False) pretraining run.")
     
     # Hyperparameters (all optional, with defaults matching run_models.py)
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
@@ -66,12 +69,12 @@ def main():
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
-    parser.add_argument("--num_epochs", type=int, default=50, help="Number of epochs to train for.")
+    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     
     # Learning rate scheduler parameters
-    parser.add_argument("--peak_lr", type=float, default=0.0003, help="The peak learning rate (after warmup) from which decay will occur.")
-    parser.add_argument("--initial_lr", type=float, default=0.0001, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--peak_lr", type=float, default=0.0006, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.0002, help="The initial learning rate from which training will start (used during warmup).")
     parser.add_argument("--warmup_fraction", type=float, default=0.1, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
@@ -134,8 +137,13 @@ def main():
     # Dataset and results directory selection
     # -------------------------------------------------------------------
     try:
-        dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt'
+        if args['pretraining_inductive']:
+            dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt'
+        else:
+            dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt_norm'
         base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
+        if args['project_name'] is None:
+            args['project_name'] = 'GNN_Inductive' if args['pretraining_inductive'] else 'GNN_Transductive'
     except Exception as e:
         raise ValueError(f"Error selecting dataset and results directory: {e}")
     
@@ -149,6 +157,24 @@ def main():
         latest_checkpoint_path = None
 
         original_run_dir = os.path.join(base_dir, args['project_name'], args['run_name'])
+        if not os.path.exists(original_run_dir):
+            candidate_projects = []
+            for candidate in (args['project_name'], 'GNN_Inductive', 'GNN_Transductive'):
+                if candidate not in candidate_projects:
+                    candidate_projects.append(candidate)
+
+            for candidate in candidate_projects:
+                candidate_dir = os.path.join(base_dir, candidate, args['run_name'])
+                if os.path.exists(candidate_dir):
+                    if candidate != args['project_name']:
+                        print(f"Original run directory not found under project '{args['project_name']}'. Using '{candidate}' instead.")
+                    args['project_name'] = candidate
+                    original_run_dir = candidate_dir
+                    break
+
+        if not os.path.exists(original_run_dir):
+            raise ValueError(f"Original run directory does not exist under any known project name for run '{args['run_name']}'. Checked {candidate_projects}.")
+
         original_checkpoint_dir = os.path.join(original_run_dir, 'trained_model', 'checkpoints')
 
         if not args['start_from_scratch']:
@@ -246,12 +272,12 @@ def main():
         else:
             raise ValueError(f"Different cities for train and val are not supported for finetuning.")
 
-        print("→ Using INDUCTIVE-style data preparation for finetuning (returns train_dl, valid_dl, scalers_train)")
+        print(f"→ Using {'INDUCTIVE' if args['pretraining_inductive'] else 'TRANSDUCTIVE'}-style data preparation for finetuning")
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(
             train_data=train_data,
             val_data=val_data,
             test_data=test_data,
-            use_inductive_variant=True,
+            use_inductive_variant=False, # Finetuning is always transductive
             batch_size=args['batch_size'],
             path_to_save_dataloader=path_to_save_dataloader,
             use_all_features=args['use_all_features'],
@@ -302,13 +328,13 @@ def main():
                                            device=device, 
                                            weighted=config.use_weighted_loss,
                                            num_nodes=train_dl.dataset[0].x.shape[0])
-            print("Using city-balanced loss function - INDUCTIVE VARIANT")
+            print(f"Using city-balanced loss function - TRANSDUCTIVE VARIANT")
         else:
             loss_fct = GNN_Loss(loss_fct=config.loss_fct, 
                                 num_nodes=train_dl.dataset[0].x.shape[0],
                                 device=device, 
                                 weighted=config.use_weighted_loss)
-            print("Using standard loss function - INDUCTIVE VARIANT")
+            print(f"Using standard loss function - TRANSDUCTIVE VARIANT")
         
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
 
@@ -319,10 +345,10 @@ def main():
         # Note: Checkpoints will be saved to finetuned_model/checkpoints/ automatically
         # because model_save_path is set to finetuned_model/model.pth        
         
-        print("→ Using gnn_instance.train_model (INDUCTIVE method)")
+        print("→ Using gnn_instance.train_model (TRANSDUCTIVE method)")
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                             loss_fct=loss_fct,
-                                                            optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                            optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-3) if config.gnn_arch != "xgboost" else None,
                                                             train_dl=train_dl,
                                                             valid_dl=valid_dl,
                                                             device=device,

@@ -48,7 +48,7 @@ test_cities = ['schweinfurt'] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
-    parser.add_argument("--gnn_arch", type=str, default="trans_conv",
+    parser.add_argument("--gnn_arch", type=str, default="trans_encoder",
                         help="The GNN architecture to use.",
                         choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder"])  # Add more as you implement them
     parser.add_argument("--project_name", type=str, default="GNN_Transductive",
@@ -72,7 +72,7 @@ def main():
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
-    parser.add_argument("--num_epochs", type=int, default=1000, help="Number of epochs to train for.")
+    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
     
     #parameters for the learning rate scheduler
@@ -154,32 +154,37 @@ def main():
             for k in ['path','policy_region','scenario','city']:
                 train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
 
-        if len(val_cities) > 0:
-            val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
-            for city in sorted(val_cities):
-                load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
-            if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
-                import random as _rnd
-                indices = list(range(len(val_data['path'])))
-                _rnd.shuffle(indices)
-                keep = set(indices[:args['limit_val_graphs']])
-                for k in ['path','policy_region','scenario','city']:
-                    val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
-        else:
-            val_data = None
+        if args['use_inductive_variant']:
+            if len(val_cities) > 0:
+                val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
+                for city in sorted(val_cities):
+                    load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
+                if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
+                    import random as _rnd
+                    indices = list(range(len(val_data['path'])))
+                    _rnd.shuffle(indices)
+                    keep = set(indices[:args['limit_val_graphs']])
+                    for k in ['path','policy_region','scenario','city']:
+                        val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
+            else:
+                val_data = None
 
-        if len(test_cities) > 0:
-            test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
-            for city in sorted(test_cities):
-                load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
-            if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
-                import random as _rnd
-                indices = list(range(len(test_data['path'])))
-                _rnd.shuffle(indices)
-                keep = set(indices[:args['limit_test_graphs']])
-                for k in ['path','policy_region','scenario','city']:
-                    test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
+            if len(test_cities) > 0:
+                test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
+                for city in sorted(test_cities):
+                    load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
+                if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
+                    import random as _rnd
+                    indices = list(range(len(test_data['path'])))
+                    _rnd.shuffle(indices)
+                    keep = set(indices[:args['limit_test_graphs']])
+                    for k in ['path','policy_region','scenario','city']:
+                        test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
+            else:
+                test_data = None
         else:
+            # Transductive variant: validation/test splits derived from training cities.
+            val_data = None
             test_data = None
 
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
@@ -229,14 +234,14 @@ def main():
                                 device=device, 
                                 weighted=config.use_weighted_loss,
                                 num_nodes=train_dl.dataset[0].x.shape[0])
-            print("Using standard loss function- TRANSDUCTIVE VARIANT")
+            print("Using standard loss function - TRANSDUCTIVE VARIANT")
 
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
 
         print(f"Training method: {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'}")
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                              loss_fct=loss_fct,
-                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-4) if config.gnn_arch != "xgboost" else None,
+                                                             optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-3) if config.gnn_arch != "xgboost" else None,
                                                              train_dl=train_dl,
                                                              valid_dl=valid_dl,
                                                              device=device,
