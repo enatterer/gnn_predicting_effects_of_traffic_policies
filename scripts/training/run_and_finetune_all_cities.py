@@ -166,13 +166,13 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss_fct", type=str, default="mse")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False)
     parser.add_argument("--target_type", type=str, default="abs_vol_car")
-    parser.add_argument("--num_epochs", type=int, default=50)
-    parser.add_argument("--batch_size", type=int, default=8)
-    parser.add_argument("--peak_lr", type=float, default=0.0003)
-    parser.add_argument("--initial_lr", type=float, default=0.0001)
+    # parser.add_argument("--num_epochs", type=int, default=100)
+    # parser.add_argument("--batch_size", type=int, default=8)
+    # parser.add_argument("--peak_lr", type=float, default=0.0003)
     parser.add_argument("--warmup_fraction", type=float, default=0.1)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
+    # parser.add_argument("--initial_lr", type=float, default=0.0001)
     parser.add_argument("--early_stopping_patience", type=int, default=20)
     parser.add_argument("--use_dropout", type=str_to_bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.3)
@@ -205,6 +205,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--continue_training", type=str_to_bool, default=False)
     parser.add_argument("--base_checkpoint_path", type=str, default=None)
+    parser.add_argument("--run_peak_lr", type=float, default=0.0002)
+    parser.add_argument("--run_initial_lr", type=float, default=0.0001)
+    parser.add_argument("--run_num_epochs", type=int, default=40)
+    parser.add_argument("--run_limit_train_graphs", type=int, default=500)
+    parser.add_argument("--run_limit_val_graphs", type=int, default=100)
+    parser.add_argument("--run_limit_test_graphs", type=int, default=10)
 
     # ------------------------------------------------------------------
     # Arguments specific to finetune_models.py
@@ -218,6 +224,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False)
     parser.add_argument("--use_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--start_from_scratch", type=str_to_bool, default=False)
+    parser.add_argument("--finetune_peak_lr", type=float, default=0.0006)
+    parser.add_argument("--finetune_initial_lr", type=float, default=0.0003)
+    parser.add_argument("--finetune_num_epochs", type=int, default=100)
+    parser.add_argument("--finetune_limit_train_graphs", type=int, default=100)
+    parser.add_argument("--finetune_limit_val_graphs", type=int, default=20)
+    parser.add_argument("--finetune_limit_test_graphs", type=int, default=10)
 
     # ------------------------------------------------------------------
     # Orchestrator-specific arguments
@@ -240,78 +252,78 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional comma-separated subset of cities to run. Defaults to all.",
     )
-    parser.add_argument(
-        "--run_peak_lr",
-        type=float,
-        default=0.0002,
-        help="Override peak learning rate used for run_models.py (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--run_initial_lr",
-        type=float,
-        default=0.0001,
-        help="Override initial learning rate used for run_models.py (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--run_num_epochs",
-        type=int,
-        default=40,
-        help="Override number of epochs for run_models.py (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--run_limit_train_graphs",
-        type=int,
-        default=500,
-        help="Override for run_models.py --limit_train_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--run_limit_val_graphs",
-        type=int,
-        default=100,
-        help="Override for run_models.py --limit_val_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--run_limit_test_graphs",
-        type=int,
-        default=10,
-        help="Override for run_models.py --limit_test_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_limit_train_graphs",
-        type=int,
-        default=100,
-        help="Override for finetune_models.py --limit_train_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_limit_val_graphs",
-        type=int,
-        default=20,
-        help="Override for finetune_models.py --limit_val_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_limit_test_graphs",
-        type=int,
-        default=10,
-        help="Override for finetune_models.py --limit_test_graphs (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_peak_lr",
-        type=float,
-        default=0.0006,
-        help="Override peak learning rate used for finetune_models.py (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_initial_lr",
-        type=float,
-        default=0.0002,
-        help="Override initial learning rate used for finetune_models.py (defaults to shared value).",
-    )
-    parser.add_argument(
-        "--finetune_num_epochs",
-        type=int,
-        default=50,
-        help="Override number of epochs for finetune_models.py (defaults to shared value).",
-    )
+    # parser.add_argument(
+    #     "--run_peak_lr",
+    #     type=float,
+    #     default=0.0002,
+    #     help="Override peak learning rate used for run_models.py (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--run_initial_lr",
+    #     type=float,
+    #     default=0.0001,
+    #     help="Override initial learning rate used for run_models.py (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--run_num_epochs",
+    #     type=int,
+    #     default=40,
+    #     help="Override number of epochs for run_models.py (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--run_limit_train_graphs",
+    #     type=int,
+    #     default=500,
+    #     help="Override for run_models.py --limit_train_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--run_limit_val_graphs",
+    #     type=int,
+    #     default=100,
+    #     help="Override for run_models.py --limit_val_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--run_limit_test_graphs",
+    #     type=int,
+    #     default=10,
+    #     help="Override for run_models.py --limit_test_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_limit_train_graphs",
+    #     type=int,
+    #     default=100,
+    #     help="Override for finetune_models.py --limit_train_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_limit_val_graphs",
+    #     type=int,
+    #     default=20,
+    #     help="Override for finetune_models.py --limit_val_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_limit_test_graphs",
+    #     type=int,
+    #     default=10,
+    #     help="Override for finetune_models.py --limit_test_graphs (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_peak_lr",
+    #     type=float,
+    #     default=0.0006,
+    #     help="Override peak learning rate used for finetune_models.py (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_initial_lr",
+    #     type=float,
+    #     default=0.0002,
+    #     help="Override initial learning rate used for finetune_models.py (defaults to shared value).",
+    # )
+    # parser.add_argument(
+    #     "--finetune_num_epochs",
+    #     type=int,
+    #     default=50,
+    #     help="Override number of epochs for finetune_models.py (defaults to shared value).",
+    # )
 
     return parser
 
@@ -500,7 +512,9 @@ def main() -> None:
         shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
 
         finetune_args_checkpoint = dict(finetune_base_args)
-        finetune_args_checkpoint.update(shared_values)
+        for key, value in shared_values.items():
+            if key not in finetune_args_checkpoint or finetune_args_checkpoint[key] is None:
+                finetune_args_checkpoint[key] = value
         finetune_args_checkpoint["run_name"] = pretrain_run_name
         finetune_args_checkpoint["cities"] = test_city
         finetune_args_checkpoint["start_from_scratch"] = False
@@ -513,7 +527,9 @@ def main() -> None:
         print("-" * 80)
 
         finetune_args_scratch = dict(finetune_base_args)
-        finetune_args_scratch.update(shared_values)
+        for key, value in shared_values.items():
+            if key not in finetune_args_scratch or finetune_args_scratch[key] is None:
+                finetune_args_scratch[key] = value
         finetune_args_scratch["run_name"] = scratch_run_name
         finetune_args_scratch["cities"] = test_city
         finetune_args_scratch["start_from_scratch"] = True
