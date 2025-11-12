@@ -145,26 +145,16 @@ def main():
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
         # Optional: Subsample training graphs for faster iterations
-        if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(train_data['path']) > args['limit_available_graphs']:
-            import random as _rnd
-            indices = list(range(len(train_data['path'])))
-            _rnd.shuffle(indices)
-            keep = set(indices[:args['limit_available_graphs']])
-            for k in ['path','policy_region','scenario','city']:
-                train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
+        if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+            train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
 
         if args['use_inductive_variant']:
             if len(val_cities) > 0:
                 val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(val_cities):
                     load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(val_data['path']) > args['limit_available_graphs']:
-                    import random as _rnd
-                    indices = list(range(len(val_data['path'])))
-                    _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_available_graphs']])
-                    for k in ['path','policy_region','scenario','city']:
-                        val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
+                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+                    val_data = balanced_subset_by_city(val_data, args['limit_available_graphs'])
             else:
                 val_data = None
 
@@ -172,13 +162,8 @@ def main():
                 test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(test_cities):
                     load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(test_data['path']) > args['limit_available_graphs']:
-                    import random as _rnd
-                    indices = list(range(len(test_data['path'])))
-                    _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_available_graphs']])
-                    for k in ['path','policy_region','scenario','city']:
-                        test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
+                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+                    test_data = balanced_subset_by_city(test_data, args['limit_available_graphs'])
             else:
                 test_data = None
         else:
