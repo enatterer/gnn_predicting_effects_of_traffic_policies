@@ -38,13 +38,16 @@ from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss
 project_root = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
+# Use universal un-normalized data, any normalization will be handled during training
+dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
+
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
 train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
-val_cities =['rosenheim','landshut'] # Non empty implies inductive learning
-test_cities = ['schweinfurt'] # Non empty implies inductive learning
+val_cities =['rosenheim','landshut'] # Only used for inductive learning
+test_cities = ['schweinfurt'] # Only used for inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -119,15 +122,8 @@ def main():
     
     set_random_seeds()
     
-    if args['use_inductive_variant'] == False:
-        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt_norm')
-        default_project_name = "GNN_Transductive"
-    else:
-        dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
-        default_project_name = "GNN_Inductive"
-
     if args.get('project_name') is None:
-        args['project_name'] = default_project_name
+        args['project_name'] = "GNN_Inductive" if args['use_inductive_variant'] else "GNN_Transductive"
     
     try:
         

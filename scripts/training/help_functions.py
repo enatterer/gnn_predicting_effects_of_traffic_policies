@@ -15,6 +15,7 @@ from sklearn.preprocessing import StandardScaler
 
 import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import Subset
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -305,11 +306,19 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     
     print("Splitting into subsets...")
 
-    _, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
+    entire_set, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
                                                                          train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
     
-    combined_indices = train_set.indices + valid_set.indices
-    combined_train_val_set = torch.utils.data.Subset(train_set.dataset, combined_indices)
+    # TODO: Change if needed!
+    # Transductive: TRAIN + VAL + TEST Scaler
+    if use_inductive_variant == False:
+        combined_indices = train_set.indices + valid_set.indices + test_set.indices
+    
+    # Inductive: TRAIN + VAL Scaler (Just TRAIN would be pure inductive)
+    else:
+        combined_indices = train_set.indices + valid_set.indices
+    
+    combined_norm_set = Subset(entire_set, combined_indices)
     
     print(f"Split complete. Train: {len(train_set)}, Valid: {len(valid_set)}, Test: {len(test_set)}")
 
@@ -368,65 +377,28 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     print('Pos Rotation Augmentation:', aug_pos_rotation, 'Feature Noise Augmentation:', aug_feature_noise, 'Node Masking Probability:', aug_node_masking_probability)
     print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
 
-    # IF TRANSDUCTIVE
-    if use_inductive_variant == False:
-
-        print("Creating base train loader...")
-        base_train_loader = create_split_dataloader(data_subset=train_set,
-                                                    batch_size=batch_size,
-                                                    use_weighted_batches=use_weighted_batches,
-                                                    # Uses conditional augmentation
-                                                    collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
-
-        if len(valid_set) > 0:
-            print("Creating validation loader...")
-            val_loader = create_split_dataloader(data_subset=valid_set,
-                                                 batch_size=batch_size,
-                                                 use_weighted_batches=use_weighted_batches,
-                                                 collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
-        else:
-            print("Validation subset empty; skipping validation loader.")
-            val_loader = None
-
-        if len(test_set) > 0:
-            print("Creating test loader...")
-            test_loader = create_split_dataloader(data_subset=test_set,
-                                                  batch_size=batch_size,
-                                                  use_weighted_batches=use_weighted_batches,
-                                                  collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
-            save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-            save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-            print("Test Dataloader saved since Transductive Variant. No scalers needed.")
-        else:
-            print("Test subset empty; skipping test loader.")
-
-        print("Loaders created")
-        
-    else:
-        
-        # TODO: WHY?
-        # ✅ FIX: Use training+val scaler for all splits
-        print("Normalizing train set...")
-        train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_train_val_set)
-        print("Train set normalized")      
-        
-        print("Normalizing validation set with TRAINING scaler...")
-        valid_set_normalized = normalize_dataset_with_scaler(dataset_input=valid_set, scalers=scalers_train)
-        print("Validation set normalized")
-        
-        print("Normalizing test set with TRAINING scaler...")
-        test_set_normalized = normalize_dataset_with_scaler(dataset_input=test_set, scalers=scalers_train)
-        print("Test set normalized")
-        
-        print("Creating train loader...")
-        base_train_loader = create_split_dataloader(
-            data_subset=train_set_normalized,
-            batch_size=batch_size,
-            use_weighted_batches=use_weighted_batches,
-            # Uses conditional augmentation
-            collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
-        print("Train loader created")
-        
+    print("Normalizing train set...")
+    train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_norm_set)
+    print("Train set normalized")      
+    
+    print("Normalizing validation set ...")
+    valid_set_normalized = normalize_dataset_with_scaler(dataset_input=valid_set, scalers=scalers_train)
+    print("Validation set normalized")
+    
+    print("Normalizing test set ...")
+    test_set_normalized = normalize_dataset_with_scaler(dataset_input=test_set, scalers=scalers_train)
+    print("Test set normalized")
+    
+    print("Creating train loader...")
+    base_train_loader = create_split_dataloader(
+        data_subset=train_set_normalized,
+        batch_size=batch_size,
+        use_weighted_batches=use_weighted_batches,
+        # Uses conditional augmentation
+        collate_fn_type=collate_fn_with_no_aug if use_nested_neighbor_loader else collate_fn_with_aug)
+    print("Train loader created")
+    
+    if len(valid_set_normalized) > 0:
         print("Creating validation loader...")
         val_loader = create_split_dataloader(
             data_subset=valid_set_normalized,
@@ -434,21 +406,31 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
             use_weighted_batches=use_weighted_batches,
             collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
         print("Validation loader created")
-        
+    else:
+        val_loader = None
+        print("Validation subset empty; skipping validation loader.")
+    
+    if len(test_set_normalized) > 0:
         print("Creating test loader...")
         test_loader = create_split_dataloader(
             data_subset=test_set_normalized,
             batch_size=batch_size,
             use_weighted_batches=use_weighted_batches,
             collate_fn_type=collate_fn_with_no_aug)  # Always without augmentation
+        
+        if use_inductive_variant == False:
+            save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
+            save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
+            print("Test Dataloader saved since Transductive Variant.")
+        
         print("Test loader created")
-        
-        # ONLY SAVE TRAINING SCALERS (validation/test use same scalers)
-        joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
-        
-        # save_dataloader(test_loader, path_to_save_dataloader + 'test_dl.pt')
-        # save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
-        print("Test dataloader NOT saved since Inductive Variant. Scalers are saved.")
+    else:
+        test_loader = None
+        print("Test subset empty; skipping test loader.")
+    
+    # SAVE SCALERS
+    joblib.dump(scalers_train['x_scaler'], os.path.join(path_to_save_dataloader, 'train_x_scaler.pkl'))
+    print("Scaler saved!")
     
     if use_nested_neighbor_loader:
         train_loader = nested_dataloader(
