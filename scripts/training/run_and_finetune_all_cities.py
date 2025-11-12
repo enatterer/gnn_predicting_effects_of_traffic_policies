@@ -35,7 +35,6 @@ from training.help_functions import str_to_bool  # noqa: E402
 
 # Global city pool used for all splits.
 ALL_CITIES: Sequence[str] = (
-    "wuerzburg",
     "aschaffenburg",
     "regensburg",
     "landshut",
@@ -51,6 +50,7 @@ ALL_CITIES: Sequence[str] = (
     "bamberg",
     "nuernberg",
     "ingolstadt",
+    "wuerzburg",
 )
 
 # Argument names for each script (matching their respective parsers).
@@ -422,15 +422,15 @@ def main() -> None:
         remaining_cities = [city for city in city_sequence if city != test_city]
         train_cities, val_cities = split_cities(rng, remaining_cities, args.train_fraction)
 
-        pretrain_run_name = f"pretrain_{test_city}"
+        pretrain_run_name = f"pretrain_without_{test_city}"
         finetune_run_name = f"finetune_{test_city}"
-        scratch_run_name = f"run_without_pretrain_{test_city}"
+        scratch_run_name = f"run_from_scratch_{test_city}"
 
         print("=" * 80)
         print(f"[{idx}/{len(city_sequence)}] Test city: {test_city}")
         print(f"Train cities ({len(train_cities)}): {train_cities}")
         print(f"Validation cities ({len(val_cities)}): {val_cities}")
-        print(f"Pretraining run name: {pretrain_run_name}")
+        print(f"Pretraining (without test city) run name: {pretrain_run_name}")
         print("=" * 80)
 
         run_args = dict(run_base_args)

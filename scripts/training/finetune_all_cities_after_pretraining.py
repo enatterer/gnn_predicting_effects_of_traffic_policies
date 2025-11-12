@@ -344,7 +344,7 @@ def pretrain_checkpoint_path(
     project_name: str,
     city: str,
 ) -> Path:
-    run_name = f"pretrain_{city}"
+    run_name = f"pretrain_without_{city}"
     return results_dir / project_name / run_name / "trained_model" / "model.pth"
 
 
@@ -433,7 +433,7 @@ def main() -> None:
         print(f"[{idx}/{len(city_sequence)}] Test city: {test_city}")
         print(f"Train cities ({len(train_cities)}): {train_cities}")
         print(f"Validation cities ({len(val_cities)}): {val_cities}")
-        print(f"Pretraining run name: pretrain_{test_city}")
+        print(f"Pretraining (without test city) run name: pretrain_without_{test_city}")
         print("=" * 80)
 
         if test_city not in existing_pretrain_cities:
@@ -452,7 +452,7 @@ def main() -> None:
         if finetune_args_checkpoint.get("pretraining_inductive") is None:
             finetune_args_checkpoint["pretraining_inductive"] = args.use_inductive_variant
 
-        pretrain_run_name = f"pretrain_{test_city}"
+        pretrain_run_name = f"pretrain_without_{test_city}"
         finetune_run_name = f"finetune_{test_city}"
 
         finetune_args_checkpoint["run_name"] = pretrain_run_name
@@ -463,7 +463,7 @@ def main() -> None:
         call_finetune_models(finetune_args_checkpoint)
 
         print("-" * 80)
-        print(f"Comparison finetune from scratch: run_without_pretrain_{test_city}")
+        print(f"Comparison finetune from scratch: run_from_scratch_{test_city}")
         print("-" * 80)
 
         finetune_args_scratch = dict(finetune_base_args)
@@ -476,7 +476,7 @@ def main() -> None:
         if finetune_args_scratch.get("pretraining_inductive") is None:
             finetune_args_scratch["pretraining_inductive"] = args.use_inductive_variant
 
-        scratch_run_name = f"run_without_pretrain_{test_city}"
+        scratch_run_name = f"run_from_scratch_{test_city}"
 
         finetune_args_scratch["run_name"] = scratch_run_name
         finetune_args_scratch["cities"] = test_city
