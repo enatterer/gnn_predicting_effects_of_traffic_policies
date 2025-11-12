@@ -8,3 +8,4 @@ scripts/evaluation/results/
 inductive_gnn_data_results/*
 data
 scripts/visualization/plots/*
+scripts/training/run_and_finetune_all_cities.log
