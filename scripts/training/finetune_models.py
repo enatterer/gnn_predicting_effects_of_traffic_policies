@@ -127,9 +127,13 @@ def main():
     elif 'neighbor_sizes' not in args:
         args['neighbor_sizes'] = [5, 5, 5]  # Default value
     
-    # Set unique_model_description if not provided
-    if args['unique_model_description'] is None:
-        args['unique_model_description'] = f"{args['run_name']}_finetuned"
+    variant_label = args['unique_model_description']
+    args['unique_model_description'] = build_unique_model_description(
+        run_name=args['run_name'],
+        cities=cities,
+        start_from_scratch=args['start_from_scratch'],
+        run_variant=variant_label,
+    )
     
     set_random_seeds()
     

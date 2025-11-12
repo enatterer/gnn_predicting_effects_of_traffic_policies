@@ -8,6 +8,7 @@ import subprocess
 from collections import defaultdict
 from pathlib import Path
 from functools import partial
+from typing import Optional
 
 import wandb
 import numpy as np
@@ -113,6 +114,49 @@ def get_paths(base_dir: str, unique_model_description: str, model_save_path: str
     os.makedirs(os.path.dirname(model_save_to), exist_ok=True)
     os.makedirs(path_to_save_dataloader, exist_ok=True)
     return model_save_to, path_to_save_dataloader
+
+
+def _sanitize_string_fragment(value: str) -> str:
+    """Return a filesystem and logging friendly fragment."""
+    return (
+        str(value)
+        .replace(" ", "-")
+        .replace("/", "-")
+        .replace("\\", "-")
+    )
+
+
+def build_unique_model_description(
+    run_name: str,
+    cities,
+    start_from_scratch: bool,
+    run_variant: Optional[str] = None,
+) -> str:
+    """
+    Compose a unique model description that records city coverage, whether the run
+    reuses checkpoints, and the parent run name.
+    """
+    if isinstance(cities, str):
+        city_list = [c.strip() for c in cities.split(",") if c.strip()]
+    else:
+        city_list = [str(city).strip() for city in cities if str(city).strip()]
+
+    if not city_list:
+        city_list = ["unknown-city"]
+
+    sanitized_cities = "-".join(_sanitize_string_fragment(city) for city in city_list)
+    variant_fragment = _sanitize_string_fragment(
+        run_variant if run_variant is not None else ("finetune" if not start_from_scratch else "scratch")
+    )
+    parent_fragment = _sanitize_string_fragment(run_name or "unknown-parent")
+
+    fragments = [
+        variant_fragment,
+        sanitized_cities,
+        f"parent-{parent_fragment}",
+    ]
+
+    return "__".join(fragment for fragment in fragments if fragment)
 
 # TODO: Validate Pass by Reference 
 def load_metadata_from_disk(data, metadata_path):
