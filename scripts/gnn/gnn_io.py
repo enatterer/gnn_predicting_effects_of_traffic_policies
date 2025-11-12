@@ -3,6 +3,7 @@ import sys
 import json
 import math
 import random
+from collections import Counter
 from functools import lru_cache
 import os
 from pathlib import Path
@@ -118,10 +119,20 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
     train_subset = Subset(dataset, train_indices)
     val_subset = Subset(dataset, val_indices)
     test_subset = Subset(dataset, test_indices)
+
+    def _log_split_details(name, indices, subset_labels):
+        subset_cities = [dataset.labels[i].split('_', 1)[0] for i in indices]
+        city_counts = Counter(subset_cities)
+        print(f"[DEBUG] {name} subset label counts (total {len(indices)}):")
+        for city, count in sorted(city_counts.items()):
+            print(f"  {city}: {count}")
     
     print(f"Training subset length: {len(train_subset)}")
     print(f"Validation subset length: {len(val_subset)}")
     print(f"Test subset length: {len(test_subset)}")
+    _log_split_details("Train", train_indices, train_labels if 'train_labels' in locals() else labels)
+    _log_split_details("Validation", val_indices, labels)
+    _log_split_details("Test", test_indices, labels)
     
     return dataset, train_subset, val_subset, test_subset
 

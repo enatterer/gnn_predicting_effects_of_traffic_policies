@@ -5,6 +5,7 @@ import random
 import json
 import joblib
 import subprocess
+from collections import defaultdict
 from pathlib import Path
 from functools import partial
 
@@ -132,6 +133,42 @@ def load_metadata_from_disk(data, metadata_path):
     data['policy_region'].extend(city_data['policy_region'])
     data['scenario'].extend(city_data['scenario'])
     data['city'].extend(city_data['city'])
+
+def balanced_subset_by_city(data_dict, limit, seed=42):
+    """Return a city-balanced subset of the data_dict limited to `limit` items."""
+    total_items = len(data_dict['path'])
+    if limit <= 0 or total_items <= limit:
+        return data_dict
+
+    rng = random.Random(seed)
+    city_to_indices = defaultdict(list)
+    for idx, city in enumerate(data_dict['city']):
+        city_to_indices[city].append(idx)
+
+    for indices in city_to_indices.values():
+        rng.shuffle(indices)
+
+    selected_indices = []
+    cities = list(city_to_indices.keys())
+    rng.shuffle(cities)
+
+    while len(selected_indices) < limit and cities:
+        next_round_cities = []
+        for city in cities:
+            indices = city_to_indices[city]
+            if indices:
+                selected_indices.append(indices.pop())
+                if len(selected_indices) >= limit:
+                    break
+            if indices:
+                next_round_cities.append(city)
+        cities = next_round_cities
+
+    selected_indices_set = set(selected_indices)
+    balanced_data = {k: [v[i] for i in range(total_items) if i in selected_indices_set]
+                     for k, v in data_dict.items()}
+    print(f"[DEBUG] Applied city-balanced cap to {total_items} → {len(selected_indices_set)} samples.")
+    return balanced_data
 
 def setup_wandb(args):
     wandb.login()
