@@ -169,16 +169,17 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup_fraction", type=float, default=0.1)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
-    parser.add_argument("--early_stopping_patience", type=int, default=20)
+    parser.add_argument("--early_stopping_patience", type=int, default=40)
     parser.add_argument("--use_dropout", type=str_to_bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.3)
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=3)
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
     parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True)
     parser.add_argument("--device_nr", type=int, default=0)
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False)
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5")
     parser.add_argument("--subgraphs_per_graph", type=int, default=2)
     parser.add_argument("--seed_size", type=int, default=10)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--sampling_strategy",
         type=str,
@@ -201,12 +202,12 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--continue_training", type=str_to_bool, default=False)
     parser.add_argument("--base_checkpoint_path", type=str, default=None)
-    parser.add_argument("--run_peak_lr", type=float, default=0.001)
-    parser.add_argument("--run_initial_lr", type=float, default=0.0003)
-    parser.add_argument("--run_num_epochs", type=int, default=200)
-    parser.add_argument("--run_limit_train_graphs", type=int, default=500)
-    parser.add_argument("--run_limit_val_graphs", type=int, default=100)
-    parser.add_argument("--run_limit_test_graphs", type=int, default=10)
+    parser.add_argument("--run_peak_lr", type=float, default=0.002)
+    parser.add_argument("--run_initial_lr", type=float, default=0.0005)
+    parser.add_argument("--run_num_epochs", type=int, default=500)
+    parser.add_argument("--run_limit_train_graphs", type=int, default=5000)
+    parser.add_argument("--run_limit_val_graphs", type=int, default=0) # Small thing to know: the split into train/val/test is done in the run_models.py script, so we don't need to specify it here.
+    parser.add_argument("--run_limit_test_graphs", type=int, default=0) # Small thing to know: the split into train/val/test is done in the run_models.py script, so we don't need to specify it here.
 
     # ------------------------------------------------------------------
     # Arguments specific to finetune_models.py
@@ -224,10 +225,10 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Set to True if finetuning should load inductive pretraining checkpoints, False for transductive. Defaults to the value used in run_models.")
     parser.add_argument("--finetune_peak_lr", type=float, default=0.001)
     parser.add_argument("--finetune_initial_lr", type=float, default=0.0005)
-    parser.add_argument("--finetune_num_epochs", type=int, default=200)
-    parser.add_argument("--finetune_limit_train_graphs", type=int, default=100)
-    parser.add_argument("--finetune_limit_val_graphs", type=int, default=20)
-    parser.add_argument("--finetune_limit_test_graphs", type=int, default=10)
+    parser.add_argument("--finetune_num_epochs", type=int, default=500)
+    parser.add_argument("--finetune_limit_train_graphs", type=int, default=48)
+    parser.add_argument("--finetune_limit_val_graphs", type=int, default=12) # Here, we do need to specify it. 
+    parser.add_argument("--finetune_limit_test_graphs", type=int, default=0) # Here, we do need to specify it. 
 
     # ------------------------------------------------------------------
     # Orchestrator-specific arguments
