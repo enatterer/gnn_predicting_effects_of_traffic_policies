@@ -45,9 +45,9 @@ dataset_path = os.path.join(project_root, 'data','inductive_data','training_data
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['wuerzburg','aschaffenburg','regensburg','bayreuth']
-val_cities =['rosenheim','landshut'] # Only used for inductive learning
-test_cities = ['schweinfurt'] # Only used for inductive learning
+train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg','bayreuth','fuerth','kempten','neuulm','augsburg','rosenheim','nuernberg', 'ingolstadt']
+val_cities =[] # Non empty implies inductive learning
+test_cities = ['muenchen', 'neuulm', 'erlangen', 'bamberg'] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -58,7 +58,7 @@ def main():
                         help="Whether to perform inductive or transductive training.")
     parser.add_argument("--project_name", type=str, default=None,
                         help="Override for project directory/WandB project. Defaults automatically based on use_inductive_variant.")
-    parser.add_argument("--unique_model_description", type=str, default="trans_conv_5_features_16_cities",
+    parser.add_argument("--unique_model_description", type=str, default="trans_encoder_5_features_15_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features or 5 core features.")
@@ -75,16 +75,16 @@ def main():
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
-    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs to train for.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--num_epochs", type=int, default=500, help="Number of epochs to train for.")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     
     #parameters for the learning rate scheduler
-    parser.add_argument("--peak_lr", type=float, default=0.0003, help="The peak learning rate (after warmup) from which decay will occur.")
-    parser.add_argument("--initial_lr", type=float, default=0.0001, help="The initial learning rate from which training will start (used during warmup).")
-    parser.add_argument("--warmup_fraction", type=float, default=0.15, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
+    parser.add_argument("--peak_lr", type=float, default=0.003, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.001, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--warmup_fraction", type=float, default=0.1, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
-    parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
+    parser.add_argument("--early_stopping_patience", type=int, default=40, help="The early stopping patience.")
     
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
@@ -110,9 +110,7 @@ def main():
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
 
     # Fast-iteration: optionally cap dataset sizes per split (random subsample)
-    parser.add_argument("--limit_train_graphs", type=int, default=0, help="If >0, randomly keep only this many training graphs after reading metadata.")
-    parser.add_argument("--limit_val_graphs", type=int, default=0, help="If >0, randomly keep only this many validation graphs after reading metadata.")
-    parser.add_argument("--limit_test_graphs", type=int, default=0, help="If >0, randomly keep only this many test graphs after reading metadata.")
+    parser.add_argument("--limit_available_graphs", type=int, default=0, help="If >0, randomly keep only this many available graphs after reading metadata (applies before splitting into train/val/test).")
 
     args = vars(parser.parse_args())
     
@@ -147,11 +145,11 @@ def main():
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
         # Optional: Subsample training graphs for faster iterations
-        if args.get('limit_train_graphs', 0) and args['limit_train_graphs'] > 0 and len(train_data['path']) > args['limit_train_graphs']:
+        if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(train_data['path']) > args['limit_available_graphs']:
             import random as _rnd
             indices = list(range(len(train_data['path'])))
             _rnd.shuffle(indices)
-            keep = set(indices[:args['limit_train_graphs']])
+            keep = set(indices[:args['limit_available_graphs']])
             for k in ['path','policy_region','scenario','city']:
                 train_data[k] = [train_data[k][i] for i in range(len(indices)) if i in keep]
 
@@ -160,11 +158,11 @@ def main():
                 val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(val_cities):
                     load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_val_graphs', 0) and args['limit_val_graphs'] > 0 and len(val_data['path']) > args['limit_val_graphs']:
+                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(val_data['path']) > args['limit_available_graphs']:
                     import random as _rnd
                     indices = list(range(len(val_data['path'])))
                     _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_val_graphs']])
+                    keep = set(indices[:args['limit_available_graphs']])
                     for k in ['path','policy_region','scenario','city']:
                         val_data[k] = [val_data[k][i] for i in range(len(indices)) if i in keep]
             else:
@@ -174,11 +172,11 @@ def main():
                 test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(test_cities):
                     load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_test_graphs', 0) and args['limit_test_graphs'] > 0 and len(test_data['path']) > args['limit_test_graphs']:
+                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0 and len(test_data['path']) > args['limit_available_graphs']:
                     import random as _rnd
                     indices = list(range(len(test_data['path'])))
                     _rnd.shuffle(indices)
-                    keep = set(indices[:args['limit_test_graphs']])
+                    keep = set(indices[:args['limit_available_graphs']])
                     for k in ['path','policy_region','scenario','city']:
                         test_data[k] = [test_data[k][i] for i in range(len(indices)) if i in keep]
             else:
