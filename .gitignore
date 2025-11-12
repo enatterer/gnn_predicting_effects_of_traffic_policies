@@ -7,3 +7,4 @@ scripts/evaluation/results/
 .vscode/
 inductive_gnn_data_results/*
 data
+scripts/visualization/plots/*
