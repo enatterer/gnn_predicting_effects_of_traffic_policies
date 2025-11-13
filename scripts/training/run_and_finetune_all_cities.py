@@ -35,7 +35,6 @@ from training.help_functions import str_to_bool  # noqa: E402
 
 # Global city pool used for all splits.
 ALL_CITIES: Sequence[str] = (
-    "aschaffenburg",
     "regensburg",
     "landshut",
     "bayreuth",
@@ -51,6 +50,7 @@ ALL_CITIES: Sequence[str] = (
     "nuernberg",
     "ingolstadt",
     "wuerzburg",
+    "aschaffenburg",
 )
 
 # Argument names for each script (matching their respective parsers).
@@ -167,7 +167,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--warmup_fraction", type=float, default=0.05)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
-    parser.add_argument("--early_stopping_patience", type=int, default=40)
+    parser.add_argument("--early_stopping_patience", type=int, default=30)
     parser.add_argument("--use_dropout", type=str_to_bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -177,7 +177,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5")
     parser.add_argument("--subgraphs_per_graph", type=int, default=2)
     parser.add_argument("--seed_size", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=256)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--sampling_strategy",
         type=str,

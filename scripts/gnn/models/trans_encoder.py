@@ -27,8 +27,8 @@ class TransEncoder(BaseGNN):
                  use_target_standardization: bool = False,
 
                  # Transformer Parameters
-                 ff_dim: int = 512,
-                 num_layers: int = 5,
+                 ff_dim: int = 256,
+                 num_layers: int = 3,
                  num_heads: int = 4, # Also for GNN
                  
                  # GNN Parameters
@@ -42,7 +42,7 @@ class TransEncoder(BaseGNN):
                  # POSITIONAL ENCODING PARAMETERS
                  use_pos: bool = True,
                  pos_dim: int = 6,
-                 use_lap_pe: bool = True,
+                 use_lap_pe: bool = False,
                  lap_pe_dim: int = 8):
 
         # Calculate effective input channels
@@ -239,23 +239,17 @@ class TransEncoder(BaseGNN):
         else:
             raise ValueError("Input data must be a Batch or Data object")
 
-        x_list = [d.x for d in datalist] # Each [num_nodes_i, in_dim]
-        lengths = [x.size(0) for x in x_list]
+        outputs = []
+        for graph_data in datalist:
+            x = graph_data.x.unsqueeze(0)  # [1, num_nodes, embed_dim]
 
-        # Pad for batching
-        x_padded = pad_sequence(x_list, batch_first=True)    # [B, max_nodes, in_dim]
-        mask = torch.arange(x_padded.size(1))[None, :] >= torch.tensor(lengths)[:, None]
-        mask = mask.bool().to(x_padded.device)
+            if not self.use_graph_conv:
+                x = self.embed(x.to(self.dtype))
 
-        if not self.use_graph_conv:
-            x_padded = x_padded.to(self.dtype)
-            x_padded = self.embed(x_padded)
+            out_graph = self.transformer(x).squeeze(0)
+            outputs.append(out_graph)
 
-        # Transformer forward
-        out_padded = self.transformer(x_padded, src_key_padding_mask=mask)
-        
-        # Unpad to get per-graph outputs
-        out = torch.cat([o[:l] for o, l in zip(out_padded, lengths)], dim=0)
+        out = torch.cat(outputs, dim=0)
         
         out = self.output(out)
         return out.reshape(-1, 1)
