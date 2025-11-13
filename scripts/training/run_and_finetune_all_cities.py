@@ -94,9 +94,7 @@ RUN_MODELS_ARGS = [
     "aug_pos_rotation",
     "aug_feature_noise",
     "aug_node_masking_probability",
-    "limit_train_graphs",
-    "limit_val_graphs",
-    "limit_test_graphs",
+    "limit_available_graphs",
 ]
 
 FINETUNE_ARGS = [
@@ -166,7 +164,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss_fct", type=str, default="mse")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False)
     parser.add_argument("--target_type", type=str, default="abs_vol_car")
-    parser.add_argument("--warmup_fraction", type=float, default=0.1)
+    parser.add_argument("--warmup_fraction", type=float, default=0.05)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
     parser.add_argument("--early_stopping_patience", type=int, default=40)
@@ -179,7 +177,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5")
     parser.add_argument("--subgraphs_per_graph", type=int, default=2)
     parser.add_argument("--seed_size", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=256)
     parser.add_argument(
         "--sampling_strategy",
         type=str,
@@ -202,12 +200,15 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--continue_training", type=str_to_bool, default=False)
     parser.add_argument("--base_checkpoint_path", type=str, default=None)
-    parser.add_argument("--run_peak_lr", type=float, default=0.002)
+    parser.add_argument("--run_peak_lr", type=float, default=0.001)
     parser.add_argument("--run_initial_lr", type=float, default=0.0005)
-    parser.add_argument("--run_num_epochs", type=int, default=500)
-    parser.add_argument("--run_limit_train_graphs", type=int, default=5000)
-    parser.add_argument("--run_limit_val_graphs", type=int, default=0) # Small thing to know: the split into train/val/test is done in the run_models.py script, so we don't need to specify it here.
-    parser.add_argument("--run_limit_test_graphs", type=int, default=0) # Small thing to know: the split into train/val/test is done in the run_models.py script, so we don't need to specify it here.
+    parser.add_argument("--run_num_epochs", type=int, default=400)
+    parser.add_argument(
+        "--run_limit_available_graphs",
+        type=int,
+        default=5000,
+        help="Optional cap applied inside run_models to train/val/test graph pools (matches --limit_available_graphs).",
+    )
 
     # ------------------------------------------------------------------
     # Arguments specific to finetune_models.py
@@ -225,7 +226,7 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Set to True if finetuning should load inductive pretraining checkpoints, False for transductive. Defaults to the value used in run_models.")
     parser.add_argument("--finetune_peak_lr", type=float, default=0.001)
     parser.add_argument("--finetune_initial_lr", type=float, default=0.0005)
-    parser.add_argument("--finetune_num_epochs", type=int, default=500)
+    parser.add_argument("--finetune_num_epochs", type=int, default=400)
     parser.add_argument("--finetune_limit_train_graphs", type=int, default=48)
     parser.add_argument("--finetune_limit_val_graphs", type=int, default=12) # Here, we do need to specify it. 
     parser.add_argument("--finetune_limit_test_graphs", type=int, default=0) # Here, we do need to specify it. 
@@ -370,21 +371,10 @@ def main() -> None:
 
     run_base_args["neighbor_sizes"] = neighbor_sizes
     finetune_base_args["neighbor_sizes"] = neighbor_sizes
-    run_base_args["limit_train_graphs"] = (
-        args.run_limit_train_graphs
-        if args.run_limit_train_graphs is not None
-        else getattr(args, "limit_train_graphs", 0)
-    )
-    run_base_args["limit_val_graphs"] = (
-        args.run_limit_val_graphs
-        if args.run_limit_val_graphs is not None
-        else getattr(args, "limit_val_graphs", 0)
-    )
-    run_base_args["limit_test_graphs"] = (
-        args.run_limit_test_graphs
-        if args.run_limit_test_graphs is not None
-        else getattr(args, "limit_test_graphs", 0)
-    )
+    effective_limit = args.run_limit_available_graphs
+    if effective_limit is None:
+        effective_limit = 0
+    run_base_args["limit_available_graphs"] = effective_limit
 
     finetune_base_args["limit_train_graphs"] = (
         args.finetune_limit_train_graphs
