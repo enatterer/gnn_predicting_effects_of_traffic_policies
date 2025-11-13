@@ -79,8 +79,8 @@ def main():
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     
     #parameters for the learning rate scheduler
-    parser.add_argument("--peak_lr", type=float, default=0.003, help="The peak learning rate (after warmup) from which decay will occur.")
-    parser.add_argument("--initial_lr", type=float, default=0.001, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--peak_lr", type=float, default=0.001, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.0005, help="The initial learning rate from which training will start (used during warmup).")
     parser.add_argument("--warmup_fraction", type=float, default=0.1, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
