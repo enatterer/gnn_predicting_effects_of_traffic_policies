@@ -39,7 +39,7 @@ project_root = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
 # Use universal un-normalized data, any normalization will be handled during training
-dataset_path = os.path.join(project_root, 'data','inductive_data','training_data','kreisfreistadt')
+dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','training_data','kreisfreistadt')
 
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
