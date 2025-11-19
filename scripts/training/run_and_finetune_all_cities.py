@@ -252,6 +252,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional comma-separated subset of cities to run. Defaults to all.",
     )
+    parser.add_argument(
+        "--skip_pretraining",
+        type=str_to_bool,
+        default=False,
+        help="Skip the run_models pretraining stage and only launch finetuning scripts. Assumes checkpoints already exist for the specified run names.",
+    )
     return parser
 
 
@@ -433,7 +439,10 @@ def main() -> None:
         run_args = dict(run_base_args)
         run_args["unique_model_description"] = pretrain_run_name
 
-        call_run_models(run_args, train_cities, val_cities, [test_city])
+        if not args.skip_pretraining:
+            call_run_models(run_args, train_cities, val_cities, [test_city])
+        else:
+            print("[skip_pretraining] Skipping call_run_models; expecting existing checkpoint.")
 
         shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
 

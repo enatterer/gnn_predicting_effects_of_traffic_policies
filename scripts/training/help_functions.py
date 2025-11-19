@@ -144,17 +144,25 @@ def build_unique_model_description(
     if not city_list:
         city_list = ["unknown-city"]
 
-    sanitized_cities = "-".join(_sanitize_string_fragment(city) for city in city_list)
+    sanitized_cities_list = [_sanitize_string_fragment(city) for city in city_list]
+    sanitized_cities = "-".join(sanitized_cities_list)
     variant_fragment = _sanitize_string_fragment(
         run_variant if run_variant is not None else ("finetune" if not start_from_scratch else "scratch")
     )
     parent_fragment = _sanitize_string_fragment(run_name or "unknown-parent")
 
-    fragments = [
+    include_city_fragment = bool(sanitized_cities)
+    if include_city_fragment and variant_fragment:
+        # If every city string already appears inside the variant fragment, avoid duplicating it.
+        lowered_variant = variant_fragment.lower()
+        if all(city and city.lower() in lowered_variant for city in sanitized_cities_list):
+            include_city_fragment = False
+
+    fragments = [fragment for fragment in (
         variant_fragment,
-        sanitized_cities,
+        sanitized_cities if include_city_fragment else "",
         f"parent-{parent_fragment}",
-    ]
+    ) if fragment]
 
     return "__".join(fragment for fragment in fragments if fragment)
 

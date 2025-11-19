@@ -35,7 +35,7 @@ project_root = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
 # Please adjust as needed
-base_dir = (project_root / 'inductive_gnn_data_results' / 'transductive')
+base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 def main():
     parser = argparse.ArgumentParser(description="Finetune a pre-trained GNN model on new cities.")
@@ -141,11 +141,8 @@ def main():
     # Dataset and results directory selection
     # -------------------------------------------------------------------
     try:
-        if args['pretraining_inductive']:
-            dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt'
-        else:
-            dataset_path = DATA_DIR / 'inductive_data' / 'training_data' / 'kreisfreistadt_norm'
-        base_dir = project_root / 'inductive_gnn_data_results' / 'transductive'
+        dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','training_data','kreisfreistadt')
+        base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive')
         if args['project_name'] is None:
             args['project_name'] = 'GNN_Inductive' if args['pretraining_inductive'] else 'GNN_Transductive'
     except Exception as e:
