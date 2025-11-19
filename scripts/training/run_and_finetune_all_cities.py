@@ -410,7 +410,14 @@ def main() -> None:
 
     for idx, test_city in enumerate(city_sequence, start=1):
         remaining_cities = [city for city in city_sequence if city != test_city]
-        train_cities, val_cities = split_cities(rng, remaining_cities, args.train_fraction)
+        
+        # In transductive mode, use all remaining cities for train (val/test will be split from these graphs)
+        # In inductive mode, split cities into train/val lists
+        if run_base_args.get("use_inductive_variant", True) == False:
+            train_cities = remaining_cities
+            val_cities = []
+        else:
+            train_cities, val_cities = split_cities(rng, remaining_cities, args.train_fraction)
 
         pretrain_run_name = f"pretrain_without_{test_city}"
         finetune_run_name = f"finetune_{test_city}"
