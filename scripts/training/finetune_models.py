@@ -233,16 +233,12 @@ def main():
             # Ensure we don't exceed available data
             total_needed = limit_train + limit_val + limit_test
             if total_needed > len(indices):
-                print(f"Warning: Requested {limit_train} train + {limit_val} val + {limit_test} test = {total_needed} graphs, but only {len(indices)} available.")
-                remaining = len(indices) - limit_train
-                if limit_val > remaining:
-                    limit_val = remaining
-                    limit_test = 0
-                else:
-                    remaining -= limit_val
-                    if limit_test > remaining:
-                        limit_test = remaining
-                print(f"Adjusting: train={limit_train}, val={limit_val}, test={limit_test}")
+                cities_str = ', '.join(train_cities)
+                raise ValueError(
+                    f"Insufficient data for cities {cities_str}: "
+                    f"Requested {limit_train} train + {limit_val} val + {limit_test} test = {total_needed} graphs, "
+                    f"but only {len(indices)} available. Skipping this city."
+                )
             
             # Split indices - these are the shuffled positions
             train_indices = indices[:limit_train]  # First N indices for training

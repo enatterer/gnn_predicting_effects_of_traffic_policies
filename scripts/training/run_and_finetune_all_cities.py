@@ -457,7 +457,15 @@ def main() -> None:
         finetune_args_checkpoint["start_from_scratch"] = False
         finetune_args_checkpoint["unique_model_description"] = finetune_run_name
 
-        call_finetune_models(finetune_args_checkpoint)
+        try:
+            call_finetune_models(finetune_args_checkpoint)
+        except ValueError as e:
+            if "Insufficient data" in str(e):
+                print(f"SKIPPING {test_city}: {e}")
+                print("Continuing to next city...")
+                continue
+            else:
+                raise
 
         print("-" * 80)
         print(f"Comparison finetune from scratch: {scratch_run_name}")
@@ -474,7 +482,15 @@ def main() -> None:
         finetune_args_scratch["start_from_scratch"] = True
         finetune_args_scratch["unique_model_description"] = scratch_run_name
 
-        call_finetune_models(finetune_args_scratch)
+        try:
+            call_finetune_models(finetune_args_scratch)
+        except ValueError as e:
+            if "Insufficient data" in str(e):
+                print(f"SKIPPING {test_city} (scratch run): {e}")
+                print("Continuing to next city...")
+                continue
+            else:
+                raise
 
 
 if __name__ == "__main__":
