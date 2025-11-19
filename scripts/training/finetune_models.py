@@ -42,12 +42,16 @@ def main():
     
     # Required arguments
     parser.add_argument("--run_name", type=str, required=True,
-                        help="Name of the original training run (e.g., 'base_run').")
+                        help="Name for this finetuning run (used for saving the finetuned model).")
     parser.add_argument("--gnn_arch", type=str, required=True,
                         help="The GNN architecture to use (must match the original model).",
                         choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost", "trans_encoder"])
     parser.add_argument("--cities", type=str, required=True,
                         help="Comma-separated list of cities to use for finetuning (e.g., 'wuerzburg,rosenheim,regensburg').")
+    
+    # Optional: specify pretrain run name separately (for checkpoint loading)
+    parser.add_argument("--pretrain_run_name", type=str, default=None,
+                        help="Name of the pretrained run to load checkpoint from. If not provided, uses run_name.")
     
     # Project name (defaults to GNN_Inductive based on the path structure)
     parser.add_argument("--project_name", type=str, default=None,
@@ -157,7 +161,9 @@ def main():
         
         latest_checkpoint_path = None
 
-        original_run_dir = os.path.join(base_dir, args['project_name'], args['run_name'])
+        # Use pretrain_run_name for checkpoint loading if provided, otherwise use run_name
+        checkpoint_run_name = args.get('pretrain_run_name') or args['run_name']
+        original_run_dir = os.path.join(base_dir, args['project_name'], checkpoint_run_name)
 
         if not args['start_from_scratch']:
             if not os.path.exists(original_run_dir):
@@ -167,7 +173,7 @@ def main():
                         candidate_projects.append(candidate)
 
                 for candidate in candidate_projects:
-                    candidate_dir = os.path.join(base_dir, candidate, args['run_name'])
+                    candidate_dir = os.path.join(base_dir, candidate, checkpoint_run_name)
                     if os.path.exists(candidate_dir):
                         if candidate != args['project_name']:
                             print(f"Original run directory not found under project '{args['project_name']}'. Using '{candidate}' instead.")
@@ -176,10 +182,13 @@ def main():
                         break
 
             if not os.path.exists(original_run_dir):
-                raise ValueError(f"Original run directory does not exist under any known project name for run '{args['run_name']}'. Checked {candidate_projects}.")
+                raise ValueError(f"Original run directory does not exist under any known project name for run '{checkpoint_run_name}'. Checked {candidate_projects}.")
 
         original_checkpoint_dir = os.path.join(original_run_dir, 'trained_model', 'checkpoints')
 
+        # Load checkpoint early to infer configuration BEFORE data preparation
+        latest_checkpoint_path = None
+        inferred_config = {}
         if not args['start_from_scratch']:
             if not os.path.exists(original_run_dir):
                 raise ValueError(f"Original run directory does not exist: {original_run_dir}")
@@ -189,7 +198,15 @@ def main():
             checkpoint_info = torch.load(latest_checkpoint_path, map_location='cpu')
             print(f"Found checkpoint from epoch {checkpoint_info.get('epoch', 'unknown')}")
             print(f"Checkpoint validation loss: {checkpoint_info.get('val_loss', 'unknown')}")
+            
+            # Infer model configuration from checkpoint
+            print("Inferring model configuration from checkpoint...")
+            inferred_config = infer_model_config_from_checkpoint(latest_checkpoint_path, args['gnn_arch'])
+            
             del checkpoint_info
+            
+            # Note: We'll verify the configuration matches AFTER data preparation,
+            # when we know the actual feature count from the data
         else:
             if not os.path.exists(original_run_dir):
                 print(f"Warning: Original run directory {original_run_dir} not found. Continuing from scratch without checkpoint.")
@@ -271,6 +288,20 @@ def main():
         else:
             raise ValueError(f"Different cities for train and val are not supported for finetuning.")
 
+        # Load model_kwargs if provided
+        if args["model_kwargs"] is not None:
+            with open(args["model_kwargs"], 'r') as f:
+                model_kwargs = json.load(f)
+        else:
+            model_kwargs = {}
+        
+        # For trans_encoder, adjust model_kwargs based on inferred config
+        if args['gnn_arch'] == 'trans_encoder' and inferred_config:
+            ff_dim = inferred_config.get('ff_dim')
+            if ff_dim:
+                model_kwargs['ff_dim'] = ff_dim
+                print(f"Using ff_dim={ff_dim} from checkpoint")
+        
         print(f"→ Using {'INDUCTIVE' if args['pretraining_inductive'] else 'TRANSDUCTIVE'}-style data preparation for finetuning")
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(
             train_data=train_data,
@@ -294,25 +325,142 @@ def main():
         )
 
         config = setup_wandb(args)
-        if args["model_kwargs"] is not None:
-            with open(args["model_kwargs"], 'r') as f:
-                model_kwargs = json.load(f)
+        
+        # CRITICAL: Get actual data feature count from a batch (after collate_fn filtering)
+        # The collate_fn filters features, so we need to check the batch, not the raw dataset
+        sample_batch = next(iter(train_dl))
+        actual_feature_count = sample_batch.x.shape[1]
+        
+        # Also check raw dataset for comparison
+        raw_dataset_feature_count = train_dl.dataset[0].x.shape[1] if hasattr(train_dl, 'dataset') else None
+        
+        print(f"\n{'='*60}")
+        print(f"Data feature analysis:")
+        print(f"  Raw dataset feature count: {raw_dataset_feature_count}")
+        print(f"  DataLoader batch feature count (after filtering): {actual_feature_count}")
+        print(f"  Config in_channels parameter: {config.in_channels}")
+        print(f"  use_all_features setting: {args['use_all_features']}")
+        if args['use_all_features']:
+            print(f"  Expected: All features (varies by city)")
         else:
-            model_kwargs = {}
+            print(f"  Expected: 5 base features (VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH)")
+        print(f"{'='*60}\n")
+        
+        if config.in_channels != actual_feature_count:
+            print(f"⚠️  Batch has {actual_feature_count} features, but config.in_channels={config.in_channels}")
+            print(f"   Will override in_channels to {actual_feature_count} when creating model")
+            # Update wandb config with allow_val_change
+            try:
+                config.update({'in_channels': actual_feature_count}, allow_val_change=True)
+            except Exception as e:
+                print(f"   Warning: Could not update wandb config: {e}")
+                print(f"   Will pass in_channels={actual_feature_count} directly to model")
+        
+        # Store the actual feature count to use when creating model
+        # This is the count AFTER collate_fn filtering, which is what the model will receive
+        actual_in_channels = actual_feature_count
+        
+        # For trans_encoder, verify and adjust model configuration to match checkpoint AFTER data preparation
+        if args['gnn_arch'] == 'trans_encoder' and inferred_config:
+            effective_in_channels = inferred_config.get('effective_in_channels')
+            if effective_in_channels:
+                print(f"\n{'='*60}")
+                print(f"Verifying model configuration matches checkpoint:")
+                print(f"  Data feature count: {actual_feature_count}")
+                print(f"  Config in_channels (updated): {config.in_channels}")
+                print(f"  Checkpoint expects effective_in_channels: {effective_in_channels}")
+                print(f"{'='*60}\n")
+                
+                # TransEncoder calculates: effective_in_channels = in_channels + pos_dim (if use_pos=True) + lap_pe_dim (if use_lap_pe=True)
+                # The model's in_channels parameter will be set to actual_feature_count (now in config.in_channels)
+                # So we need: actual_feature_count + pos_dim + lap_pe_dim = effective_in_channels
+                # We'll assume use_lap_pe=False unless specified in model_kwargs
+                # Therefore: pos_dim = effective_in_channels - actual_feature_count - (lap_pe_dim if use_lap_pe else 0)
+                
+                # Check if use_lap_pe is already set in model_kwargs
+                use_lap_pe = model_kwargs.get('use_lap_pe', False)
+                lap_pe_dim = model_kwargs.get('lap_pe_dim', 0) if use_lap_pe else 0
+                
+                required_pos_dim = effective_in_channels - actual_feature_count - lap_pe_dim
+                
+                if required_pos_dim < 0:
+                    # Checkpoint expects fewer total features than we have in the data
+                    # This means the checkpoint was trained with different data (fewer features)
+                    raise ValueError(
+                        f"\n❌ CRITICAL: Cannot match checkpoint configuration!\n"
+                        f"   Data has {actual_feature_count} features\n"
+                        f"   Checkpoint expects effective_in_channels={effective_in_channels}\n"
+                        f"   This would require pos_dim={required_pos_dim} (negative, impossible)\n\n"
+                        f"   The checkpoint was trained with different feature settings.\n"
+                        f"   Solution: Use the same feature settings as the pretrained model:\n"
+                        f"   - If checkpoint used use_all_features=False: set --use_all_features False\n"
+                        f"   - This will give you 5 base features instead of {actual_feature_count}\n"
+                        f"   - Then pos_dim would be: {effective_in_channels} - 5 = {effective_in_channels - 5}\n"
+                    )
+                elif required_pos_dim == 0:
+                    # No positional encoding needed - data features exactly match checkpoint
+                    model_kwargs['use_pos'] = False
+                    print(f"✓ Setting use_pos=False (effective_in_channels={effective_in_channels} = data_features={actual_feature_count})")
+                else:
+                    # Need positional encoding with specific pos_dim
+                    model_kwargs['use_pos'] = True
+                    model_kwargs['pos_dim'] = required_pos_dim
+                    print(f"✓ Setting use_pos=True, pos_dim={required_pos_dim} (effective_in_channels={effective_in_channels} = {actual_feature_count} + {required_pos_dim})")
+                
+                # Verify the calculation will work
+                final_use_pos = model_kwargs.get('use_pos', False)
+                final_pos_dim = model_kwargs.get('pos_dim', 0) if final_use_pos else 0
+                final_use_lap_pe = model_kwargs.get('use_lap_pe', False)
+                final_lap_pe_dim = model_kwargs.get('lap_pe_dim', 0) if final_use_lap_pe else 0
+                
+                expected_effective = actual_feature_count + final_pos_dim + final_lap_pe_dim
+                if expected_effective != effective_in_channels:
+                    raise ValueError(
+                        f"Configuration calculation error: Expected effective_in_channels={effective_in_channels} from checkpoint, "
+                        f"but calculated {expected_effective} from data_features={actual_feature_count}, "
+                        f"use_pos={final_use_pos}, pos_dim={final_pos_dim}, "
+                        f"use_lap_pe={final_use_lap_pe}, lap_pe_dim={final_lap_pe_dim}"
+                    )
+                print(f"✓ Model configuration verified: will create model with effective_in_channels={expected_effective}\n")
         
         # Create model instance
+        # Override in_channels in model_kwargs to use actual data feature count
+        model_kwargs_override = model_kwargs.copy()
+        model_kwargs_override['in_channels'] = actual_in_channels
+        
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
                                         config=config,
-                                        model_kwargs=model_kwargs,
+                                        model_kwargs=model_kwargs_override,
                                         device=device).to(device)
 
         if not args['start_from_scratch'] and latest_checkpoint_path is not None:
             checkpoint = torch.load(latest_checkpoint_path, map_location=device)
-            missing_keys, unexpected_keys = gnn_instance.load_state_dict(checkpoint['model_state_dict'], strict=False)
-            if missing_keys:
-                print(f"Warning: Missing keys when loading checkpoint: {missing_keys}")
-            if unexpected_keys:
-                print(f"Warning: Unexpected keys when loading checkpoint: {unexpected_keys}")
+            try:
+                missing_keys, unexpected_keys = gnn_instance.load_state_dict(checkpoint['model_state_dict'], strict=False)
+                if missing_keys:
+                    print(f"Warning: Missing keys when loading checkpoint: {missing_keys}")
+                if unexpected_keys:
+                    print(f"Warning: Unexpected keys when loading checkpoint: {unexpected_keys}")
+            except RuntimeError as e:
+                if "size mismatch" in str(e):
+                    print(f"Error: Model architecture mismatch with checkpoint!")
+                    print(f"Error details: {e}")
+                    print(f"\nTrying to diagnose the issue...")
+                    # Print model architecture info
+                    print(f"Model effective in_channels: {gnn_instance.in_channels}")
+                    if hasattr(gnn_instance, 'ff_dim'):
+                        print(f"Model ff_dim: {gnn_instance.ff_dim}")
+                    # Print checkpoint info
+                    state_dict = checkpoint['model_state_dict']
+                    if 'graph_convs.0.lin_key.weight' in state_dict:
+                        ckpt_in_channels = state_dict['graph_convs.0.lin_key.weight'].shape[1]
+                        print(f"Checkpoint expects in_channels: {ckpt_in_channels}")
+                    if 'transformer.layers.0.linear1.weight' in state_dict:
+                        ckpt_ff_dim = state_dict['transformer.layers.0.linear1.weight'].shape[0]
+                        print(f"Checkpoint expects ff_dim: {ckpt_ff_dim}")
+                    raise RuntimeError(f"Cannot load checkpoint due to architecture mismatch. Please ensure model configuration matches the checkpoint. Original error: {e}")
+                else:
+                    raise
             # if config.use_target_standardization and 'target_mean' in checkpoint and 'target_std' in checkpoint:
             #     # Restore target statistics if they were saved
             #     gnn_instance.target_mean = checkpoint['target_mean'].to(device)
@@ -361,6 +509,51 @@ def main():
         print(f"Error: {e}")
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
+
+def infer_model_config_from_checkpoint(checkpoint_path, gnn_arch):
+    """
+    Infer model configuration from checkpoint state_dict.
+    
+    This is necessary because the model architecture must match the checkpoint exactly.
+    
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        gnn_arch: The GNN architecture name
+        
+    Returns:
+        Dictionary with inferred model configuration parameters
+    """
+    checkpoint = torch.load(checkpoint_path, map_location='cpu')
+    state_dict = checkpoint.get('model_state_dict', checkpoint)
+    
+    inferred_config = {}
+    
+    if gnn_arch == "trans_encoder":
+        # Infer effective input channels from first graph conv layer
+        if 'graph_convs.0.lin_key.weight' in state_dict:
+            # Shape is [hidden_dim, effective_in_channels]
+            key_weight_shape = state_dict['graph_convs.0.lin_key.weight'].shape
+            effective_in_channels = key_weight_shape[1]
+            inferred_config['effective_in_channels'] = effective_in_channels
+            
+            # Try to infer pos_dim and base in_channels
+            # If we have embed.weight, it might tell us the base feature count
+            if 'embed.weight' in state_dict:
+                embed_shape = state_dict['embed.weight'].shape
+                # embed.weight shape is [embed_dim, effective_in_channels]
+                # This confirms effective_in_channels
+                pass
+            
+            # Infer ff_dim from transformer layers
+            if 'transformer.layers.0.linear1.weight' in state_dict:
+                linear1_shape = state_dict['transformer.layers.0.linear1.weight'].shape
+                # Shape is [ff_dim, embed_dim]
+                ff_dim = linear1_shape[0]
+                inferred_config['ff_dim'] = ff_dim
+                print(f"Inferred from checkpoint: effective_in_channels={effective_in_channels}, ff_dim={ff_dim}")
+            
+    return inferred_config
+
 
 def find_latest_checkpoint(checkpoint_dir):
     """

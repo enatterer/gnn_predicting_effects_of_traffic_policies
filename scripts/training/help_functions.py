@@ -158,10 +158,20 @@ def build_unique_model_description(
         if all(city and city.lower() in lowered_variant for city in sanitized_cities_list):
             include_city_fragment = False
 
+    # If variant fragment already matches the parent fragment, skip adding parent
+    # to avoid duplication (e.g., "scratch_erlangen_train25_val2" should not become "scratch_erlangen_train25_val2__parent-scratch_erlangen_train25_val2")
+    include_parent_fragment = True
+    if variant_fragment and parent_fragment:
+        lowered_variant = variant_fragment.lower()
+        lowered_parent = parent_fragment.lower()
+        # Skip parent if variant equals parent (exact match only to avoid false positives)
+        if lowered_variant == lowered_parent:
+            include_parent_fragment = False
+
     fragments = [fragment for fragment in (
         variant_fragment,
         sanitized_cities if include_city_fragment else "",
-        f"parent-{parent_fragment}",
+        f"parent-{parent_fragment}" if include_parent_fragment else "",
     ) if fragment]
 
     return "__".join(fragment for fragment in fragments if fragment)
@@ -581,8 +591,12 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
     - Initialized model on the specified device
     """
 
+    # Allow model_kwargs to override in_channels if specified
+    # This is needed when actual data feature count differs from config
+    in_channels = model_kwargs.get('in_channels', config.in_channels)
+    
     common_kwargs = {
-        "in_channels": config.in_channels,
+        "in_channels": in_channels,
         "out_channels": config.out_channels,
         "use_dropout": config.use_dropout,
         "dropout": config.dropout,
@@ -591,17 +605,20 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "use_target_standardization": getattr(config, 'use_target_standardization', False)
     }
     
+    # Remove in_channels from model_kwargs to avoid duplicate argument
+    model_kwargs_clean = {k: v for k, v in model_kwargs.items() if k != 'in_channels'}
+    
     if gnn_arch == "graphSAGE":
-        return GraphSAGE(**common_kwargs, **model_kwargs).to(device)
+        return GraphSAGE(**common_kwargs, **model_kwargs_clean).to(device)
     
     elif gnn_arch == "gatv2":
-        return GATv2(**common_kwargs, **model_kwargs).to(device)
+        return GATv2(**common_kwargs, **model_kwargs_clean).to(device)
     
     elif gnn_arch == "trans_conv":
-        return TransConv(**common_kwargs, **model_kwargs).to(device)
+        return TransConv(**common_kwargs, **model_kwargs_clean).to(device)
         
     elif gnn_arch == "trans_encoder":
-        return TransEncoder(**common_kwargs, **model_kwargs).to(device)
+        return TransEncoder(**common_kwargs, **model_kwargs_clean).to(device)
         
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")
