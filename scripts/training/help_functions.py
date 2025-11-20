@@ -690,7 +690,8 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         "dropout": config.dropout,
         "dtype": torch.float32,
         "log_to_wandb": True,
-        "use_target_standardization": getattr(config, 'use_target_standardization', False)
+        "use_target_standardization": getattr(config, 'use_target_standardization', False),  # For backward compatibility
+        "target_normalization": getattr(config, 'target_normalization', None)
     }
     
     # Remove in_channels from model_kwargs to avoid duplicate argument

@@ -25,6 +25,7 @@ class TransEncoder(BaseGNN):
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = False,
                  use_target_standardization: bool = False,
+                 target_normalization: str = None,
 
                  # Transformer Parameters
                  ff_dim: int = 256,
@@ -59,7 +60,8 @@ class TransEncoder(BaseGNN):
             use_dropout=use_dropout,
             dtype=dtype,
             log_to_wandb=log_to_wandb,
-            use_target_standardization=use_target_standardization
+            use_target_standardization=use_target_standardization,
+            target_normalization=target_normalization
         )
 
         # Model specific parameters

@@ -290,8 +290,8 @@ def validate_model_during_training(config: object,
             targets_node_predictions = select_target_tensor(data, config.target_type)
             
             # STANDARDIZE TARGET FOR LOSS COMPUTATION
-            if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
-                targets_standardized = model.standardize_target(targets_node_predictions)
+            if hasattr(model, 'target_normalization') and model.target_normalization is not None:
+                targets_standardized = model.standardize_target(targets_node_predictions, data=data)
             else:
                 targets_standardized = targets_node_predictions
 
@@ -302,8 +302,8 @@ def validate_model_during_training(config: object,
             val_loss += loss_func(node_predicted, targets_standardized, data, data.batch).item()
             
             # INVERSE STANDARDIZE PREDICTIONS FOR METRICS
-            if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
-                node_predicted_original = model.inverse_standardize_target(node_predicted)
+            if hasattr(model, 'target_normalization') and model.target_normalization is not None:
+                node_predicted_original = model.inverse_standardize_target(node_predicted, data=data)
             else:
                 node_predicted_original = node_predicted
 
@@ -314,7 +314,7 @@ def validate_model_during_training(config: object,
 
             # Clean up
             del data, targets_node_predictions, node_predicted
-            if hasattr(model, 'use_target_standardization') and model.use_target_standardization:
+            if hasattr(model, 'target_normalization') and model.target_normalization is not None:
                 del targets_standardized, node_predicted_original
             torch.cuda.empty_cache()
 

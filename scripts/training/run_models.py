@@ -71,7 +71,10 @@ def main():
     parser.add_argument("--use_city_balanced_loss", type=str_to_bool, default=False,
                         help="Optional for inductive variant: Whether to use city-balanced loss function (based on CityBalancedGNNLoss) or not. \
                             For transductive variant use standard node-weighted loss function (based on GNN_Loss).")
-    parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="Whether to use target standardization during training.")
+    parser.add_argument("--use_target_standardization", type=str_to_bool, default=False, help="[DEPRECATED] Use --target_normalization instead. Whether to use target standardization during training.")
+    parser.add_argument("--target_normalization", type=str, default="None", 
+                        help="Target normalization method. Options: 'None' (no normalization), 'relative_to_max_traffic_vol_base_case' (normalize by max vol_base_case per graph), 'relative_standard_scaler' (standardize with mean/std).",
+                        choices=["None", "relative_to_max_traffic_vol_base_case", "relative_standard_scaler"])
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
@@ -117,6 +120,15 @@ def main():
     # Parse neighbor_sizes from string to list
     if isinstance(args['neighbor_sizes'], str):
         args['neighbor_sizes'] = [int(x.strip()) for x in args['neighbor_sizes'].split(',')]
+    
+    # Convert "None" string to None
+    if args.get('target_normalization') == "None":
+        args['target_normalization'] = None
+    
+    # Backward compatibility: map use_target_standardization to target_normalization
+    if args.get('target_normalization') is None and args.get('use_target_standardization', False):
+        args['target_normalization'] = "relative_standard_scaler"
+        print("Warning: --use_target_standardization is deprecated. Using --target_normalization='relative_standard_scaler'")
     
     set_random_seeds()
     

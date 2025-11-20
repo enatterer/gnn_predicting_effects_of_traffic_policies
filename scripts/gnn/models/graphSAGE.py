@@ -28,6 +28,7 @@ class GraphSAGE(BaseGNN):
                  dtype: torch.dtype = torch.float32,
                  log_to_wandb: bool = True,
                  use_target_standardization: bool = False,
+                 target_normalization: str = None,
                  
                  # POSITIONAL ENCODING PARAMETERS
                  use_pos: bool = True,
@@ -60,7 +61,8 @@ class GraphSAGE(BaseGNN):
             use_dropout=use_dropout,
             dtype=dtype,
             log_to_wandb=log_to_wandb,
-            use_target_standardization=use_target_standardization)
+            use_target_standardization=use_target_standardization,
+            target_normalization=target_normalization)
         
         # Model-specific parameters
         self.hidden_channels = hidden_channels

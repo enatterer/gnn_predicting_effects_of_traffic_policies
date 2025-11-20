@@ -23,6 +23,7 @@ class TransConv(BaseGNN):
                 dtype: torch.dtype = torch.float32,
                 log_to_wandb: bool = False,
                 use_target_standardization: bool = False,
+                target_normalization: str = None,
                 
                 # Graph Structure Parameters
                 hidden_channels: list[int] = [128,256,512,256,128],
@@ -50,7 +51,8 @@ class TransConv(BaseGNN):
             use_dropout=use_dropout,
             dtype=dtype,
             log_to_wandb=log_to_wandb,
-            use_target_standardization=use_target_standardization)
+            use_target_standardization=use_target_standardization,
+            target_normalization=target_normalization)
         
         # Model specific parameters
         self.hidden_channels = hidden_channels
