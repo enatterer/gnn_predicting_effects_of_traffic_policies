@@ -232,6 +232,94 @@ def balanced_subset_by_city(data_dict, limit, seed=42):
     print(f"[DEBUG] Applied city-balanced cap to {total_items} → {len(selected_indices_set)} samples.")
     return balanced_data
 
+def combine_and_split_data_dicts(train_data, val_data, test_data, limit, train_ratio=0.8, val_ratio=0.15, test_ratio=0.05, seed=42):
+    """
+    Combine data from train, val, and test dictionaries, limit to `limit` total items,
+    then split into train/val/test according to the specified ratios.
+    
+    Returns:
+        train_data, val_data, test_data: Split data dictionaries
+    """
+    from sklearn.model_selection import train_test_split
+    
+    # Combine all data
+    combined_data = {
+        'path': train_data['path'].copy(),
+        'policy_region': train_data['policy_region'].copy(),
+        'scenario': train_data['scenario'].copy(),
+        'city': train_data['city'].copy()
+    }
+    
+    if val_data is not None:
+        combined_data['path'].extend(val_data['path'])
+        combined_data['policy_region'].extend(val_data['policy_region'])
+        combined_data['scenario'].extend(val_data['scenario'])
+        combined_data['city'].extend(val_data['city'])
+    
+    if test_data is not None:
+        combined_data['path'].extend(test_data['path'])
+        combined_data['policy_region'].extend(test_data['policy_region'])
+        combined_data['scenario'].extend(test_data['scenario'])
+        combined_data['city'].extend(test_data['city'])
+    
+    total_items = len(combined_data['path'])
+    print(f"[DEBUG] Combined data from all cities: {total_items} total items")
+    
+    # Apply limit if needed
+    if limit > 0 and total_items > limit:
+        combined_data = balanced_subset_by_city(combined_data, limit, seed=seed)
+        total_items = len(combined_data['path'])
+        print(f"[DEBUG] After limiting: {total_items} items")
+    
+    # Create labels for stratification
+    labels = [f"{city}_{policy_region}" for city, policy_region in zip(combined_data['city'], combined_data['policy_region'])]
+    indices = list(range(total_items))
+    
+    # First split: train vs (val+test)
+    try:
+        train_indices, temp_indices = train_test_split(
+            indices,
+            test_size=(val_ratio + test_ratio),
+            random_state=seed,
+            stratify=labels
+        )
+    except ValueError:
+        print("Warning: Stratified split not possible. Falling back to unstratified split.")
+        train_indices, temp_indices = train_test_split(
+            indices,
+            test_size=(val_ratio + test_ratio),
+            random_state=seed,
+            stratify=None
+        )
+    
+    # Second split: val vs test
+    temp_labels = [labels[i] for i in temp_indices]
+    val_size = val_ratio / (val_ratio + test_ratio)
+    try:
+        val_indices_temp, test_indices_temp = train_test_split(
+            temp_indices,
+            test_size=(1 - val_size),
+            random_state=seed,
+            stratify=temp_labels
+        )
+    except ValueError:
+        print("Warning: Stratified val/test split not possible. Falling back to unstratified split.")
+        val_indices_temp, test_indices_temp = train_test_split(
+            temp_indices,
+            test_size=(1 - val_size),
+            random_state=seed,
+            stratify=None
+        )
+    
+    # Create split data dictionaries
+    train_data_split = {k: [v[i] for i in train_indices] for k, v in combined_data.items()}
+    val_data_split = {k: [v[i] for i in val_indices_temp] for k, v in combined_data.items()}
+    test_data_split = {k: [v[i] for i in test_indices_temp] for k, v in combined_data.items()}
+    
+    print(f"[DEBUG] Split into train: {len(train_data_split['path'])}, val: {len(val_data_split['path'])}, test: {len(test_data_split['path'])}")
+    
+    return train_data_split, val_data_split, test_data_split
+
 def setup_wandb(args):
     wandb.login()
     wandb.init(project=args['project_name'], name=args['unique_model_description'],

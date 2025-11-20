@@ -45,9 +45,9 @@ dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','tra
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg','bayreuth','fuerth','kempten','neuulm','augsburg','rosenheim','nuernberg', 'ingolstadt']
-val_cities =[] # Non empty implies inductive learning
-test_cities = ['muenchen', 'neuulm', 'erlangen', 'bamberg'] # Non empty implies inductive learning
+train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg','bayreuth','fuerth','kempten','augsburg','rosenheim','nuernberg', 'ingolstadt', 'schweinfurt']
+val_cities =['bamberg', 'erlangen'] # Non empty implies inductive learning
+test_cities = ['muenchen', 'neuulm'] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -75,7 +75,7 @@ def main():
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
-    parser.add_argument("--num_epochs", type=int, default=500, help="Number of epochs to train for.")
+    parser.add_argument("--num_epochs", type=int, default=600, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     
     #parameters for the learning rate scheduler
@@ -88,7 +88,7 @@ def main():
     
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     parser.add_argument("--continue_training", type=str_to_bool, default=False, help="Whether to continue training from a checkpoint.")
@@ -110,7 +110,7 @@ def main():
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0, help="The probability of masking all features of a node to 0 during training. 0.0 means no node masking.")
 
     # Fast-iteration: optionally cap dataset sizes per split (random subsample)
-    parser.add_argument("--limit_available_graphs", type=int, default=0, help="If >0, randomly keep only this many available graphs after reading metadata (applies before splitting into train/val/test).")
+    parser.add_argument("--limit_available_graphs", type=int, default=2000, help="If >0, randomly keep only this many available graphs after reading metadata (applies before splitting into train/val/test).")
 
     args = vars(parser.parse_args())
     
@@ -144,17 +144,11 @@ def main():
         for city in sorted(train_cities):
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
 
-        # Optional: Subsample training graphs for faster iterations
-        if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
-            train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
-
         if args['use_inductive_variant']:
             if len(val_cities) > 0:
                 val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(val_cities):
                     load_metadata_from_disk(val_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
-                    val_data = balanced_subset_by_city(val_data, args['limit_available_graphs'])
             else:
                 val_data = None
 
@@ -162,14 +156,26 @@ def main():
                 test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}
                 for city in sorted(test_cities):
                     load_metadata_from_disk(test_data, os.path.join(dataset_path, city, 'metadata.json'))
-                if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
-                    test_data = balanced_subset_by_city(test_data, args['limit_available_graphs'])
             else:
                 test_data = None
+            
+            # For inductive variant: if limit_available_graphs is set, combine all data,
+            # limit to that total, then split 80/15/5
+            if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+                train_data, val_data, test_data = combine_and_split_data_dicts(
+                    train_data, val_data, test_data, 
+                    limit=args['limit_available_graphs'],
+                    train_ratio=0.8, val_ratio=0.15, test_ratio=0.05,
+                    seed=42
+                )
         else:
             # Transductive variant: validation/test splits derived from training cities.
             val_data = None
             test_data = None
+            
+            # Optional: Subsample training graphs for faster iterations
+            if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+                train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
 
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
