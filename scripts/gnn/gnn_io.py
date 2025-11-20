@@ -126,13 +126,29 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
         print(f"[DEBUG] {name} subset label counts (total {len(indices)}):")
         for city, count in sorted(city_counts.items()):
             print(f"  {city}: {count}")
+        return set(subset_cities)
     
     print(f"Training subset length: {len(train_subset)}")
     print(f"Validation subset length: {len(val_subset)}")
     print(f"Test subset length: {len(test_subset)}")
-    _log_split_details("Train", train_indices, train_labels if 'train_labels' in locals() else labels)
-    _log_split_details("Validation", val_indices, labels)
-    _log_split_details("Test", test_indices, labels)
+    train_cities_set = _log_split_details("Train", train_indices, train_labels if 'train_labels' in locals() else labels)
+    val_cities_set = _log_split_details("Validation", val_indices, labels)
+    test_cities_set = _log_split_details("Test", test_indices, labels)
+    
+    # Verify no data leakage when val_data and test_data are provided (inductive learning)
+    if val_data is not None or test_data is not None:
+        leakage_val = train_cities_set & val_cities_set
+        leakage_test = train_cities_set & test_cities_set
+        leakage_val_test = val_cities_set & test_cities_set
+        
+        if leakage_val:
+            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_val} appear in validation set!")
+        if leakage_test:
+            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_test} appear in test set!")
+        if leakage_val_test:
+            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Validation cities {leakage_val_test} appear in test set!")
+        
+        print(f"[VERIFICATION] ✓ No data leakage: Training cities ({len(train_cities_set)}) are separate from validation ({len(val_cities_set)}) and test ({len(test_cities_set)}) cities")
     
     return dataset, train_subset, val_subset, test_subset
 

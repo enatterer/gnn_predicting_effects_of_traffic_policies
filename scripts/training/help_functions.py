@@ -362,7 +362,7 @@ class EarlyStopping:
 def normalize_dataset(train_data_list, combined_data_list):
     """
     train_data_list: Subset on which to apply normalization (train set)
-    combined_data_list: Subset for fitting scaler (train + val)
+    combined_data_list: Subset for fitting scaler (should be train only for inductive, train+val for transductive)
     """
     train_data = [copy.deepcopy(train_data_list.dataset[idx]) for idx in train_data_list.indices]
     # combined_data = [copy.deepcopy(combined_data_list.dataset[idx]) for idx in combined_data_list.indices]
@@ -378,7 +378,8 @@ def normalize_x_features_batched(train_data_list, combined_data_list, batch_size
     """
     Normalize the continuous node features (0 mean and unit variance).
     Categorical features (Allowed Modes, Highway etc.) are left as booleans (0 or 1).
-    Fit scaler on combined train+val set, but apply normalization only to train set.
+    Fit scaler on combined_data_list (train only for inductive, train+val for transductive),
+    but apply normalization only to train set.
     Returns normalized train set and fitted scaler.
     """
     scaler = StandardScaler()
@@ -501,9 +502,9 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     if use_inductive_variant == False:
         combined_indices = train_set.indices + valid_set.indices + test_set.indices
     
-    # Inductive: TRAIN + VAL Scaler (Just TRAIN would be pure inductive)
+    # Inductive: ONLY TRAIN Scaler (to avoid data leakage - validation data should not influence training)
     else:
-        combined_indices = train_set.indices + valid_set.indices
+        combined_indices = train_set.indices  # Only use training data for scaler fitting
     
     combined_norm_set = Subset(entire_set, combined_indices)
     

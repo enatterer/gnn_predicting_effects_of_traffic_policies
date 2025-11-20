@@ -171,15 +171,49 @@ def main():
             else:
                 test_data = None
             
-            # For inductive variant: if limit_available_graphs is set, combine all data,
-            # limit to that total, then split 80/15/5
+            # For inductive variant: if limit_available_graphs is set, limit each city group separately
+            # to preserve city-based separation (no mixing of train/val/test cities)
             if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
-                train_data, val_data, test_data = combine_and_split_data_dicts(
-                    train_data, val_data, test_data, 
-                    limit=args['limit_available_graphs'],
-                    train_ratio=0.8, val_ratio=0.15, test_ratio=0.05,
-                    seed=42
-                )
+                # Calculate proportional limits for each split to maintain train/val/test ratio
+                total_original = len(train_data['path']) + (len(val_data['path']) if val_data else 0) + (len(test_data['path']) if test_data else 0)
+                if total_original > 0:
+                    train_ratio_actual = len(train_data['path']) / total_original
+                    val_ratio_actual = len(val_data['path']) / total_original if val_data else 0
+                    test_ratio_actual = len(test_data['path']) / total_original if test_data else 0
+                    
+                    # Limit each split proportionally
+                    train_limit = max(1, int(args['limit_available_graphs'] * train_ratio_actual))
+                    val_limit = max(1, int(args['limit_available_graphs'] * val_ratio_actual)) if val_data else 0
+                    test_limit = max(1, int(args['limit_available_graphs'] * test_ratio_actual)) if test_data else 0
+                    
+                    # Apply limits to each city group separately to preserve city separation
+                    train_data = balanced_subset_by_city(train_data, train_limit)
+                    if val_data:
+                        val_data = balanced_subset_by_city(val_data, val_limit)
+                    if test_data:
+                        test_data = balanced_subset_by_city(test_data, test_limit)
+                    
+                    print(f"[DEBUG] Limited data while preserving city separation: train={len(train_data['path'])}, val={len(val_data['path']) if val_data else 0}, test={len(test_data['path']) if test_data else 0}")
+            
+            # Verify no data leakage: ensure validation/test cities don't appear in training
+            if args['use_inductive_variant']:
+                train_cities_set = set(train_data['city'])
+                val_cities_set = set(val_data['city']) if val_data else set()
+                test_cities_set = set(test_data['city']) if test_data else set()
+                
+                leakage_val = train_cities_set & val_cities_set
+                leakage_test = train_cities_set & test_cities_set
+                
+                if leakage_val:
+                    raise ValueError(f"DATA LEAKAGE DETECTED: Validation cities {leakage_val} appear in training data!")
+                if leakage_test:
+                    raise ValueError(f"DATA LEAKAGE DETECTED: Test cities {leakage_test} appear in training data!")
+                
+                print(f"[VERIFICATION] ✓ No data leakage confirmed:")
+                print(f"  Training cities ({len(train_cities_set)}): {sorted(train_cities_set)}")
+                print(f"  Validation cities ({len(val_cities_set)}): {sorted(val_cities_set)}")
+                print(f"  Test cities ({len(test_cities_set)}): {sorted(test_cities_set)}")
+                print(f"  Training graphs: {len(train_data['path'])}, Validation graphs: {len(val_data['path']) if val_data else 0}, Test graphs: {len(test_data['path']) if test_data else 0}")
         else:
             # Transductive variant: validation/test splits derived from training cities.
             val_data = None
