@@ -62,6 +62,8 @@ def main():
     # Hyperparameters (all optional, with defaults matching run_models.py)
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features(True) or a subset of features(False).")
+    parser.add_argument("--use_destination_activity", type=str_to_bool, default=False,
+                        help="Whether to include destination/activity features (20-27). Default: False (excludes features 20-27 with NaNs).")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).')
@@ -113,6 +115,12 @@ def main():
     parser.add_argument("--limit_train_graphs", type=int, default=0, help="If >0, randomly keep only this many training graphs after reading metadata.")
     parser.add_argument("--limit_val_graphs", type=int, default=0, help="If >0, randomly keep only this many validation graphs after reading metadata.")
     parser.add_argument("--limit_test_graphs", type=int, default=0, help="If >0, randomly keep only this many test graphs after reading metadata.")
+    
+    # Pre-specified split file (JSON file with train/val splits)
+    parser.add_argument("--split_file", type=str, default=None, 
+                        help="Path to JSON file with pre-specified train/val splits (from generate_distant_splits.py). "
+                             "If provided, uses these splits instead of random splitting. "
+                             "The JSON should have 'train_data' and 'val_data' keys with 'path', 'policy_region', 'scenario', 'city' fields.")
     
     # Unique model description for finetuning (optional, defaults to run_name + _finetuned)
     parser.add_argument("--unique_model_description", type=str, default=None, help="Unique description for the finetuned run (default: {run_name}_finetuned).")
@@ -234,62 +242,100 @@ def main():
         
         if all_same_cities:
             print(f"Training, validation, and test all use the same cities: {train_cities}")
-            print("Splitting data to ensure non-overlapping train/val/test sets...")
             
-            # Load all data from the shared cities
-            all_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-            for city in sorted(train_cities):
-                load_metadata_from_disk(all_data, os.path.join(dataset_path, city, 'metadata.json'))
-            
-            print(f"Loaded {len(all_data['path'])} total graphs from {train_cities}")
-            
-            # Shuffle and split into train, val, and test
-            _rnd.seed(42)  # For reproducibility
-            indices = list(range(len(all_data['path'])))
-            _rnd.shuffle(indices)
-            
-            # Calculate split sizes
-            limit_train = args.get('limit_train_graphs', 0) if args.get('limit_train_graphs', 0) > 0 else len(indices)
-            limit_val = args.get('limit_val_graphs', 0) if args.get('limit_val_graphs', 0) > 0 else len(indices)
-            limit_test = args.get('limit_test_graphs', 0) if args.get('limit_test_graphs', 0) > 0 else 0
-            
-            # Ensure we don't exceed available data
-            total_needed = limit_train + limit_val + limit_test
-            if total_needed > len(indices):
-                cities_str = ', '.join(train_cities)
-                raise ValueError(
-                    f"Insufficient data for cities {cities_str}: "
-                    f"Requested {limit_train} train + {limit_val} val + {limit_test} test = {total_needed} graphs, "
-                    f"but only {len(indices)} available. Skipping this city."
-                )
-            
-            # Split indices - these are the shuffled positions
-            train_indices = indices[:limit_train]  # First N indices for training
-            val_indices = indices[limit_train:limit_train + limit_val]  # Next M indices for validation
-            test_indices = indices[limit_train + limit_val:limit_train + limit_val + limit_test] if limit_test > 0 else []
-            
-            # Create train, val, and test data using the shuffled indices
-            train_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-            val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-            # Always create test_data as a dict (even if empty) to avoid None issues in load_data_and_split_into_subsets
-            test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
-            
-            # Use the shuffled indices to extract data
-            for idx in train_indices:
-                for k in ['path', 'policy_region', 'scenario', 'city']:
-                    train_data[k].append(all_data[k][idx])
-            
-            for idx in val_indices:
-                for k in ['path', 'policy_region', 'scenario', 'city']:
-                    val_data[k].append(all_data[k][idx])
-            
-            # Add test data if we have test indices
-            if limit_test > 0 and test_indices:
-                for idx in test_indices:
+            # Check if a pre-specified split file is provided
+            if args.get('split_file'):
+                split_file_path = args['split_file']
+                if not os.path.isabs(split_file_path):
+                    split_file_path = os.path.join(project_root, split_file_path)
+                
+                if not os.path.exists(split_file_path):
+                    raise ValueError(f"Split file not found: {split_file_path}")
+                
+                print(f"Loading pre-specified split from: {split_file_path}")
+                with open(split_file_path, 'r') as f:
+                    split_data = json.load(f)
+                
+                # Verify the split matches the expected city and counts
+                split_city = split_data.get('city', '')
+                if split_city != train_cities[0] if len(train_cities) == 1 else None:
+                    print(f"Warning: Split file city '{split_city}' doesn't match requested cities {train_cities}")
+                
+                # Load train and val data from split file
+                train_data = split_data.get('train_data', {})
+                val_data = split_data.get('val_data', {})
+                test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
+                
+                # Verify all required fields exist
+                required_fields = ['path', 'policy_region', 'scenario', 'city']
+                for field in required_fields:
+                    if field not in train_data:
+                        raise ValueError(f"Split file missing 'train_data.{field}' field")
+                    if field not in val_data:
+                        raise ValueError(f"Split file missing 'val_data.{field}' field")
+                
+                print(f"Loaded split: {len(train_data['path'])} training graphs, {len(val_data['path'])} validation graphs")
+                if 'distance' in split_data:
+                    print(f"  Split Wasserstein distance: {split_data['distance']:.6f}")
+                
+            else:
+                # Use random splitting (original behavior)
+                print("Splitting data to ensure non-overlapping train/val/test sets...")
+                
+                # Load all data from the shared cities
+                all_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
+                for city in sorted(train_cities):
+                    load_metadata_from_disk(all_data, os.path.join(dataset_path, city, 'metadata.json'))
+                
+                print(f"Loaded {len(all_data['path'])} total graphs from {train_cities}")
+                
+                # Shuffle and split into train, val, and test
+                _rnd.seed(42)  # For reproducibility
+                indices = list(range(len(all_data['path'])))
+                _rnd.shuffle(indices)
+                
+                # Calculate split sizes
+                limit_train = args.get('limit_train_graphs', 0) if args.get('limit_train_graphs', 0) > 0 else len(indices)
+                limit_val = args.get('limit_val_graphs', 0) if args.get('limit_val_graphs', 0) > 0 else len(indices)
+                limit_test = args.get('limit_test_graphs', 0) if args.get('limit_test_graphs', 0) > 0 else 0
+                
+                # Ensure we don't exceed available data
+                total_needed = limit_train + limit_val + limit_test
+                if total_needed > len(indices):
+                    cities_str = ', '.join(train_cities)
+                    raise ValueError(
+                        f"Insufficient data for cities {cities_str}: "
+                        f"Requested {limit_train} train + {limit_val} val + {limit_test} test = {total_needed} graphs, "
+                        f"but only {len(indices)} available. Skipping this city."
+                    )
+                
+                # Split indices - these are the shuffled positions
+                train_indices = indices[:limit_train]  # First N indices for training
+                val_indices = indices[limit_train:limit_train + limit_val]  # Next M indices for validation
+                test_indices = indices[limit_train + limit_val:limit_train + limit_val + limit_test] if limit_test > 0 else []
+                
+                # Create train, val, and test data using the shuffled indices
+                train_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
+                val_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
+                # Always create test_data as a dict (even if empty) to avoid None issues in load_data_and_split_into_subsets
+                test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}
+                
+                # Use the shuffled indices to extract data
+                for idx in train_indices:
                     for k in ['path', 'policy_region', 'scenario', 'city']:
-                        test_data[k].append(all_data[k][idx])
-            
-            print(f"Split data: {len(train_data['path'])} training graphs, {len(val_data['path'])} validation graphs, {len(test_data['path'])} test graphs")
+                        train_data[k].append(all_data[k][idx])
+                
+                for idx in val_indices:
+                    for k in ['path', 'policy_region', 'scenario', 'city']:
+                        val_data[k].append(all_data[k][idx])
+                
+                # Add test data if we have test indices
+                if limit_test > 0 and test_indices:
+                    for idx in test_indices:
+                        for k in ['path', 'policy_region', 'scenario', 'city']:
+                            test_data[k].append(all_data[k][idx])
+                
+                print(f"Split data: {len(train_data['path'])} training graphs, {len(val_data['path'])} validation graphs, {len(test_data['path'])} test graphs")
             
         else:
             raise ValueError(f"Different cities for train and val are not supported for finetuning.")
@@ -327,7 +373,8 @@ def main():
             max_subgraph_nodes=args['max_subgraph_nodes'],
             aug_pos_rotation=args['use_data_augmentation'],
             aug_feature_noise=args['augment_feature_noise_prob'],
-            aug_node_masking_probability=args['use_node_masking_probability']
+            aug_node_masking_probability=args['use_node_masking_probability'],
+            use_destination_activity_param=args.get('use_destination_activity', False)
         )
 
         config = setup_wandb(args)
@@ -367,7 +414,8 @@ def main():
         actual_in_channels = actual_feature_count
         
         # For trans_encoder, verify and adjust model configuration to match checkpoint AFTER data preparation
-        if args['gnn_arch'] == 'trans_encoder' and inferred_config:
+        # Only do this check if we're actually using the checkpoint (not starting from scratch)
+        if args['gnn_arch'] == 'trans_encoder' and inferred_config and not args['start_from_scratch']:
             effective_in_channels = inferred_config.get('effective_in_channels')
             if effective_in_channels:
                 print(f"\n{'='*60}")
@@ -392,16 +440,23 @@ def main():
                 if required_pos_dim < 0:
                     # Checkpoint expects fewer total features than we have in the data
                     # This means the checkpoint was trained with different data (fewer features)
+                    # Note: effective_in_channels = feature_count + pos_dim + lap_pe_dim
+                    # We can't determine the original feature count from effective_in_channels alone
                     raise ValueError(
                         f"\n❌ CRITICAL: Cannot match checkpoint configuration!\n"
                         f"   Data has {actual_feature_count} features\n"
                         f"   Checkpoint expects effective_in_channels={effective_in_channels}\n"
                         f"   This would require pos_dim={required_pos_dim} (negative, impossible)\n\n"
                         f"   The checkpoint was trained with different feature settings.\n"
-                        f"   Solution: Use the same feature settings as the pretrained model:\n"
-                        f"   - If checkpoint used use_all_features=False: set --use_all_features False\n"
-                        f"   - This will give you 5 base features instead of {actual_feature_count}\n"
-                        f"   - Then pos_dim would be: {effective_in_channels} - 5 = {effective_in_channels - 5}\n"
+                        f"   Note: effective_in_channels = feature_count + pos_dim + lap_pe_dim\n"
+                        f"   We cannot determine the original feature count from effective_in_channels alone.\n\n"
+                        f"   Possible solutions:\n"
+                        f"   1. Use --use_all_features False to try matching with 5 base features:\n"
+                        f"      If original was 5 features + 2 pos_dim = 7, this would work.\n"
+                        f"   2. Train from scratch with --start_from_scratch True (skip checkpoint loading)\n"
+                        f"   3. Check the original training logs/config to determine feature settings\n\n"
+                        f"   To try option 1, the calculation would be:\n"
+                        f"      pos_dim = {effective_in_channels} - 5 = {effective_in_channels - 5}\n"
                     )
                 elif required_pos_dim == 0:
                     # No positional encoding needed - data features exactly match checkpoint

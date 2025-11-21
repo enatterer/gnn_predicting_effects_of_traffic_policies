@@ -32,9 +32,11 @@ from gnn.models.trans_encoder import TransEncoder
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 ########## Control Center #########
-use_allowed_modes = False
-use_destination_activity = False
-use_highway = False
+# Module-level defaults for feature selection (NOT command-line flags)
+# Only --use_destination_activity is a command-line flag (in finetune_models.py, etc.)
+use_allowed_modes = True  # Module constant: Include ALLOWED_MODE features (11-19)
+use_destination_activity = False  # Module default: Excludes features 20-27. Overridden by --use_destination_activity flag.
+use_highway = True  # Module constant: Include HIGHWAY features (4-9)
 ###################################
 
 
@@ -488,7 +490,17 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
                                      use_all_features, use_weighted_batches,
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy,
-                                     aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0): 
+                                     aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0,
+                                     use_destination_activity_param=None):
+    """
+    Prepare data with graph features.
+    
+    Args:
+        use_destination_activity_param: If None, uses module-level use_destination_activity. If provided, overrides it.
+                                       When False, excludes features 20-27 (destination/activity features with NaNs).
+    """
+    # Use parameter if provided, otherwise use module-level default
+    _use_destination_activity = use_destination_activity_param if use_destination_activity_param is not None else use_destination_activity 
     
     print(f"Preparing data with {len(train_data['path']) + (len(val_data['path']) if val_data is not None else 0) + (len(test_data['path']) if test_data is not None else 0)} items")
     
@@ -514,11 +526,13 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
         node_features = []
         for feat in EdgeFeatures:
             name = feat.name
-            if not use_allowed_modes and name.startswith("ALLOWED_MODE"):
+            # Exclude features 20-27 (activity/destination features with NaNs) if use_destination_activity=False
+            # This is controlled by the --use_destination_activity flag (ONLY flag for feature selection)
+            # Default: False → excludes features 20-27 → uses features 0-19 only
+            if not _use_destination_activity and feat.value >= 20:  # Features 20-27: HOME, WORK, EDUCATION, LEISURE, SHOP, OTHER, OUTSIDE, IS_IN_EQASIM_TRIPS
                 continue
-            if not use_destination_activity and name in {
-                "HOME", "WORK", "EDUCATION", "LEISURE", "SHOP", "OTHER", "OUTSIDE" ,'IS_IN_EQASIM_TRIPS'
-            }:
+            # use_allowed_modes and use_highway are module-level constants (NOT command-line flags)
+            if not use_allowed_modes and name.startswith("ALLOWED_MODE"):
                 continue
             if not use_highway and name.startswith("HIGHWAY"):
                 continue

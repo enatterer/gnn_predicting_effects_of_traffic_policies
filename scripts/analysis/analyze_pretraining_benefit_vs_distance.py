@@ -283,7 +283,9 @@ def compute_graph_features(graph: Data, exclude_activity_features: bool = True,
 
 
 def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str], 
-                                 use_capacity_reduction_only: bool = False) -> float:
+                                 use_capacity_reduction_only: bool = False,
+                                 verbose: bool = True,
+                                 use_all_features: bool = True) -> float:
     """
     Compute Wasserstein distance between training and validation graph sets.
     
@@ -294,14 +296,17 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
     Args:
         use_capacity_reduction_only: If True, compute distance only on feature 2 (CAPACITY_REDUCTION).
                                     If False, use graph-level features (mean_node_feat). Default: False.
+        verbose: If True, print detailed progress information. If False, suppress all output.
+                Default: True.
     """
     if use_capacity_reduction_only:
         # Extract feature 2 (CAPACITY_REDUCTION) for all nodes across all graphs
         train_capacity_reduction = []
         val_capacity_reduction = []
         
-        print(f"  Loading {len(train_paths)} training graphs...")
-        print(f"  Extracting feature 2 (CAPACITY_REDUCTION) for all nodes...")
+        if verbose:
+            print(f"  Loading {len(train_paths)} training graphs...")
+            print(f"  Extracting feature 2 (CAPACITY_REDUCTION) for all nodes...")
         for path in train_paths:
             try:
                 graph = load_graph(path)
@@ -316,7 +321,8 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
                             capacity_reduction = capacity_reduction[~np.isnan(capacity_reduction) & ~np.isinf(capacity_reduction)]
                             train_capacity_reduction.extend(capacity_reduction.tolist())
             except Exception as e:
-                print(f"    Warning: Failed to load {path}: {e}")
+                if verbose:
+                    print(f"    Warning: Failed to load {path}: {e}")
                 continue
         
         print(f"  Loading {len(val_paths)} validation graphs...")
@@ -334,7 +340,8 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
                             capacity_reduction = capacity_reduction[~np.isnan(capacity_reduction) & ~np.isinf(capacity_reduction)]
                             val_capacity_reduction.extend(capacity_reduction.tolist())
             except Exception as e:
-                print(f"    Warning: Failed to load {path}: {e}")
+                if verbose:
+                    print(f"    Warning: Failed to load {path}: {e}")
                 continue
         
         # Convert to numpy arrays
@@ -342,19 +349,21 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
         val_capacity_reduction = np.array(val_capacity_reduction)
         
         if len(train_capacity_reduction) == 0 or len(val_capacity_reduction) == 0:
-            print(f"    Warning: Empty arrays (train: {len(train_capacity_reduction)}, val: {len(val_capacity_reduction)})")
+            if verbose:
+                print(f"    Warning: Empty arrays (train: {len(train_capacity_reduction)}, val: {len(val_capacity_reduction)})")
             return 0.0
         
         # Debug: Print statistics
-        print(f"    CAPACITY_REDUCTION feature:")
-        print(f"      Train: min={train_capacity_reduction.min():.4f}, max={train_capacity_reduction.max():.4f}, "
-              f"mean={train_capacity_reduction.mean():.4f}, std={train_capacity_reduction.std():.4f}, "
-              f"n={len(train_capacity_reduction)}")
-        print(f"      Val:   min={val_capacity_reduction.min():.4f}, max={val_capacity_reduction.max():.4f}, "
-              f"mean={val_capacity_reduction.mean():.4f}, std={val_capacity_reduction.std():.4f}, "
-              f"n={len(val_capacity_reduction)}")
-        print(f"      Train unique values: {len(np.unique(train_capacity_reduction))}, "
-              f"Val unique values: {len(np.unique(val_capacity_reduction))}")
+        if verbose:
+            print(f"    CAPACITY_REDUCTION feature:")
+            print(f"      Train: min={train_capacity_reduction.min():.4f}, max={train_capacity_reduction.max():.4f}, "
+                  f"mean={train_capacity_reduction.mean():.4f}, std={train_capacity_reduction.std():.4f}, "
+                  f"n={len(train_capacity_reduction)}")
+            print(f"      Val:   min={val_capacity_reduction.min():.4f}, max={val_capacity_reduction.max():.4f}, "
+                  f"mean={val_capacity_reduction.mean():.4f}, std={val_capacity_reduction.std():.4f}, "
+                  f"n={len(val_capacity_reduction)}")
+            print(f"      Train unique values: {len(np.unique(train_capacity_reduction))}, "
+                  f"Val unique values: {len(np.unique(val_capacity_reduction))}")
         
         # Check if all values are the same
         train_is_constant = len(np.unique(train_capacity_reduction)) == 1
@@ -363,8 +372,9 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
         if train_is_constant and val_is_constant:
             # Constant arrays - distance is just the difference
             dist = abs(train_capacity_reduction[0] - val_capacity_reduction[0])
-            print(f"    CAPACITY_REDUCTION: Constant arrays (train={train_capacity_reduction[0]:.4f}, "
-                  f"val={val_capacity_reduction[0]:.4f}), distance = {dist}")
+            if verbose:
+                print(f"    CAPACITY_REDUCTION: Constant arrays (train={train_capacity_reduction[0]:.4f}, "
+                      f"val={val_capacity_reduction[0]:.4f}), distance = {dist}")
             return dist
         else:
             try:
@@ -374,45 +384,63 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
                     print(f"    CAPACITY_REDUCTION: Wasserstein distance = {dist}")
                     return dist
                 else:
-                    print(f"    Warning: Wasserstein distance returned non-finite value: {dist}")
+                    if verbose:
+                        print(f"    Warning: Wasserstein distance returned non-finite value: {dist}")
                     # Fallback: use mean absolute difference
                     dist = np.abs(train_capacity_reduction.mean() - val_capacity_reduction.mean())
-                    print(f"    Using mean absolute difference as fallback: {dist}")
+                    if verbose:
+                        print(f"    Using mean absolute difference as fallback: {dist}")
                     return dist
             except Exception as e:
-                print(f"    Warning: Error computing Wasserstein distance: {e}")
+                if verbose:
+                    print(f"    Warning: Error computing Wasserstein distance: {e}")
                 # Fallback: use mean absolute difference
                 dist = np.abs(train_capacity_reduction.mean() - val_capacity_reduction.mean())
-                print(f"    Using mean absolute difference as fallback: {dist}")
+                if verbose:
+                    print(f"    Using mean absolute difference as fallback: {dist}")
                 return dist
     else:
         # Fallback: use graph-level features (mean_node_feat approach)
         train_features = []
         val_features = []
         
-        print(f"  Loading {len(train_paths)} training graphs...")
-        print(f"  Computing graph-level features (mean_node_feat)...")
+        if verbose:
+            print(f"  Loading {len(train_paths)} training graphs...")
+            print(f"  Computing graph-level features (mean_node_feat)...")
+        # Determine which node feature indices to use (must match training exactly)
+        # If use_all_features=False: use only [0, 1, 2, 3, 10] (5 base features)
+        # If use_all_features=True: use [0-19] (excludes 20-27)
+        if use_all_features:
+            node_feature_indices = list(range(20))  # Features 0-19
+        else:
+            node_feature_indices = [0, 1, 2, 3, 10]  # 5 base features: VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH
+        
         for path in train_paths:
             try:
                 graph = load_graph(path)
                 features = compute_graph_features(graph, 
                                                  exclude_activity_features=True,
-                                                 use_only_first_5_features=True)
+                                                 use_only_first_5_features=True,
+                                                 node_feature_indices=node_feature_indices)
                 train_features.append(features)
             except Exception as e:
-                print(f"    Warning: Failed to load {path}: {e}")
+                if verbose:
+                    print(f"    Warning: Failed to load {path}: {e}")
                 continue
         
-        print(f"  Loading {len(val_paths)} validation graphs...")
+        if verbose:
+            print(f"  Loading {len(val_paths)} validation graphs...")
         for path in val_paths:
             try:
                 graph = load_graph(path)
                 features = compute_graph_features(graph,
                                                  exclude_activity_features=True,
-                                                 use_only_first_5_features=True)
+                                                 use_only_first_5_features=True,
+                                                 node_feature_indices=node_feature_indices)
                 val_features.append(features)
             except Exception as e:
-                print(f"    Warning: Failed to load {path}: {e}")
+                if verbose:
+                    print(f"    Warning: Failed to load {path}: {e}")
                 continue
         
         if len(train_features) == 0 or len(val_features) == 0:
@@ -426,20 +454,21 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
         val_has_nan = np.any(~np.isfinite(val_features))
         
         if train_has_nan or val_has_nan:
-            print(f"    Warning: Found NaN/inf in features")
-            if train_has_nan:
-                nan_count = np.isnan(train_features).sum()
-                inf_count = np.isinf(train_features).sum()
-                nan_per_feature = [np.isnan(train_features[:, i]).sum() for i in range(train_features.shape[1])]
-                print(f"      Train: {nan_count} NaN, {inf_count} Inf values")
-                print(f"      Train NaN per feature: {nan_per_feature}")
-            if val_has_nan:
-                nan_count = np.isnan(val_features).sum()
-                inf_count = np.isinf(val_features).sum()
-                nan_per_feature = [np.isnan(val_features[:, i]).sum() for i in range(val_features.shape[1])]
-                print(f"      Val: {nan_count} NaN, {inf_count} Inf values")
-                print(f"      Val NaN per feature: {nan_per_feature}")
-            print(f"      Replacing with 0...")
+            if verbose:
+                print(f"    Warning: Found NaN/inf in features")
+                if train_has_nan:
+                    nan_count = np.isnan(train_features).sum()
+                    inf_count = np.isinf(train_features).sum()
+                    nan_per_feature = [np.isnan(train_features[:, i]).sum() for i in range(train_features.shape[1])]
+                    print(f"      Train: {nan_count} NaN, {inf_count} Inf values")
+                    print(f"      Train NaN per feature: {nan_per_feature}")
+                if val_has_nan:
+                    nan_count = np.isnan(val_features).sum()
+                    inf_count = np.isinf(val_features).sum()
+                    nan_per_feature = [np.isnan(val_features[:, i]).sum() for i in range(val_features.shape[1])]
+                    print(f"      Val: {nan_count} NaN, {inf_count} Inf values")
+                    print(f"      Val NaN per feature: {nan_per_feature}")
+                print(f"      Replacing with 0...")
             train_features = np.nan_to_num(train_features, nan=0.0, posinf=0.0, neginf=0.0)
             val_features = np.nan_to_num(val_features, nan=0.0, posinf=0.0, neginf=0.0)
         
@@ -451,22 +480,24 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
         if num_features <= mean_node_feat_idx:
             raise ValueError(f"Feature array has only {num_features} features, but need index {mean_node_feat_idx} for mean_node_feat")
         
-        print(f"    Train features shape: {train_features.shape}, Val features shape: {val_features.shape}")
-        print(f"    Computing Wasserstein distance ONLY for mean_node_feat (feature index {mean_node_feat_idx})")
+        if verbose:
+            print(f"    Train features shape: {train_features.shape}, Val features shape: {val_features.shape}")
+            print(f"    Computing Wasserstein distance ONLY for mean_node_feat (feature index {mean_node_feat_idx})")
         
         # Extract only mean_node_feat
         train_dist = train_features[:, mean_node_feat_idx]
         val_dist = val_features[:, mean_node_feat_idx]
         
         # Debug: Print statistics for mean_node_feat
-        train_min, train_max = train_dist.min(), train_dist.max()
-        train_mean, train_std = train_dist.mean(), train_dist.std()
-        val_min, val_max = val_dist.min(), val_dist.max()
-        val_mean, val_std = val_dist.mean(), val_dist.std()
-        print(f"      mean_node_feat:")
-        print(f"        Train: min={train_min:.4f}, max={train_max:.4f}, mean={train_mean:.4f}, std={train_std:.4f}")
-        print(f"        Val:   min={val_min:.4f}, max={val_max:.4f}, mean={val_mean:.4f}, std={val_std:.4f}")
-        print(f"        Train unique values: {len(np.unique(train_dist))}, Val unique values: {len(np.unique(val_dist))}")
+        if verbose:
+            train_min, train_max = train_dist.min(), train_dist.max()
+            train_mean, train_std = train_dist.mean(), train_dist.std()
+            val_min, val_max = val_dist.min(), val_dist.max()
+            val_mean, val_std = val_dist.mean(), val_dist.std()
+            print(f"      mean_node_feat:")
+            print(f"        Train: min={train_min:.4f}, max={train_max:.4f}, mean={train_mean:.4f}, std={train_std:.4f}")
+            print(f"        Val:   min={val_min:.4f}, max={val_max:.4f}, mean={val_mean:.4f}, std={val_std:.4f}")
+            print(f"        Train unique values: {len(np.unique(train_dist))}, Val unique values: {len(np.unique(val_dist))}")
         
         # Check if all values are the same
         train_is_constant = np.all(train_dist == train_dist[0])
@@ -475,26 +506,32 @@ def compute_wasserstein_distance(train_paths: List[str], val_paths: List[str],
         if train_is_constant and val_is_constant:
             # Constant arrays - distance is just the difference
             dist = abs(train_dist[0] - val_dist[0])
-            print(f"    mean_node_feat: Constant arrays (train={train_dist[0]:.4f}, val={val_dist[0]:.4f}), distance = {dist:.6f}")
+            if verbose:
+                print(f"    mean_node_feat: Constant arrays (train={train_dist[0]:.4f}, val={val_dist[0]:.4f}), distance = {dist:.6f}")
             return dist
         else:
             try:
                 dist = wasserstein_distance(train_dist, val_dist)
                 # Check if result is valid
                 if np.isfinite(dist):
-                    print(f"    mean_node_feat: Wasserstein distance = {dist:.6f}")
+                    if verbose:
+                        print(f"    mean_node_feat: Wasserstein distance = {dist:.6f}")
                     return dist
                 else:
-                    print(f"    Warning: mean_node_feat: Wasserstein distance is {dist}, using fallback")
+                    if verbose:
+                        print(f"    Warning: mean_node_feat: Wasserstein distance is {dist}, using fallback")
                     # Fallback: use mean absolute difference
                     fallback_dist = np.mean(np.abs(train_dist - val_dist))
-                    print(f"    mean_node_feat: Using fallback (mean abs diff) = {fallback_dist:.6f}")
+                    if verbose:
+                        print(f"    mean_node_feat: Using fallback (mean abs diff) = {fallback_dist:.6f}")
                     return fallback_dist
             except Exception as e:
-                print(f"    Warning: mean_node_feat: Error computing Wasserstein distance: {e}, using fallback")
+                if verbose:
+                    print(f"    Warning: mean_node_feat: Error computing Wasserstein distance: {e}, using fallback")
                 # Fallback: use mean absolute difference
                 fallback_dist = np.mean(np.abs(train_dist - val_dist))
-                print(f"    mean_node_feat: Using fallback (mean abs diff) = {fallback_dist:.6f}")
+                if verbose:
+                    print(f"    mean_node_feat: Using fallback (mean abs diff) = {fallback_dist:.6f}")
                 return fallback_dist
 
 

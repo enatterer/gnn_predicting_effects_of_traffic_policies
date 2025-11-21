@@ -14,6 +14,7 @@ Example usage:
 """
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -26,13 +27,14 @@ if str(scripts_path) not in sys.path:
 from training.help_functions import str_to_bool
 
 # Target cities for finetuning/from-scratch experiments
-TARGET_CITIES = ['erlangen', 'bamberg','muenchen', 'neuulm']
+TARGET_CITIES = ['erlangen', 'bamberg', 'neuulm', 'muenchen']
+# TARGET_CITIES = ['muenchen']
 
 # Number of training graphs to loop over
-TRAIN_GRAPH_COUNTS = [25, 50, 100]
+TRAIN_GRAPH_COUNTS = [10]
 
 # Number of validation graphs (fixed)
-VAL_GRAPH_COUNT = 200
+VAL_GRAPH_COUNT = 100
 
 # Pretrained checkpoint configuration
 # Note: The checkpoint path structure is: base_dir/project_name/run_name/trained_model/checkpoints/
@@ -64,6 +66,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
     parser.add_argument("--use_all_features", type=str_to_bool, default=True, 
                         help="Whether to use all features (True) or a subset (False).")
+    parser.add_argument("--use_destination_activity", type=str_to_bool, default=False,
+                        help="Whether to include destination/activity features (20-27). Default: False (excludes features 20-27 with NaNs).")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, 
@@ -71,7 +75,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--target_type", type=str, default="abs_vol_car", 
                         help="Which target to use for training.")
     parser.add_argument("--num_epochs", type=int, default=600, help="Number of epochs to train for.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     parser.add_argument("--peak_lr", type=float, default=0.001, 
                         help="The peak learning rate (after warmup).")
     parser.add_argument("--initial_lr", type=float, default=0.0005, 
@@ -82,7 +86,7 @@ def create_parser() -> argparse.ArgumentParser:
                         help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, 
                         help="The minimum learning rate fraction.")
-    parser.add_argument("--early_stopping_patience", type=int, default=25, 
+    parser.add_argument("--early_stopping_patience", type=int, default=30, 
                         help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, 
                         help="Whether to use dropout.")
@@ -131,21 +135,27 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--val_graph_count", type=int, default=VAL_GRAPH_COUNT,
                         help=f"Number of validation graphs (default: {VAL_GRAPH_COUNT}).")
     
+    # Split file configuration
+    parser.add_argument("--splits_dir", type=str, default="data/splits",
+                        help="Directory containing pre-generated split JSON files. If provided, will use split files instead of random splitting.")
+    parser.add_argument("--use_distant_splits", type=str_to_bool, default=False,
+                        help="If True, use pre-generated distant splits from splits_dir instead of random splits.")
+    
     return parser
 
 
 def build_finetune_command(args, city: str, train_graphs: int, val_graphs: int, 
-                          start_from_scratch: bool) -> list:
+                          start_from_scratch: bool, split_file: str = None) -> list:
     """Build the command to run finetune_models.py."""
     script_path = Path(__file__).parent / "finetune_models.py"
     
     # For finetuning: use unique run_name for saving, pass pretrain_run_name for checkpoint loading
     # For scratch runs: use unique run_name (no checkpoint needed)
     if start_from_scratch:
-        run_name = f"scratch_{city}_train{train_graphs}_val{val_graphs}"
+        run_name = f"scratch_{city}_train{train_graphs}_val{val_graphs}_high_dist_train_val"
     else:
         # For finetuning: use unique run_name per configuration to avoid overwriting
-        run_name = f"finetuned_{city}_train{train_graphs}_val{val_graphs}"
+        run_name = f"finetuned_{city}_train{train_graphs}_val{val_graphs}_high_dist_train_val"
     
     cmd = [
         sys.executable,
@@ -164,6 +174,7 @@ def build_finetune_command(args, city: str, train_graphs: int, val_graphs: int,
         "--pretraining_inductive", str(args.pretraining_inductive),
         "--in_channels", str(args.in_channels),
         "--use_all_features", str(args.use_all_features),
+        "--use_destination_activity", str(args.use_destination_activity),
         "--out_channels", str(args.out_channels),
         "--loss_fct", args.loss_fct,
         "--use_weighted_loss", str(args.use_weighted_loss),
@@ -199,6 +210,10 @@ def build_finetune_command(args, city: str, train_graphs: int, val_graphs: int,
         "--unique_model_description", run_name,  # Pass run_name so it's used directly without duplication
     ])
     
+    # Add split file if provided
+    if split_file:
+        cmd.extend(["--split_file", split_file])
+    
     return cmd
 
 
@@ -220,6 +235,19 @@ def main():
     
     val_graph_count = args.val_graph_count
     
+    # Determine if we should use pre-generated splits
+    splits_dir = None
+    if args.use_distant_splits:
+        if not os.path.isabs(args.splits_dir):
+            splits_dir = Path(__file__).resolve().parents[2] / args.splits_dir
+        else:
+            splits_dir = Path(args.splits_dir)
+        splits_dir = splits_dir.resolve()
+        if not splits_dir.exists():
+            print(f"Warning: Splits directory does not exist: {splits_dir}")
+            print("  Will generate splits on-the-fly or use random splits.")
+            splits_dir = None
+    
     print("=" * 80)
     print("Finetuning and From-Scratch Experiments")
     print("=" * 80)
@@ -229,6 +257,10 @@ def main():
     print(f"Pretrained run name: {args.pretrain_run_name}")
     print(f"Project name: {args.project_name}")
     print(f"GNN architecture: {args.gnn_arch}")
+    if splits_dir:
+        print(f"Using pre-generated distant splits from: {splits_dir}")
+    else:
+        print("Using random splits (default behavior)")
     print("=" * 80)
     
     total_runs = len(target_cities) * len(train_graph_counts) * 2  # 2 = finetune + scratch
@@ -244,15 +276,29 @@ def main():
             print(f"Training graphs: {train_graphs}, Validation graphs: {val_graph_count}")
             print(f"{'-' * 80}")
             
+            # Check if we have a pre-generated split file
+            split_file = None
+            if splits_dir:
+                split_filename = f"{city}_train{train_graphs}_val{val_graph_count}_distant.json"
+                split_file_path = splits_dir / split_filename
+                if split_file_path.exists():
+                    split_file = str(split_file_path)
+                    print(f"Using pre-generated split file: {split_file}")
+                else:
+                    print(f"Warning: Split file not found: {split_file_path}")
+                    print("  Will use random splitting instead.")
+            
             # Run finetuning (from checkpoint)
             run_counter += 1
             print(f"\n[{run_counter}/{total_runs}] Running FINETUNING for {city} "
                   f"(train={train_graphs}, val={val_graph_count})")
             print(f"Command: finetune_models.py --cities {city} --limit_train_graphs {train_graphs} "
                   f"--limit_val_graphs {val_graph_count} --start_from_scratch False")
+            if split_file:
+                print(f"  Using split file: {split_file}")
             
             cmd_finetune = build_finetune_command(
-                args, city, train_graphs, val_graph_count, start_from_scratch=False
+                args, city, train_graphs, val_graph_count, start_from_scratch=False, split_file=split_file
             )
             
             try:
@@ -275,9 +321,11 @@ def main():
                   f"(train={train_graphs}, val={val_graph_count})")
             print(f"Command: finetune_models.py --cities {city} --limit_train_graphs {train_graphs} "
                   f"--limit_val_graphs {val_graph_count} --start_from_scratch True")
+            if split_file:
+                print(f"  Using split file: {split_file}")
             
             cmd_scratch = build_finetune_command(
-                args, city, train_graphs, val_graph_count, start_from_scratch=True
+                args, city, train_graphs, val_graph_count, start_from_scratch=True, split_file=split_file
             )
             
             try:
