@@ -67,7 +67,9 @@ def main():
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).')
     parser.add_argument("--loss_fct", type=str, default="mse", help="The loss function to use. Supported: mse, l1.")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False, help="Whether to use weighted loss (based on vol_base_case) or not.")
-    parser.add_argument("--target_normalization", type=str_to_bool, default=False, help="Whether targets are normalized during preprocessing.")
+    parser.add_argument("--target_normalization", type=str, default="None", 
+                        help="Target normalization method. Options: 'None' (no normalization), 'relative_to_max_traffic_vol_base_case' (normalize by max vol_base_case per graph), 'relative_standard_scaler' (standardize with mean/std).",
+                        choices=["None", "relative_to_max_traffic_vol_base_case", "relative_standard_scaler"])
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False, help="Whether to predict mode stats or not.")
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
@@ -118,6 +120,10 @@ def main():
     parser.add_argument("--start_from_scratch", type=str_to_bool, default=False,help="If True, initialize model weights randomly instead of loading a checkpoint.")
 
     args = vars(parser.parse_args())
+    
+    # Convert "None" string to None for target_normalization
+    if args.get('target_normalization') == "None":
+        args['target_normalization'] = None
     
     # Parse city lists from comma-separated strings
     cities = [city.strip() for city in args['cities'].split(',') if city.strip()]

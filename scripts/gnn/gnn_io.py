@@ -135,20 +135,57 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
     val_cities_set = _log_split_details("Validation", val_indices, labels)
     test_cities_set = _log_split_details("Test", test_indices, labels)
     
-    # Verify no data leakage when val_data and test_data are provided (inductive learning)
+    # Verify no data leakage when val_data and test_data are provided
+    # For INDUCTIVE learning: cities must be different (strict separation)
+    # For TRANSDUCTIVE learning: same cities are allowed, but graphs must be different
     if val_data is not None or test_data is not None:
-        leakage_val = train_cities_set & val_cities_set
-        leakage_test = train_cities_set & test_cities_set
-        leakage_val_test = val_cities_set & test_cities_set
+        # Check if this is inductive (different cities) or transductive (same cities)
+        # Only compare non-empty sets - empty test_data shouldn't affect the check
+        has_val_data = val_data is not None and len(val_cities_set) > 0
+        has_test_data = test_data is not None and len(test_cities_set) > 0
         
-        if leakage_val:
-            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_val} appear in validation set!")
-        if leakage_test:
-            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_test} appear in test set!")
-        if leakage_val_test:
-            raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Validation cities {leakage_val_test} appear in test set!")
+        # It's inductive if any non-empty city sets differ
+        is_inductive = False
+        if has_val_data and train_cities_set != val_cities_set:
+            is_inductive = True
+        if has_test_data and train_cities_set != test_cities_set:
+            is_inductive = True
+        if has_val_data and has_test_data and val_cities_set != test_cities_set:
+            is_inductive = True
         
-        print(f"[VERIFICATION] ✓ No data leakage: Training cities ({len(train_cities_set)}) are separate from validation ({len(val_cities_set)}) and test ({len(test_cities_set)}) cities")
+        if is_inductive:
+            # INDUCTIVE: Cities must be completely separate
+            leakage_val = train_cities_set & val_cities_set
+            leakage_test = train_cities_set & test_cities_set
+            leakage_val_test = val_cities_set & test_cities_set
+            
+            if leakage_val:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_val} appear in validation set!")
+            if leakage_test:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Training cities {leakage_test} appear in test set!")
+            if leakage_val_test:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: Validation cities {leakage_val_test} appear in test set!")
+            
+            print(f"[VERIFICATION] ✓ No data leakage (INDUCTIVE): Training cities ({len(train_cities_set)}) are separate from validation ({len(val_cities_set)}) and test ({len(test_cities_set)}) cities")
+        else:
+            # TRANSDUCTIVE: Same cities are allowed, but verify graphs are different
+            # Check that train/val/test indices don't overlap (they shouldn't based on how they're created)
+            train_indices_set = set(train_indices)
+            val_indices_set = set(val_indices)
+            test_indices_set = set(test_indices)
+            
+            graph_leakage_val = train_indices_set & val_indices_set
+            graph_leakage_test = train_indices_set & test_indices_set
+            graph_leakage_val_test = val_indices_set & test_indices_set
+            
+            if graph_leakage_val:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: {len(graph_leakage_val)} training graph(s) appear in validation set!")
+            if graph_leakage_test:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: {len(graph_leakage_test)} training graph(s) appear in test set!")
+            if graph_leakage_val_test:
+                raise ValueError(f"DATA LEAKAGE DETECTED in load_data_and_split_into_subsets: {len(graph_leakage_val_test)} validation graph(s) appear in test set!")
+            
+            print(f"[VERIFICATION] ✓ No data leakage (TRANSDUCTIVE): Same cities allowed, but {len(train_indices_set)} training, {len(val_indices_set)} validation, and {len(test_indices_set)} test graphs are non-overlapping")
     
     return dataset, train_subset, val_subset, test_subset
 

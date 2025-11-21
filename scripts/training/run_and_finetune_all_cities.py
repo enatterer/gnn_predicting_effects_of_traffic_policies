@@ -213,7 +213,8 @@ def create_parser() -> argparse.ArgumentParser:
     # ------------------------------------------------------------------
     # Arguments specific to finetune_models.py
     # ------------------------------------------------------------------
-    parser.add_argument("--target_normalization", type=str_to_bool, default=False)
+    parser.add_argument("--target_normalization", type=str, default="None",
+                        choices=["None", "relative_to_max_traffic_vol_base_case", "relative_standard_scaler"])
     parser.add_argument("--predict_mode_stats", type=str_to_bool, default=False)
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False)
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False)
