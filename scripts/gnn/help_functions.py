@@ -214,7 +214,7 @@ def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: l
     
     For each percentage p:
     - Top p%: Nodes with highest p% of target values
-    - Bottom p%: Nodes with lowest p% of target values  
+    - Bottom p%: Nodes with values closest to zero (smallest absolute values)
     - Minus top p%: Nodes with most negative p% of target values (for negative values)
     
     Hit rate = percentage of nodes in predicted top/bottom/minus-top p% that match 
@@ -226,7 +226,7 @@ def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: l
     - percentages (list): List of percentages to compute (default: [1, 5]).
     
     Returns:
-    - dict: Dictionary with keys like 'top_1_hit_rate', 'bottom_1_hit_rate', 'minus_top_1_hit_rate', etc.
+    - dict: Dictionary with keys like 'top_1_hit_rate', 'closest_to_zero_1_hit_rate', 'minus_top_1_hit_rate', etc.
     """
     # Flatten tensors
     if isinstance(preds, torch.Tensor):
@@ -266,15 +266,17 @@ def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: l
         top_hit_rate = top_hits / k if k > 0 else 0.0
         results[f'top_{p}_hit_rate'] = top_hit_rate
         
-        # BOTTOM p%: Lowest values
-        # Get indices of bottom p% in actual values
-        bottom_k_actual_indices = np.argsort(targets)[:k]
-        # Get indices of bottom p% in predicted values
-        bottom_k_pred_indices = np.argsort(preds)[:k]
+        # BOTTOM p%: Values closest to zero (smallest absolute values)
+        # Get indices of bottom p% in actual values (closest to zero)
+        abs_targets = np.abs(targets)
+        bottom_k_actual_indices = np.argsort(abs_targets)[:k]
+        # Get indices of bottom p% in predicted values (closest to zero)
+        abs_preds = np.abs(preds)
+        bottom_k_pred_indices = np.argsort(abs_preds)[:k]
         # Compute hit rate: intersection / k
         bottom_hits = len(np.intersect1d(bottom_k_actual_indices, bottom_k_pred_indices))
         bottom_hit_rate = bottom_hits / k if k > 0 else 0.0
-        results[f'bottom_{p}_hit_rate'] = bottom_hit_rate
+        results[f'closest_to_zero_{p}_hit_rate'] = bottom_hit_rate
         
         # MINUS TOP p%: Most negative values (only if there are negative values)
         negative_mask_actual = targets < 0

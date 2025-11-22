@@ -326,6 +326,8 @@ def setup_wandb(args):
     wandb.login()
     wandb.init(project=args['project_name'], name=args['unique_model_description'],
                config={k: v for k, v in args.items() if k not in ['project_name', 'unique_model_description', 'model_kwargs']})
+    # Define metrics after wandb.init() to ensure hit rates are tracked
+    setup_wandb_metrics()
     return wandb.config
 
 def setup_wandb_metrics():
@@ -338,10 +340,10 @@ def setup_wandb_metrics():
     wandb.define_metric("pearson", step_metric="epoch")
     # Hit rate metrics
     wandb.define_metric("top_1_hit_rate", step_metric="epoch")
-    wandb.define_metric("bottom_1_hit_rate", step_metric="epoch")
+    wandb.define_metric("closest_to_zero_1_hit_rate", step_metric="epoch")
     wandb.define_metric("minus_top_1_hit_rate", step_metric="epoch")
     wandb.define_metric("top_5_hit_rate", step_metric="epoch")
-    wandb.define_metric("bottom_5_hit_rate", step_metric="epoch")
+    wandb.define_metric("closest_to_zero_5_hit_rate", step_metric="epoch")
     wandb.define_metric("minus_top_5_hit_rate", step_metric="epoch")
 
 class EarlyStopping:
