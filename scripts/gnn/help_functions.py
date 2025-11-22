@@ -2,6 +2,7 @@ import os
 import sys
 import math
 
+import numpy as np
 from tqdm import tqdm
 from scipy.stats import spearmanr, pearsonr
 
@@ -207,6 +208,114 @@ def compute_spearman_pearson(preds, targets, is_np = False) -> tuple:
     pearson_corr, _ = pearsonr(preds, targets)
     return spearman_corr, pearson_corr
 
+def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: list = [1, 5]) -> dict:
+    """
+    Compute hit rates for top x%, bottom x%, and minus top x% nodes.
+    
+    For each percentage p:
+    - Top p%: Nodes with highest p% of target values
+    - Bottom p%: Nodes with lowest p% of target values  
+    - Minus top p%: Nodes with most negative p% of target values (for negative values)
+    
+    Hit rate = percentage of nodes in predicted top/bottom/minus-top p% that match 
+    the actual top/bottom/minus-top p%.
+    
+    Parameters:
+    - preds (torch.Tensor): Predicted values (flattened).
+    - targets (torch.Tensor): Actual target values (flattened).
+    - percentages (list): List of percentages to compute (default: [1, 5]).
+    
+    Returns:
+    - dict: Dictionary with keys like 'top_1_hit_rate', 'bottom_1_hit_rate', 'minus_top_1_hit_rate', etc.
+    """
+    # Flatten tensors
+    if isinstance(preds, torch.Tensor):
+        preds = preds.cpu().detach().flatten().numpy()
+    else:
+        preds = preds.flatten()
+    
+    if isinstance(targets, torch.Tensor):
+        targets = targets.cpu().detach().flatten().numpy()
+    else:
+        targets = targets.flatten()
+    
+    # Ensure same length
+    if len(preds) != len(targets):
+        raise ValueError(f"Predictions and targets must have same length. Got {len(preds)} vs {len(targets)}")
+    
+    n = len(targets)
+    if n == 0:
+        return {}
+    
+    results = {}
+    
+    for p in percentages:
+        if p <= 0 or p >= 100:
+            continue
+        
+        # Calculate number of nodes in top/bottom p%
+        k = max(1, int(np.ceil(n * p / 100)))
+        
+        # TOP p%: Highest values
+        # Get indices of top p% in actual values
+        top_k_actual_indices = np.argsort(targets)[-k:]
+        # Get indices of top p% in predicted values
+        top_k_pred_indices = np.argsort(preds)[-k:]
+        # Compute hit rate: intersection / k
+        top_hits = len(np.intersect1d(top_k_actual_indices, top_k_pred_indices))
+        top_hit_rate = top_hits / k if k > 0 else 0.0
+        results[f'top_{p}_hit_rate'] = top_hit_rate
+        
+        # BOTTOM p%: Lowest values
+        # Get indices of bottom p% in actual values
+        bottom_k_actual_indices = np.argsort(targets)[:k]
+        # Get indices of bottom p% in predicted values
+        bottom_k_pred_indices = np.argsort(preds)[:k]
+        # Compute hit rate: intersection / k
+        bottom_hits = len(np.intersect1d(bottom_k_actual_indices, bottom_k_pred_indices))
+        bottom_hit_rate = bottom_hits / k if k > 0 else 0.0
+        results[f'bottom_{p}_hit_rate'] = bottom_hit_rate
+        
+        # MINUS TOP p%: Most negative values (only if there are negative values)
+        negative_mask_actual = targets < 0
+        negative_mask_pred = preds < 0
+        
+        if np.any(negative_mask_actual):
+            # For actual: get indices of most negative p% (lowest values among negatives)
+            negative_actual_indices = np.where(negative_mask_actual)[0]
+            negative_actual_values = targets[negative_actual_indices]
+            k_neg_actual = max(1, min(k, len(negative_actual_indices)))
+            minus_top_k_actual_indices = negative_actual_indices[np.argsort(negative_actual_values)[:k_neg_actual]]
+            
+            # For predicted: get indices of most negative p% (lowest values among negatives)
+            # Use same k_neg_actual to ensure we're comparing the same percentage
+            if np.any(negative_mask_pred):
+                negative_pred_indices = np.where(negative_mask_pred)[0]
+                negative_pred_values = preds[negative_pred_indices]
+                k_neg_pred = max(1, min(k, len(negative_pred_indices)))
+                # Use the minimum of k_neg_actual and k_neg_pred to ensure fair comparison
+                k_neg_compare = min(k_neg_actual, k_neg_pred)
+                minus_top_k_pred_indices = negative_pred_indices[np.argsort(negative_pred_values)[:k_neg_compare]]
+            else:
+                minus_top_k_pred_indices = np.array([], dtype=np.int64)
+                k_neg_compare = k_neg_actual
+            
+            # Compute hit rate: intersection / k_neg_actual (use actual as reference)
+            if len(minus_top_k_actual_indices) > 0 and len(minus_top_k_pred_indices) > 0:
+                # Compare first k_neg_compare elements from both
+                actual_compare = minus_top_k_actual_indices[:k_neg_compare]
+                pred_compare = minus_top_k_pred_indices[:k_neg_compare]
+                minus_top_hits = len(np.intersect1d(actual_compare, pred_compare))
+                minus_top_hit_rate = minus_top_hits / k_neg_actual if k_neg_actual > 0 else 0.0
+            else:
+                minus_top_hit_rate = 0.0
+        else:
+            minus_top_hit_rate = 0.0
+        
+        results[f'minus_top_{p}_hit_rate'] = minus_top_hit_rate
+    
+    return results
+
 def select_target_tensor(data, target_type: str):
     """
     Select the appropriate target tensor based on target_type.
@@ -271,7 +380,8 @@ def validate_model_during_training(config: object,
     - device (torch.device): Device to perform validation on.
 
     Returns:
-    - tuple: Validation metrics including loss and correlations.
+    - tuple: Validation metrics including loss, correlations, and hit rates.
+             Format: (val_loss, r_squared, spearman_corr, pearson_corr, hit_rates_dict)
     """
     
     print("Starting validation...")
@@ -332,13 +442,18 @@ def validate_model_during_training(config: object,
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
     
+    # Compute hit rates (1% and 5%)
+    hit_rates = compute_hit_rates(node_predictions, actual_node_targets, percentages=[1, 5])
+    
     print(f"Original-scale validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
+    if hit_rates:
+        print(f"Hit rates: {', '.join([f'{k}={v:.4f}' for k, v in hit_rates.items()])}")
     
     # Clear large tensors to save memory
     del actual_node_targets, node_predictions
     torch.cuda.empty_cache()
 
-    return total_validation_loss, r_squared, spearman_corr, pearson_corr
+    return total_validation_loss, r_squared, spearman_corr, pearson_corr, hit_rates
 
 class LinearWarmupCosineDecayScheduler:
     def __init__(self, 

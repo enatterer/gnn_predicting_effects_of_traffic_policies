@@ -83,8 +83,8 @@ class TransEncoder(BaseGNN):
         self.embed_dim = hidden_channels[-1] # d_model for transformer
         self.num_graph_conv_layers = len(hidden_channels) if use_graph_conv else 0
 
-        # Log to wandb
-        if self.log_to_wandb:
+        # Log to wandb (only if wandb is initialized)
+        if self.log_to_wandb and wandb.run is not None:
             wandb.config.update({
                 'in_channels': self.in_channels,
                 'feature_in_channels': in_channels,

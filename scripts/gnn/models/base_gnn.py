@@ -474,15 +474,22 @@ class BaseGNN(nn.Module, ABC):
                 optimizer.zero_grad()
                 
             # Validation step
-            val_loss, r_squared, spearman_corr, pearson_corr = validate_model_during_training(
+            val_result = validate_model_during_training(
                 config=config,
                 model=self,
                 dataset=valid_dl,
                 loss_func=loss_fct,
                 device=device)
+            
+            # Unpack validation results (handles both old and new return format)
+            if len(val_result) == 5:
+                val_loss, r_squared, spearman_corr, pearson_corr, hit_rates = val_result
+            else:
+                val_loss, r_squared, spearman_corr, pearson_corr = val_result
+                hit_rates = {}
 
             # Epoch level logging
-            wandb.log({
+            log_dict = {
                 "val_loss": val_loss,
                 "train_loss": epoch_train_loss / len(train_dl),
                 "lr": epoch_start_lr,
@@ -490,7 +497,13 @@ class BaseGNN(nn.Module, ABC):
                 "spearman": spearman_corr,
                 "pearson": pearson_corr,
                 "epoch": epoch
-            })
+            }
+            
+            # Add hit rates to log dict
+            for key, value in hit_rates.items():
+                log_dict[key] = value
+            
+            wandb.log(log_dict)
 
             print(f"epoch: {epoch}, validation loss: {val_loss}, lr: {epoch_start_lr} (start), lr_end: {lr:.6f}, r^2: {r_squared}")
             

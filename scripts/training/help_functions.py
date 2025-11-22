@@ -336,6 +336,13 @@ def setup_wandb_metrics():
     wandb.define_metric("r^2", step_metric="epoch")
     wandb.define_metric("spearman", step_metric="epoch")
     wandb.define_metric("pearson", step_metric="epoch")
+    # Hit rate metrics
+    wandb.define_metric("top_1_hit_rate", step_metric="epoch")
+    wandb.define_metric("bottom_1_hit_rate", step_metric="epoch")
+    wandb.define_metric("minus_top_1_hit_rate", step_metric="epoch")
+    wandb.define_metric("top_5_hit_rate", step_metric="epoch")
+    wandb.define_metric("bottom_5_hit_rate", step_metric="epoch")
+    wandb.define_metric("minus_top_5_hit_rate", step_metric="epoch")
 
 class EarlyStopping:
     def __init__(self, patience=5, verbose=False):

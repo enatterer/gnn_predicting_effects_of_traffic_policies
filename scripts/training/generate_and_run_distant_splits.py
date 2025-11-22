@@ -215,7 +215,7 @@ def create_parser():
                         help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, 
                         help="The minimum learning rate fraction.")
-    parser.add_argument("--early_stopping_patience", type=int, default=25, 
+    parser.add_argument("--early_stopping_patience", type=int, default=30, 
                         help="The early stopping patience.")
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, 
                         help="Whether to use dropout.")

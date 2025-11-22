@@ -12,3 +12,4 @@ scripts/training/*.log
 STRUCTURE_COMPARISON.md
 SUMMARY.md
 scripts/evaluation/*.json
+scripts/evaluation/*.log
