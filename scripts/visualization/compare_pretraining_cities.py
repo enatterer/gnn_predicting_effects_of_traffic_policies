@@ -33,9 +33,11 @@ METRICS = [
     "spearman",
     "pearson",
     "top_1_hit_rate",
-    "minus_top_1_hit_rate",
+    "bottom_1_hit_rate",
     "top_5_hit_rate",
-    "minus_top_5_hit_rate"
+    "bottom_5_hit_rate",
+    "top_10_hit_rate",
+    "bottom_10_hit_rate"
 ]
 
 def load_city_data(city_name):

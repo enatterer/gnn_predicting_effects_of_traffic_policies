@@ -208,25 +208,25 @@ def compute_spearman_pearson(preds, targets, is_np = False) -> tuple:
     pearson_corr, _ = pearsonr(preds, targets)
     return spearman_corr, pearson_corr
 
-def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: list = [1, 5]) -> dict:
+def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: list = [1, 5, 10]) -> dict:
     """
-    Compute hit rates for top x%, bottom x%, and minus top x% nodes.
+    Compute hit rates for top x%, bottom x%, and closest to zero x% nodes.
     
     For each percentage p:
     - Top p%: Nodes with highest p% of target values
-    - Bottom p%: Nodes with values closest to zero (smallest absolute values)
-    - Minus top p%: Nodes with most negative p% of target values (for negative values)
+    - Closest to zero p%: Nodes with values closest to zero (smallest absolute values)
+    - Bottom p%: Nodes with most negative p% of target values (for negative values)
     
-    Hit rate = percentage of nodes in predicted top/bottom/minus-top p% that match 
-    the actual top/bottom/minus-top p%.
+    Hit rate = percentage of nodes in predicted top/bottom/closest-to-zero p% that match 
+    the actual top/bottom/closest-to-zero p%.
     
     Parameters:
     - preds (torch.Tensor): Predicted values (flattened).
     - targets (torch.Tensor): Actual target values (flattened).
-    - percentages (list): List of percentages to compute (default: [1, 5]).
+    - percentages (list): List of percentages to compute (default: [1, 5, 10]).
     
     Returns:
-    - dict: Dictionary with keys like 'top_1_hit_rate', 'closest_to_zero_1_hit_rate', 'minus_top_1_hit_rate', etc.
+    - dict: Dictionary with keys like 'top_1_hit_rate', 'closest_to_zero_1_hit_rate', 'bottom_1_hit_rate', etc.
     """
     # Flatten tensors
     if isinstance(preds, torch.Tensor):
@@ -314,7 +314,7 @@ def compute_hit_rates(preds: torch.Tensor, targets: torch.Tensor, percentages: l
         else:
             minus_top_hit_rate = 0.0
         
-        results[f'minus_top_{p}_hit_rate'] = minus_top_hit_rate
+        results[f'bottom_{p}_hit_rate'] = minus_top_hit_rate
     
     return results
 
@@ -444,8 +444,8 @@ def validate_model_during_training(config: object,
     r_squared = compute_r2_torch(preds=node_predictions, targets=actual_node_targets)
     spearman_corr, pearson_corr = compute_spearman_pearson(node_predictions, actual_node_targets)
     
-    # Compute hit rates (1% and 5%)
-    hit_rates = compute_hit_rates(node_predictions, actual_node_targets, percentages=[1, 5])
+    # Compute hit rates (1%, 5%, and 10%)
+    hit_rates = compute_hit_rates(node_predictions, actual_node_targets, percentages=[1, 5, 10])
     
     print(f"Original-scale validation metrics: Loss={total_validation_loss:.4f}, R²={r_squared:.4f}, Spearman={spearman_corr:.4f}")
     if hit_rates:

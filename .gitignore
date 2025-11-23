@@ -3,7 +3,7 @@ logs/
 **/wandb/
 **/.ipynb_checkpoints/
 **/__pycache__/
-scripts/evaluation/results/
+scripts/evaluation/results_paris_trc/*
 .vscode/
 inductive_gnn_data_results/*
 data
@@ -13,3 +13,4 @@ STRUCTURE_COMPARISON.md
 SUMMARY.md
 scripts/evaluation/*.json
 scripts/evaluation/*.log
+scripts/visualization/results/*
