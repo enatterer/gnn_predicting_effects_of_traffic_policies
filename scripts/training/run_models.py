@@ -251,6 +251,56 @@ def main():
                 model_kwargs = json.load(f)
         else:
             model_kwargs = {}
+
+        # CRITICAL: Get actual data feature count from a batch (after collate_fn filtering)
+        # The collate_fn filters features, so we need to check the batch, not the raw dataset
+        sample_batch = next(iter(train_dl))
+        actual_feature_count = sample_batch.x.shape[1]
+        
+        # Also check raw dataset for comparison
+        raw_dataset_feature_count = train_dl.dataset[0].x.shape[1] if hasattr(train_dl, 'dataset') else None
+        
+        print(f"\n{'='*60}")
+        print(f"Data feature analysis:")
+        print(f"  Raw dataset feature count: {raw_dataset_feature_count}")
+        print(f"  DataLoader batch feature count (after filtering): {actual_feature_count}")
+        print(f"  Config in_channels parameter: {config.in_channels}")
+        print(f"  use_all_features setting: {args['use_all_features']}")
+        if args['use_all_features']:
+            print(f"  Expected: All features (typically 20 without destination activity, or 28 with)")
+        else:
+            print(f"  Expected: 5 base features (VOL_BASE_CASE, CAPACITY_BASE_CASE, CAPACITY_REDUCTION, FREESPEED, LENGTH)")
+        print(f"{'='*60}\n")
+        
+        # For trans_encoder, the model adds positional encoding in forward()
+        # So in_channels should match the base feature count (actual_feature_count)
+        # The model internally calculates effective_in_channels = in_channels + pos_dim
+        if config.gnn_arch == 'trans_encoder':
+            if config.in_channels != actual_feature_count:
+                print(f"⚠️  Batch has {actual_feature_count} base features, but config.in_channels={config.in_channels}")
+                print(f"   For trans_encoder, in_channels should match base feature count (before positional encoding)")
+                print(f"   Will override in_channels to {actual_feature_count} when creating model")
+                # Update wandb config with allow_val_change
+                try:
+                    config.update({'in_channels': actual_feature_count}, allow_val_change=True)
+                except Exception as e:
+                    print(f"   Warning: Could not update wandb config: {e}")
+                    print(f"   Will pass in_channels={actual_feature_count} directly to model")
+                # Store in model_kwargs to override
+                model_kwargs['in_channels'] = actual_feature_count
+        else:
+            # For other architectures, check if they match
+            if config.in_channels != actual_feature_count:
+                print(f"⚠️  Batch has {actual_feature_count} features, but config.in_channels={config.in_channels}")
+                print(f"   Will override in_channels to {actual_feature_count} when creating model")
+                # Update wandb config with allow_val_change
+                try:
+                    config.update({'in_channels': actual_feature_count}, allow_val_change=True)
+                except Exception as e:
+                    print(f"   Warning: Could not update wandb config: {e}")
+                    print(f"   Will pass in_channels={actual_feature_count} directly to model")
+                # Store in model_kwargs to override
+                model_kwargs['in_channels'] = actual_feature_count
         
         # Create model instance
         gnn_instance = create_gnn_model(gnn_arch=config.gnn_arch,
