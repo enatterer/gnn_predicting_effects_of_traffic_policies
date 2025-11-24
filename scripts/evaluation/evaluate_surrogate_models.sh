@@ -15,7 +15,7 @@ DEVICE_NR=0
 GNN_ARCH="trans_encoder"
 
 # Pretrained runs to evaluate
-PRETRAIN_RUNS=("general_surrogate_2_cities" "general_surrogate_6_cities")
+PRETRAIN_RUNS=("general_surrogate_2_cities" "general_surrogate_6_cities" "general_surrogate_10_cities")
 
 # Run evaluation for each pretrained model
 for PRETRAIN_RUN in "${PRETRAIN_RUNS[@]}"; do
@@ -32,7 +32,7 @@ for PRETRAIN_RUN in "${PRETRAIN_RUNS[@]}"; do
     echo "=========================================="
     
     # Run evaluation for each city separately with nohup
-    for CITY in bamberg erlangen muenchen neuulm; do
+    for CITY in ${CITIES}; do
         echo "Starting evaluation for ${PRETRAIN_RUN} on ${CITY}..."
         nohup python scripts/evaluation/evaluate_pretrained_on_cities.py \
             --pretrain_run_name ${PRETRAIN_RUN} \

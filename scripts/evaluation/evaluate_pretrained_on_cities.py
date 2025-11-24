@@ -407,13 +407,29 @@ def evaluate_city(
         from torch.utils.data import DataLoader
         from training.help_functions import seed_worker
         
+        # Adaptive batch size: reduce for large graphs (like Munich with 54k+ nodes)
+        # Sample a graph to estimate size
+        sample_graph = normalized_dataset[0]
+        num_nodes = sample_graph.x.shape[0]
+        
+        # Reduce batch size for very large graphs to avoid memory issues
+        if num_nodes > 40000:
+            batch_size = 2  # Very large graphs (e.g., Munich)
+            print(f"  Large graph detected ({num_nodes} nodes), using batch_size={batch_size}")
+        elif num_nodes > 20000:
+            batch_size = 4  # Large graphs (e.g., Neuulm)
+            print(f"  Large graph detected ({num_nodes} nodes), using batch_size={batch_size}")
+        else:
+            batch_size = 8  # Normal graphs (e.g., Bamberg)
+            print(f"  Using default batch_size={batch_size} for {num_nodes} nodes")
+        
         val_dl = DataLoader(
             dataset=normalized_dataset,
-            batch_size=8,
+            batch_size=batch_size,
             shuffle=False,  # No shuffling for evaluation
             num_workers=4,
             prefetch_factor=2,
-            pin_memory=False,
+            pin_memory=(device.type == 'cuda'),  # Only pin memory if using GPU
             collate_fn=collate_fn_eval,
             worker_init_fn=seed_worker,
             drop_last=False
@@ -540,9 +556,11 @@ def main():
     # GPU setup
     gpus = get_available_gpus()
     if args.device_nr < len(gpus):
-        set_cuda_visible_device(gpus[args.device_nr])
+        set_cuda_visible_device(gpus[args.device_nr]['index'])  # Fix: pass index, not the whole dict
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    if device.type == 'cpu':
+        print("WARNING: CUDA not available, using CPU. This will be very slow for large graphs!")
     
     # Find checkpoint
     print("=" * 80)

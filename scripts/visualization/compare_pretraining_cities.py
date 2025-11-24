@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Script to compare model performance across different pretraining scenarios (2, 6, 12 cities)
+Script to compare model performance across different pretraining scenarios (2, 6, 10 cities)
 for each city and metric.
 """
 
@@ -16,14 +16,14 @@ BASE_DIR = Path("/home/enatterer/Development/elena_gnn_predicting_effects_of_tra
 DIRS = {
     "2_cities": BASE_DIR / "analysis_results_2_cities_in_training",
     "6_cities": BASE_DIR / "analysis_results_6_cities_in_training",
-    "12_cities": BASE_DIR / "analysis_results_12_cities_in_training"
+    "10_cities": BASE_DIR / "analysis_results_10_cities_in_training"
 }
 
 # File patterns for each directory
 FILE_PATTERNS = {
     "2_cities": "evaluation_general_surrogate_2_cities_{city}.json",
     "6_cities": "evaluation_general_surrogate_6_cities_{city}.json",
-    "12_cities": "evaluation_general_surrogate_v0_{city}.json"
+    "10_cities": "evaluation_general_surrogate_10_cities_{city}.json"
 }
 
 # Metrics to plot (excluding metadata fields)
@@ -59,6 +59,13 @@ def load_city_data(city_name):
                         data[scenario] = None
                 else:
                     data[scenario] = content
+                
+                # Backward compatibility: map old "minus_top" keys to "bottom" keys
+                if data[scenario] is not None:
+                    if 'minus_top_1_hit_rate' in data[scenario] and 'bottom_1_hit_rate' not in data[scenario]:
+                        data[scenario]['bottom_1_hit_rate'] = data[scenario].pop('minus_top_1_hit_rate')
+                    if 'minus_top_5_hit_rate' in data[scenario] and 'bottom_5_hit_rate' not in data[scenario]:
+                        data[scenario]['bottom_5_hit_rate'] = data[scenario].pop('minus_top_5_hit_rate')
         else:
             data[scenario] = None
     
@@ -80,9 +87,12 @@ def find_all_cities():
                     if "all_cities" not in file.name:
                         city = file.name.replace("evaluation_general_surrogate_6_cities_", "").replace(".json", "")
                         cities.add(city)
-                elif scenario == "12_cities":
+                elif scenario == "10_cities":
                     if "all_cities" not in file.name:
-                        city = file.name.replace("evaluation_general_surrogate_v0_", "").replace(".json", "")
+                        # Try both patterns for backward compatibility
+                        city = file.name.replace("evaluation_general_surrogate_10_cities_", "").replace(".json", "")
+                        if city == file.name.replace(".json", ""):  # If no match, try old pattern
+                            city = file.name.replace("evaluation_general_surrogate_v0_", "").replace(".json", "")
                         cities.add(city)
     
     return sorted(cities)
@@ -111,25 +121,27 @@ def create_bar_charts_for_city(city_name, output_dir):
         scenarios = []
         values = []
         colors = []
+        has_data = []
         
-        color_map = {'2_cities': '#1f77b4', '6_cities': '#ff7f0e', '12_cities': '#2ca02c'}
+        color_map = {'2_cities': '#1f77b4', '6_cities': '#ff7f0e', '10_cities': '#2ca02c'}
         
-        for scenario in ["2_cities", "6_cities", "12_cities"]:
+        for scenario in ["2_cities", "6_cities", "10_cities"]:
+            scenarios.append(scenario.replace("_", " ").title())
             if data[scenario] is not None and metric in data[scenario]:
-                scenarios.append(scenario.replace("_", " ").title())
                 values.append(data[scenario][metric])
                 colors.append(color_map[scenario])
+                has_data.append(True)
             else:
-                scenarios.append(scenario.replace("_", " ").title())
-                values.append(0)  # Use 0 for missing data
+                values.append(0)  # Use 0 for bar height, but mark as missing
                 colors.append('#cccccc')  # Gray for missing data
+                has_data.append(False)
         
         # Create bar chart
         bars = ax.bar(scenarios, values, color=colors, alpha=0.7, edgecolor='black')
         
         # Add value labels on bars
-        for i, (bar, val, scenario) in enumerate(zip(bars, values, ["2_cities", "6_cities", "12_cities"])):
-            if data[scenario] is not None and metric in data[scenario]:
+        for i, (bar, val, has_val, scenario) in enumerate(zip(bars, values, has_data, ["2_cities", "6_cities", "10_cities"])):
+            if has_val:
                 height = bar.get_height()
                 # Format based on metric type
                 if abs(val) < 0.01:
@@ -151,17 +163,20 @@ def create_bar_charts_for_city(city_name, output_dir):
         
         ax.set_ylabel(metric.replace('_', ' ').title(), fontsize=11, fontweight='bold')
         ax.set_title(f'{city_name.title()} - {metric.replace("_", " ").title()}', 
-                    fontsize=12, fontweight='bold')
+                    fontsize=10, fontweight='bold')
         ax.grid(axis='y', alpha=0.3, linestyle='--')
         
-        # Set y-axis limits - only consider non-zero values (non-missing data)
-        valid_values = [v for i, v in enumerate(values) 
-                       if data[["2_cities", "6_cities", "12_cities"][i]] is not None 
-                       and metric in data[["2_cities", "6_cities", "12_cities"][i]]]
-        if valid_values:
-            if min(valid_values) >= 0:
-                ax.set_ylim(bottom=0)
-            # Let matplotlib auto-scale otherwise
+        # Set y-axis limits
+        # For hit rate metrics, set y-axis to 0-0.5
+        if 'hit_rate' in metric:
+            ax.set_ylim(0, 0.5)
+        else:
+            # For other metrics, only consider values with data (non-missing data)
+            valid_values = [v for i, v in enumerate(values) if has_data[i]]
+            if valid_values:
+                if min(valid_values) >= 0:
+                    ax.set_ylim(bottom=0)
+                # Let matplotlib auto-scale otherwise
     
     # Hide unused subplots
     for idx in range(n_metrics, len(axes)):
@@ -181,7 +196,7 @@ def create_summary_table(all_cities_data, output_dir):
     
     rows = []
     for city in all_cities_data:
-        for scenario in ["2_cities", "6_cities", "12_cities"]:
+        for scenario in ["2_cities", "6_cities", "10_cities"]:
             if all_cities_data[city][scenario] is not None:
                 row = {
                     "city": city,
@@ -211,7 +226,7 @@ def main():
     for city in cities:
         all_cities_data[city] = load_city_data(city)
         print(f"\n{city}:")
-        for scenario in ["2_cities", "6_cities", "12_cities"]:
+        for scenario in ["2_cities", "6_cities", "10_cities"]:
             if all_cities_data[city][scenario] is not None:
                 print(f"  {scenario}: ✓")
             else:

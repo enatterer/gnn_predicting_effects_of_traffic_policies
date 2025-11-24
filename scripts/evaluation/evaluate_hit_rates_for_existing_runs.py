@@ -635,9 +635,11 @@ def main():
     # GPU setup
     gpus = get_available_gpus()
     if args.device_nr < len(gpus):
-        set_cuda_visible_device(gpus[args.device_nr])
+        set_cuda_visible_device(gpus[args.device_nr]['index'])  # Fix: pass index, not the whole dict
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+    if device.type == 'cpu':
+        print("WARNING: CUDA not available, using CPU. This will be very slow for large graphs!")
     
     # Resolve wandb CSV path
     wandb_csv_path = None
