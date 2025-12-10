@@ -3,15 +3,24 @@
 Orchestrate pretraining, finetuning (scratch vs checkpoint), and result comparison.
 
 For each city in the target list:
-1. Pretrain transductively on the other 6 cities (excluding test city) → run_without_{city}
-2. Generate random train/val split (40/10) for the test city and save it
-3. Run finetuning from scratch (a)
-4. Run finetuning from checkpoint (b) - both use same train/val split
-5. Generate test set (200 scenarios) distant from train+val
-6. Compare results between (a) and (b)
+1. Pretrain transductively on the other cities (excluding test city) once
+   → run name: "{city}_pretrain_without_{city}"
+2. For each random seed (default 5) and each train/val size
+   [(10,3), (20,5), (40,10), (80,20), (160,40)]:
+   a. Generate random train/val split for the city (per seed & config)
+   b. Run finetuning from scratch   → "{city}_scratch_rs_{k}_t{train}_v{val}"
+   c. Run finetuning from checkpoint → "{city}_finetune_rs_{k}_t{train}_v{val}"
+   d. Generate distant test set (default 100 graphs) per seed/config
+   e. Evaluate scratch and finetune models on that test split
 
 Example:
     python run_pretrain_finetune_comparison.py --gnn_arch trans_encoder --num_epochs 200
+
+Example (nohup, defaults: 5 seeds, 5 train/val configs, test_count=100):
+    nohup bash -lc 'source ~/.bashrc; PYTHONUNBUFFERED=1 stdbuf -oL -eL python -u scripts/training/run_pretrain_finetune_comparison.py --project_name PretrainFinetune_Comparison' > nohup_pretrain_finetune_comp.log 2>&1 & echo $!
+
+Custom train/val via CLI (e.g., two configs 20:5 and 60:15):
+    ... run_pretrain_finetune_comparison.py --train_val_configs "20:5,60:15" ...
 """
 
 import argparse
@@ -25,7 +34,6 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
-
 import torch
 
 # Ensure the repository's `scripts` directory is on the Python path
@@ -56,9 +64,17 @@ TARGET_CITIES: Sequence[str] = (
     "wuerzburg",
 )
 
-# Train/val split configuration (test count now CLI-configurable)
-TRAIN_COUNT = 40
-VAL_COUNT = 10
+# Train/val split configurations (default set of five) and test count
+DEFAULT_TRAIN_VAL_CONFIGS: Sequence[Tuple[int, int]] = (
+    (10, 3),
+    (20, 5),
+    (40, 10),
+    (80, 20),
+    (160, 40),
+)
+DEFAULT_TEST_COUNT = 100
+# Default number of random seeds for scratch vs finetune runs
+DEFAULT_NUM_RANDOM_SEEDS = 5
 
 # Argument names for each script
 RUN_MODELS_ARGS = [
@@ -184,7 +200,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5")
     parser.add_argument("--subgraphs_per_graph", type=int, default=2)
     parser.add_argument("--seed_size", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=32)
+    parser.add_argument("--batch_size", type=int, default=64)
     parser.add_argument(
         "--sampling_strategy",
         type=str,
@@ -208,7 +224,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run_peak_lr", type=float, default=0.001)
     parser.add_argument("--run_initial_lr", type=float, default=0.0005)
     parser.add_argument("--run_num_epochs", type=int, default=400)
-    parser.add_argument("--run_limit_available_graphs", type=int, default=3000)
+    parser.add_argument("--run_limit_available_graphs", type=int, default=300)
 
     # Arguments specific to finetune_models.py
     parser.add_argument("--target_normalization", type=str, default="None",
@@ -243,20 +259,46 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Directory to save/load split files.")
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Path to dataset directory.")
-    parser.add_argument("--num_trials_test", type=int, default=3000,
+    parser.add_argument("--num_trials_test", type=int, default=5000,
                         help="Number of trials for finding distant test sets (default: 2000 for better results).")
-    parser.add_argument("--test_count", type=int, default=50,
+    parser.add_argument("--test_count", type=int, default=DEFAULT_TEST_COUNT,
                         help="Number of test graphs to select for the distant split.")
     parser.add_argument("--force_test_regeneration", type=str_to_bool, default=False,
                         help="If True, regenerate test splits even if they already exist.")
     parser.add_argument("--project_name", type=str, default=None,
                         help="Project name for WandB and results directory.")
+    parser.add_argument("--num_random_seeds", type=int, default=DEFAULT_NUM_RANDOM_SEEDS,
+                        help="Number of random seeds (and corresponding scratch/finetune runs) per city.")
+    parser.add_argument("--train_val_configs", type=str, default=None,
+                        help="Comma-separated train:val pairs, e.g., '10:3,20:5'. "
+                             "Defaults to 10:3,20:5,40:10,80:20,160:40.")
 
     return parser
 
 
 def parse_neighbor_sizes(value: str) -> List[int]:
     return [int(x.strip()) for x in value.split(",") if x.strip()]
+
+
+def parse_train_val_configs(value: Optional[str]) -> Sequence[Tuple[int, int]]:
+    """Parse comma-separated train:val pairs into a sequence of tuples."""
+    if not value:
+        return DEFAULT_TRAIN_VAL_CONFIGS
+    pairs = []
+    for item in value.split(","):
+        item = item.strip()
+        if not item:
+            continue
+        if ":" not in item:
+            raise ValueError(f"Invalid train_val_configs entry '{item}'. Use 'train:val' format.")
+        train_str, val_str = item.split(":", 1)
+        train, val = int(train_str), int(val_str)
+        if train <= 0 or val <= 0:
+            raise ValueError(f"Train/val counts must be positive: got {train}:{val}")
+        pairs.append((train, val))
+    if not pairs:
+        raise ValueError("No valid train_val_configs provided.")
+    return tuple(pairs)
 
 
 def build_cli_args(arg_values: Dict[str, object], include: Sequence[str]) -> List[str]:
@@ -669,7 +711,7 @@ def main() -> None:
     
     neighbor_sizes = parse_neighbor_sizes(args.neighbor_sizes)
     city_sequence = select_cities(args.selected_cities)
-    rng = random.Random(args.shuffle_seed)
+    seeds = [args.shuffle_seed + i for i in range(args.num_random_seeds)]
 
     # Prepare base arguments
     run_base_args: Dict[str, object] = {
@@ -697,9 +739,10 @@ def main() -> None:
     if args.finetune_num_epochs is not None:
         finetune_base_args["num_epochs"] = args.finetune_num_epochs
 
-    finetune_base_args["limit_train_graphs"] = args.finetune_limit_train_graphs
-    finetune_base_args["limit_val_graphs"] = args.finetune_limit_val_graphs
-    finetune_base_args["limit_test_graphs"] = args.finetune_limit_test_graphs
+    # Avoid redundant dataloader caps; splits already define exact graphs
+    finetune_base_args["limit_train_graphs"] = None
+    finetune_base_args["limit_val_graphs"] = None
+    finetune_base_args["limit_test_graphs"] = None
 
     if finetune_base_args.get("pretraining_inductive") is None:
         finetune_base_args["pretraining_inductive"] = run_base_args.get("use_inductive_variant", False)
@@ -730,6 +773,7 @@ def main() -> None:
 
     # Process each city
     test_count = args.test_count
+    train_val_configs = parse_train_val_configs(args.train_val_configs)
 
     for idx, test_city in enumerate(city_sequence, start=1):
         remaining_cities = [city for city in city_sequence if city != test_city]
@@ -738,9 +782,7 @@ def main() -> None:
         train_cities = remaining_cities
         val_cities = []
         
-        pretrain_run_name = f"run_without_{test_city}"
-        scratch_run_name = f"run_from_scratch_{test_city}"
-        finetune_run_name = f"finetune_{test_city}"
+        pretrain_run_name = f"{test_city}_pretrain_without_{test_city}"
         project_name = run_base_args["project_name"]
         
         print("\n" + "=" * 80)
@@ -765,171 +807,193 @@ def main() -> None:
         else:
             print(f"\n[Step 1/6] Skipping pretraining (--skip_pretraining)")
 
-        # Step 2: Generate random train/val split
-        split_filename = f"{test_city}_train{TRAIN_COUNT}_val{VAL_COUNT}_random.json"
-        split_file_path = splits_dir / split_filename
-        
-        if split_file_path.exists() and not args.skip_finetuning:
-            print(f"\n[Step 2/6] Using existing split file: {split_file_path}")
-        else:
-            print(f"\n[Step 2/6] Generating random train/val split...")
-            generate_random_train_val_split(
-                test_city,
-                dataset_path,
-                TRAIN_COUNT,
-                VAL_COUNT,
-                args.shuffle_seed,
-                split_file_path
-            )
+        for seed_idx, seed in enumerate(seeds, start=1):
+            print("\n" + "-" * 80)
+            print(f" Seed {seed_idx}/{len(seeds)} (value={seed}) for city {test_city}")
+            print("-" * 80)
 
-        # Step 3: Finetuning from scratch
-        if not args.skip_finetuning:
-            shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
-            
-            scratch_model_file = finetuned_model_path(project_name, scratch_run_name)
-            if scratch_model_file.exists():
-                print(f"\n[Step 3/6] Skipping finetuning from scratch; found existing model: {scratch_model_file}")
-            else:
-                print(f"\n[Step 3/6] Running finetuning from scratch...")
-                finetune_args_scratch = dict(finetune_base_args)
-                for key, value in shared_values.items():
-                    if key not in finetune_args_scratch or finetune_args_scratch[key] is None:
-                        finetune_args_scratch[key] = value
-                if finetune_args_scratch.get("pretraining_inductive") is None:
-                    finetune_args_scratch["pretraining_inductive"] = run_args.get("use_inductive_variant", False)
-                
-                finetune_args_scratch["run_name"] = scratch_run_name
-                finetune_args_scratch["cities"] = test_city
-                finetune_args_scratch["start_from_scratch"] = True
-                finetune_args_scratch["unique_model_description"] = scratch_run_name
-                finetune_args_scratch["split_file"] = str(split_file_path)
-                
-                try:
-                    call_finetune_models(finetune_args_scratch)
-                except ValueError as e:
-                    if "Insufficient data" in str(e):
-                        print(f"SKIPPING {test_city} (scratch): {e}")
-                        continue
-                    else:
-                        raise
+            for train_count, val_count in train_val_configs:
+                print("\n" + "." * 80)
+                print(f"  Train/Val config: train={train_count}, val={val_count}")
+                print("." * 80)
 
-            # Step 4: Finetuning from checkpoint
-            finetuned_checkpoint_model = finetuned_model_path(project_name, finetune_run_name)
-            if finetuned_checkpoint_model.exists():
-                print(f"\n[Step 4/6] Skipping finetuning from checkpoint; found existing model: {finetuned_checkpoint_model}")
-            else:
-                pretrain_ckpt_dir = pretrain_checkpoint_dir(project_name, pretrain_run_name)
-                if not has_checkpoints(pretrain_ckpt_dir):
-                    print(f"\n[Step 4/6] Pretraining checkpoints missing for {pretrain_run_name}; rerunning pretraining first.")
-                    run_args["unique_model_description"] = pretrain_run_name
-                    call_run_models(run_args, train_cities, val_cities, [test_city])
-                    if not has_checkpoints(pretrain_ckpt_dir):
-                        raise ValueError(f"Checkpoint directory still missing after rerun: {pretrain_ckpt_dir}")
+                # Step 2: Generate random train/val split per seed and config
+                city_config_split_dir = splits_dir / test_city / f"rs_{seed_idx}" / f"t{train_count}_v{val_count}"
+                city_config_split_dir.mkdir(parents=True, exist_ok=True)
+                split_filename = (
+                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_random.json"
+                )
+                split_file_path = city_config_split_dir / split_filename
 
-                print(f"\n[Step 4/6] Running finetuning from checkpoint...")
-                finetune_args_checkpoint = dict(finetune_base_args)
-                for key, value in shared_values.items():
-                    if key not in finetune_args_checkpoint or finetune_args_checkpoint[key] is None:
-                        finetune_args_checkpoint[key] = value
-                if finetune_args_checkpoint.get("pretraining_inductive") is None:
-                    finetune_args_checkpoint["pretraining_inductive"] = run_args.get("use_inductive_variant", False)
-                
-                # run_name is for saving the finetuned model, pretrain_run_name is for loading the checkpoint
-                finetune_args_checkpoint["run_name"] = finetune_run_name
-                finetune_args_checkpoint["pretrain_run_name"] = pretrain_run_name
-                finetune_args_checkpoint["cities"] = test_city
-                finetune_args_checkpoint["start_from_scratch"] = False
-                finetune_args_checkpoint["unique_model_description"] = finetune_run_name
-                finetune_args_checkpoint["split_file"] = str(split_file_path)
-                
-                try:
-                    call_finetune_models(finetune_args_checkpoint)
-                    print(f"✓ Finetuning from checkpoint completed for {test_city}")
-                except ValueError as e:
-                    if "Insufficient data" in str(e):
-                        print(f"SKIPPING {test_city} (finetune): {e}")
-                        continue
-                    else:
-                        raise
-        else:
-            print(f"\n[Step 3-4/6] Skipping finetuning (--skip_finetuning)")
-
-        # Step 5: Generate or reuse distant test set
-        test_split_filename = f"{test_city}_train{TRAIN_COUNT}_val{VAL_COUNT}_test{test_count}_distant.json"
-        test_split_file_path = splits_dir / test_split_filename
-        test_split_exists = test_split_file_path.exists()
-
-        if not args.skip_test_generation:
-            if test_split_exists and not args.force_test_regeneration:
-                print(f"\n[Step 5/6] Test split already exists; reusing without regeneration: {test_split_file_path}")
-            else:
-                print(f"\n[Step 5/6] Generating distant test set...")
-                try:
-                    generate_distant_test_set(
+                if split_file_path.exists() and not args.skip_finetuning:
+                    print(f"\n[Step 2/6] Using existing split file: {split_file_path}")
+                else:
+                    print(f"\n[Step 2/6] Generating random train/val split...")
+                    generate_random_train_val_split(
                         test_city,
-                        split_file_path,
                         dataset_path,
-                        test_count,
-                        args.num_trials_test,
-                        args.shuffle_seed,
-                        args.use_all_features,
-                        test_split_file_path
+                        train_count,
+                        val_count,
+                        seed,
+                        split_file_path
                     )
-                    test_split_exists = True
-                except Exception as e:
-                    print(f"ERROR generating test set for {test_city}: {e}")
-                    import traceback
-                    traceback.print_exc()
-        else:
-            if test_split_exists:
-                print(f"\n[Step 5/6] Skipping test generation (--skip_test_generation); existing split will be used: {test_split_file_path}")
-            else:
-                print(f"\n[Step 5/6] Skipping test generation (--skip_test_generation) and no split exists; evaluation will be skipped.")
 
-        # Step 6: Evaluate scratch and finetune models on test set (if available)
-        if not test_split_exists or not test_split_file_path.exists():
-            print(f"\n[Step 6/6] Skipping evaluation; test split unavailable for {test_city}.")
-            print(f"\n✓ Completed processing for {test_city}")
-            print("=" * 80)
-            continue
+                scratch_run_name = f"{test_city}_scratch_rs_{seed_idx}_t{train_count}_v{val_count}"
+                finetune_run_name = f"{test_city}_finetune_rs_{seed_idx}_t{train_count}_v{val_count}"
 
-        print(f"\n[Step 6/6] Evaluating models on test split: {test_split_file_path}")
+                # Step 3: Finetuning from scratch
+                if not args.skip_finetuning:
+                    shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
 
-        scratch_metrics = evaluate_model_on_test_split(
-            run_name=scratch_run_name,
-            project_name=project_name,
-            model_path=finetuned_model_path(project_name, scratch_run_name),
-            split_file_path=test_split_file_path,
-            eval_params=eval_params,
-        )
+                    scratch_model_file = finetuned_model_path(project_name, scratch_run_name)
+                    if scratch_model_file.exists():
+                        print(f"\n[Step 3/6] Skipping finetuning from scratch; found existing model: {scratch_model_file}")
+                    else:
+                        print(f"\n[Step 3/6] Running finetuning from scratch...")
+                        finetune_args_scratch = dict(finetune_base_args)
+                        for key, value in shared_values.items():
+                            if key not in finetune_args_scratch or finetune_args_scratch[key] is None:
+                                finetune_args_scratch[key] = value
+                        if finetune_args_scratch.get("pretraining_inductive") is None:
+                            finetune_args_scratch["pretraining_inductive"] = run_args.get("use_inductive_variant", False)
 
-        finetune_metrics = evaluate_model_on_test_split(
-            run_name=finetune_run_name,
-            project_name=project_name,
-            model_path=finetuned_model_path(project_name, finetune_run_name),
-            split_file_path=test_split_file_path,
-            eval_params=eval_params,
-        )
+                        finetune_args_scratch["run_name"] = scratch_run_name
+                        finetune_args_scratch["cities"] = test_city
+                        finetune_args_scratch["start_from_scratch"] = True
+                        finetune_args_scratch["unique_model_description"] = scratch_run_name
+                        finetune_args_scratch["split_file"] = str(split_file_path)
 
-        if scratch_metrics or finetune_metrics:
-            print("  Evaluation results (loss, r2, spearman, pearson):")
-            if scratch_metrics:
-                print(f"    Scratch: loss={scratch_metrics['loss']:.4f}, r2={scratch_metrics['r2']:.4f}, "
-                      f"spearman={scratch_metrics['spearman']:.4f}, pearson={scratch_metrics['pearson']:.4f}")
-                if scratch_metrics.get("hit_rates"):
-                    print(f"      Scratch hit rates: {scratch_metrics['hit_rates']}")
-            else:
-                print("    Scratch: not evaluated (missing model or data)")
+                        try:
+                            call_finetune_models(finetune_args_scratch)
+                        except ValueError as e:
+                            if "Insufficient data" in str(e):
+                                print(f"SKIPPING {test_city} (scratch, seed {seed_idx}, t{train_count}_v{val_count}): {e}")
+                                continue
+                            else:
+                                raise
 
-            if finetune_metrics:
-                print(f"    Finetune: loss={finetune_metrics['loss']:.4f}, r2={finetune_metrics['r2']:.4f}, "
-                      f"spearman={finetune_metrics['spearman']:.4f}, pearson={finetune_metrics['pearson']:.4f}")
-                if finetune_metrics.get("hit_rates"):
-                    print(f"      Finetune hit rates: {finetune_metrics['hit_rates']}")
-            else:
-                print("    Finetune: not evaluated (missing model or data)")
-        else:
-            print("  No evaluation results available (models or data missing).")
+                    # Step 4: Finetuning from checkpoint
+                    finetuned_checkpoint_model = finetuned_model_path(project_name, finetune_run_name)
+                    if finetuned_checkpoint_model.exists():
+                        print(f"\n[Step 4/6] Skipping finetuning from checkpoint; found existing model: {finetuned_checkpoint_model}")
+                    else:
+                        pretrain_ckpt_dir = pretrain_checkpoint_dir(project_name, pretrain_run_name)
+                        if not has_checkpoints(pretrain_ckpt_dir):
+                            print(f"\n[Step 4/6] Pretraining checkpoints missing for {pretrain_run_name}; rerunning pretraining first.")
+                            run_args["unique_model_description"] = pretrain_run_name
+                            call_run_models(run_args, train_cities, val_cities, [test_city])
+                            if not has_checkpoints(pretrain_ckpt_dir):
+                                raise ValueError(f"Checkpoint directory still missing after rerun: {pretrain_ckpt_dir}")
+
+                        print(f"\n[Step 4/6] Running finetuning from checkpoint...")
+                        finetune_args_checkpoint = dict(finetune_base_args)
+                        for key, value in shared_values.items():
+                            if key not in finetune_args_checkpoint or finetune_args_checkpoint[key] is None:
+                                finetune_args_checkpoint[key] = value
+                        if finetune_args_checkpoint.get("pretraining_inductive") is None:
+                            finetune_args_checkpoint["pretraining_inductive"] = run_args.get("use_inductive_variant", False)
+
+                        # run_name is for saving the finetuned model, pretrain_run_name is for loading the checkpoint
+                        finetune_args_checkpoint["run_name"] = finetune_run_name
+                        finetune_args_checkpoint["pretrain_run_name"] = pretrain_run_name
+                        finetune_args_checkpoint["cities"] = test_city
+                        finetune_args_checkpoint["start_from_scratch"] = False
+                        finetune_args_checkpoint["unique_model_description"] = finetune_run_name
+                        finetune_args_checkpoint["split_file"] = str(split_file_path)
+
+                        try:
+                            call_finetune_models(finetune_args_checkpoint)
+                            print(f"✓ Finetuning from checkpoint completed for {test_city} (seed {seed_idx}, t{train_count}_v{val_count})")
+                        except ValueError as e:
+                            if "Insufficient data" in str(e):
+                                print(f"SKIPPING {test_city} (finetune, seed {seed_idx}, t{train_count}_v{val_count}): {e}")
+                                continue
+                            else:
+                                raise
+                else:
+                    print(f"\n[Step 3-4/6] Skipping finetuning (--skip_finetuning)")
+
+                # Step 5: Generate or reuse distant test set per seed/config
+                test_split_filename = (
+                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_test{test_count}_distant.json"
+                )
+                test_split_file_path = city_config_split_dir / test_split_filename
+                test_split_exists = test_split_file_path.exists()
+
+                if not args.skip_test_generation:
+                    if test_split_exists and not args.force_test_regeneration:
+                        print(f"\n[Step 5/6] Test split already exists; reusing without regeneration: {test_split_file_path}")
+                    else:
+                        print(f"\n[Step 5/6] Generating distant test set...")
+                        try:
+                            generate_distant_test_set(
+                                test_city,
+                                split_file_path,
+                                dataset_path,
+                                test_count,
+                                args.num_trials_test,
+                                seed,
+                                args.use_all_features,
+                                test_split_file_path
+                            )
+                            test_split_exists = True
+                        except Exception as e:
+                            print(f"ERROR generating test set for {test_city} (seed {seed_idx}, t{train_count}_v{val_count}): {e}")
+                            import traceback
+                            traceback.print_exc()
+                else:
+                    if test_split_exists:
+                        print(f"\n[Step 5/6] Skipping test generation (--skip_test_generation); existing split will be used: {test_split_file_path}")
+                    else:
+                        print(f"\n[Step 5/6] Skipping test generation (--skip_test_generation) and no split exists; evaluation will be skipped.")
+
+                # Step 6: Evaluate scratch and finetune models on test set (if available)
+                if not test_split_exists or not test_split_file_path.exists():
+                    print(f"\n[Step 6/6] Skipping evaluation; test split unavailable for {test_city} (seed {seed_idx}, t{train_count}_v{val_count}).")
+                    print(f"\n✓ Completed processing for {test_city} seed {seed_idx} t{train_count}_v{val_count}")
+                    print("." * 80)
+                    continue
+
+                print(f"\n[Step 6/6] Evaluating models on test split: {test_split_file_path}")
+
+                scratch_metrics = evaluate_model_on_test_split(
+                    run_name=scratch_run_name,
+                    project_name=project_name,
+                    model_path=finetuned_model_path(project_name, scratch_run_name),
+                    split_file_path=test_split_file_path,
+                    eval_params=eval_params,
+                )
+
+                finetune_metrics = evaluate_model_on_test_split(
+                    run_name=finetune_run_name,
+                    project_name=project_name,
+                    model_path=finetuned_model_path(project_name, finetune_run_name),
+                    split_file_path=test_split_file_path,
+                    eval_params=eval_params,
+                )
+
+                if scratch_metrics or finetune_metrics:
+                    print("  Evaluation results (loss, r2, spearman, pearson):")
+                    if scratch_metrics:
+                        print(f"    Scratch: loss={scratch_metrics['loss']:.4f}, r2={scratch_metrics['r2']:.4f}, "
+                              f"spearman={scratch_metrics['spearman']:.4f}, pearson={scratch_metrics['pearson']:.4f}")
+                        if scratch_metrics.get("hit_rates"):
+                            print(f"      Scratch hit rates: {scratch_metrics['hit_rates']}")
+                    else:
+                        print("    Scratch: not evaluated (missing model or data)")
+
+                    if finetune_metrics:
+                        print(f"    Finetune: loss={finetune_metrics['loss']:.4f}, r2={finetune_metrics['r2']:.4f}, "
+                              f"spearman={finetune_metrics['spearman']:.4f}, pearson={finetune_metrics['pearson']:.4f}")
+                        if finetune_metrics.get("hit_rates"):
+                            print(f"      Finetune hit rates: {finetune_metrics['hit_rates']}")
+                    else:
+                        print("    Finetune: not evaluated (missing model or data)")
+                else:
+                    print("  No evaluation results available (models or data missing).")
+
+                print(f"\n✓ Completed processing for {test_city} seed {seed_idx} t{train_count}_v{val_count}")
+                print("." * 80)
 
         print(f"\n✓ Completed processing for {test_city}")
         print("=" * 80)
