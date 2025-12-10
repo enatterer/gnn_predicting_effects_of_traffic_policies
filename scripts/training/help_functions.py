@@ -551,10 +551,8 @@ def setup_wandb_metrics():
     wandb.define_metric("pearson", step_metric="epoch")
     # Hit rate metrics
     wandb.define_metric("top_1_hit_rate", step_metric="epoch")
-    wandb.define_metric("closest_to_zero_1_hit_rate", step_metric="epoch")
     wandb.define_metric("bottom_1_hit_rate", step_metric="epoch")
     wandb.define_metric("top_5_hit_rate", step_metric="epoch")
-    wandb.define_metric("closest_to_zero_5_hit_rate", step_metric="epoch")
     wandb.define_metric("bottom_5_hit_rate", step_metric="epoch")
     wandb.define_metric("top_10_hit_rate", step_metric="epoch")
     wandb.define_metric("bottom_10_hit_rate", step_metric="epoch")

@@ -93,8 +93,8 @@ def match_finetuned_scratch_pairs(df: pd.DataFrame) -> List[Dict]:
         
         # Extract hit rate metrics
         hit_rate_metrics = [
-            'top_1_hit_rate', 'closest_to_zero_1_hit_rate', 'bottom_1_hit_rate',
-            'top_5_hit_rate', 'closest_to_zero_5_hit_rate', 'bottom_5_hit_rate',
+            'top_1_hit_rate', 'bottom_1_hit_rate',
+            'top_5_hit_rate', 'bottom_5_hit_rate',
             'top_10_hit_rate', 'bottom_10_hit_rate'
         ]
         
@@ -373,17 +373,15 @@ def create_plots(matched_pairs: List[Dict], distances: Dict[Tuple[str, int, int]
     # Hit rate metrics to plot
     hit_rate_metrics = [
         ('top_1_hit_rate', 'Top 1% Hit Rate Difference'),
-        ('closest_to_zero_1_hit_rate', 'Closest to Zero 1% Hit Rate Difference'),
         ('bottom_1_hit_rate', 'Bottom 1% Hit Rate Difference'),
         ('top_5_hit_rate', 'Top 5% Hit Rate Difference'),
-        ('closest_to_zero_5_hit_rate', 'Closest to Zero 5% Hit Rate Difference'),
         ('bottom_5_hit_rate', 'Bottom 5% Hit Rate Difference'),
         ('top_10_hit_rate', 'Top 10% Hit Rate Difference'),
         ('bottom_10_hit_rate', 'Bottom 10% Hit Rate Difference'),
     ]
     
-    # Create 8 subplots (one for each hit rate metric)
-    fig, axes = plt.subplots(2, 4, figsize=(20, 10))
+    # Create 6 subplots (one for each hit rate metric)
+    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
     fig.suptitle('Hit Rate Difference (Finetuned - Scratch) vs Train-Val Graph Distance', 
                  fontsize=16, fontweight='bold')
     

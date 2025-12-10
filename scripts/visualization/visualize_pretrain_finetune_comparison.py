@@ -4,8 +4,7 @@ Visualize metrics for finetuning vs training from scratch per city.
 
 Reads evaluation JSON files under the PretrainFinetune_Comparison results
 directory and produces:
-- A CSV summary with all metrics (excluding "closest_to_zero_*" hit rates)
-  for each city and method.
+- A CSV summary with hit rate metrics (top/bottom) and core metrics for each city and method.
 - One bar plot per metric showing finetune vs scratch across cities.
 
 Usage:
@@ -53,8 +52,6 @@ def _find_evaluation_file(run_dir: Path) -> Optional[Path]:
 def _load_metrics(run_dir: Path) -> Optional[Dict[str, float]]:
     """
     Load and flatten metrics from a run directory.
-
-    Excludes hit rate metrics that contain "closest_to_zero".
     """
     eval_file = _find_evaluation_file(run_dir)
     if eval_file is None:
@@ -70,8 +67,6 @@ def _load_metrics(run_dir: Path) -> Optional[Dict[str, float]]:
 
     hit_rates = data.get("hit_rates", {})
     for key, value in hit_rates.items():
-        if "closest_to_zero" in key:
-            continue
         metrics[key] = value
 
     return metrics
