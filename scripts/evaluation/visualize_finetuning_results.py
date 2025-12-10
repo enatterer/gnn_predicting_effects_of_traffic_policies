@@ -60,6 +60,24 @@ class ResultsCollector:
     def __init__(self):
         self.results = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
         # Structure: results[data_availability][city][method][metric] = value
+
+    @staticmethod
+    def _parse_run_name(run_name: str) -> Optional[Tuple[str, str, int, int]]:
+        """
+        Parse run names like:
+        - finetuned_erlangen_train5_val200_high_dist_train_val
+        - scratch_erlangen_train5_val200_high_dist_train_val
+        
+        Returns (method, city, train_count, val_count) or None if no match.
+        """
+        import re
+        pattern = r'^(finetuned|scratch)_(\w+)_train(\d+)_val(\d+)(?:_high_dist_train_val)?$'
+        m = re.match(pattern, run_name)
+        if not m:
+            return None
+        method_raw, city, train_s, val_s = m.groups()
+        method = 'finetune' if method_raw == 'finetuned' else 'scratch'
+        return method, city, int(train_s), int(val_s)
     
     def add_result(self, 
                    data_availability: int,
@@ -69,8 +87,15 @@ class ResultsCollector:
         """Add a result entry."""
         self.results[data_availability][city][method] = metrics
     
-    def from_wandb(self, project_name: str, api_key: Optional[str] = None):
-        """Extract results from WandB. Requires wandb package."""
+    def from_wandb(self, project_name: str, api_key: Optional[str] = None, name_suffix: Optional[str] = None):
+        """Extract results from WandB. Requires wandb package.
+        
+        Args:
+            project_name: Fully qualified WandB project (e.g., user/project).
+            api_key: Optional WandB API key.
+            name_suffix: If set, only include runs whose names end with this suffix
+                (e.g., "_high_dist_train_val").
+        """
         try:
             import wandb
             if api_key:
@@ -81,6 +106,11 @@ class ResultsCollector:
             
             for run in runs:
                 run_name = run.name
+                
+                # Optional name-based filtering (e.g., only "_high_dist_train_val" runs)
+                if name_suffix and not run_name.endswith(name_suffix):
+                    continue
+
                 summary = run.summary
                 config = run.config
                 
@@ -96,43 +126,41 @@ class ResultsCollector:
                 if metrics['r2'] is None or metrics['val_loss'] is None:
                     continue
                 
-                # Determine method from run name
-                # Format: finetune_{city}__parent-... or run_from_scratch_{city}__parent-...
-                method = None
-                if 'finetune' in run_name.lower() and 'scratch' not in run_name.lower():
-                    method = 'finetune'
-                elif 'run_from_scratch' in run_name.lower() or ('scratch' in run_name.lower() and 'finetune' not in run_name.lower()):
-                    method = 'scratch'
+                # Parse run name following pattern (finetuned|scratch)_<city>_trainX_valY[_high_dist_train_val]
+                parsed = self._parse_run_name(run_name)
+                if parsed:
+                    method, city, train_count, _val_count = parsed
+                    data_avail = train_count
                 else:
-                    continue  # Skip runs that don't match our pattern
-                
-                # Extract city from run name
-                # Pattern: finetune_{city}__parent-... or run_from_scratch_{city}__parent-...
-                city = None
-                if method == 'finetune':
-                    # Extract from "finetune_{city}__parent-..."
-                    parts = run_name.split('__')
-                    if len(parts) > 0:
-                        city_part = parts[0].replace('finetune_', '')
-                        city = city_part.strip()
-                elif method == 'scratch':
-                    # Extract from "run_from_scratch_{city}__parent-..."
-                    parts = run_name.split('__')
-                    if len(parts) > 0:
-                        city_part = parts[0].replace('run_from_scratch_', '')
-                        city = city_part.strip()
-                
-                # Fallback: try to get city from config
-                if not city:
-                    cities_str = config.get('cities', '')
-                    if cities_str:
-                        city = cities_str.split(',')[0].strip()
-                
-                # Get data availability from config
-                data_avail = config.get('limit_train_graphs', None)
-                if data_avail is None or data_avail == 0:
-                    # Try alternative config keys
-                    data_avail = config.get('finetune_limit_train_graphs', None)
+                    # Fallback to old heuristics
+                    method = None
+                    if 'finetune' in run_name.lower() and 'scratch' not in run_name.lower():
+                        method = 'finetune'
+                    elif 'run_from_scratch' in run_name.lower() or ('scratch' in run_name.lower() and 'finetune' not in run_name.lower()):
+                        method = 'scratch'
+                    else:
+                        continue  # Skip runs that don't match our pattern
+                    
+                    city = None
+                    if method == 'finetune':
+                        parts = run_name.split('__')
+                        if len(parts) > 0:
+                            city_part = parts[0].replace('finetune_', '')
+                            city = city_part.strip()
+                    elif method == 'scratch':
+                        parts = run_name.split('__')
+                        if len(parts) > 0:
+                            city_part = parts[0].replace('run_from_scratch_', '')
+                            city = city_part.strip()
+                    
+                    if not city:
+                        cities_str = config.get('cities', '')
+                        if cities_str:
+                            city = cities_str.split(',')[0].strip()
+                    
+                    data_avail = config.get('limit_train_graphs', None)
+                    if data_avail is None or data_avail == 0:
+                        data_avail = config.get('finetune_limit_train_graphs', None)
                 
                 # Only add if we have all required information
                 if city and data_avail and data_avail > 0 and method:
@@ -203,12 +231,14 @@ class ResultsCollector:
 
 def create_val_loss_improvement_heatmap(results_df: pd.DataFrame, output_dir: str):
     """Create heatmap showing validation loss improvement percentage."""
-    data_availabilities = sorted(results_df['data_availability'].unique())
+    desired_order = [5, 10, 20, 30, 40]
+    data_availabilities = [x for x in desired_order if x in set(results_df['data_availability'].unique())]
+    exclude_cities = {'muenchen', 'neuulm'}
     improvement_data = []
     
     for data_avail in data_availabilities:
         subset = results_df[results_df['data_availability'] == data_avail]
-        cities = sorted(subset['city'].unique())
+        cities = sorted([c for c in subset['city'].unique() if c not in exclude_cities])
         
         for city in cities:
             city_data = subset[subset['city'] == city]
@@ -273,6 +303,12 @@ def main():
         help='WandB API key (optional, can use environment variable)'
     )
     parser.add_argument(
+        '--name_suffix',
+        type=str,
+        default=None,
+        help='If provided, only include runs whose names end with this suffix (e.g., "_high_dist_train_val"). Applies to --wandb_project.'
+    )
+    parser.add_argument(
         '--output_dir',
         type=str,
         required=True,
@@ -299,7 +335,7 @@ def main():
     elif args.results_dir:
         collector.from_directory(args.results_dir)
     elif args.wandb_project:
-        collector.from_wandb(args.wandb_project, args.wandb_api_key)
+        collector.from_wandb(args.wandb_project, args.wandb_api_key, name_suffix=args.name_suffix)
     else:
         print("Error: Must provide --results_dir, --results_json, or --wandb_project")
         return

@@ -150,6 +150,130 @@ def find_distant_split(all_paths: List[str], train_count: int, val_count: int,
     return best_train_paths, best_val_paths, best_distance
 
 
+def find_distant_test_split(train_paths: List[str], val_paths: List[str], all_paths: List[str], 
+                           test_count: int, num_trials: int = 2000, seed: int = 42, 
+                           use_all_features: bool = True) -> Tuple[List[str], float, float, float]:
+    """
+    Find a test set that maximizes Wasserstein distance from both train and val sets.
+    
+    Uses a combined scoring strategy to ensure test set is VERY different from both:
+    1. Primary: Maximize minimum distance (ensures both distances are large)
+    2. Secondary: Maximize sum of distances (favors cases where both are large)
+    3. Returns both individual distances for verification
+    
+    Args:
+        train_paths: Already selected training paths
+        val_paths: Already selected validation paths
+        all_paths: All available paths (excluding train and val)
+        test_count: Number of test graphs to select
+        num_trials: Number of random trials (default: 2000 for better results)
+        seed: Random seed
+        use_all_features: Feature selection flag
+    
+    Returns:
+        test_paths, min_distance, dist_test_train, dist_test_val
+    """
+    # Filter out train and val paths from all_paths
+    train_set = set(train_paths)
+    val_set = set(val_paths)
+    available_paths = [p for p in all_paths if p not in train_set and p not in val_set]
+    
+    # Filter out invalid paths
+    valid_paths = []
+    for path in available_paths:
+        if os.path.exists(path):
+            valid_paths.append(path)
+    
+    if len(valid_paths) < test_count:
+        raise ValueError(
+            f"Insufficient valid graphs for test: {len(valid_paths)} < {test_count}"
+        )
+    
+    print(f"Found {len(valid_paths)} valid test graphs (excluding {len(train_paths)} train + {len(val_paths)} val)")
+    
+    # Try multiple random splits to find the one with maximum distance from BOTH train and val
+    print(f"\nTrying {num_trials} random splits to find test set with MAXIMUM distance from train+val...")
+    print(f"Using EXACT same distance computation as analyze_pretraining_benefit_vs_distance.py")
+    print(f"Feature selection: {'features 0-19' if use_all_features else 'features [0,1,2,3,10] (5 base features)'}")
+    print(f"Optimization strategy: Maximize minimum distance, with sum as tiebreaker")
+    
+    best_min_distance = -1.0
+    best_sum_distance = -1.0
+    best_test_paths = None
+    best_dist_test_train = 0.0
+    best_dist_test_val = 0.0
+    
+    _rnd.seed(seed)
+    for trial in range(num_trials):
+        # Random shuffle
+        indices = list(range(len(valid_paths)))
+        _rnd.shuffle(indices)
+        
+        # Select test paths
+        test_indices = indices[:test_count]
+        test_paths_trial = [valid_paths[i] for i in test_indices]
+        
+        # Compute distances from test to train and test to val
+        try:
+            dist_test_train = compute_wasserstein_distance_analysis(
+                test_paths_trial,
+                train_paths,
+                use_capacity_reduction_only=False,
+                verbose=False,
+                use_all_features=use_all_features
+            )
+            dist_test_val = compute_wasserstein_distance_analysis(
+                test_paths_trial,
+                val_paths,
+                use_capacity_reduction_only=False,
+                verbose=False,
+                use_all_features=use_all_features
+            )
+            
+            # Primary: minimum distance (ensures test is distant from BOTH)
+            min_distance = min(dist_test_train, dist_test_val)
+            # Secondary: sum of distances (favors cases where both are large)
+            sum_distance = dist_test_train + dist_test_val
+            
+        except Exception as e:
+            print(f"  Trial {trial + 1}/{num_trials}: Failed to compute distance: {e}")
+            continue
+        
+        # Update best if:
+        # 1. Minimum distance is better, OR
+        # 2. Minimum distance is equal but sum is better (tiebreaker)
+        is_better = (
+            min_distance > best_min_distance or
+            (min_distance == best_min_distance and sum_distance > best_sum_distance)
+        )
+        
+        # Print progress
+        if (trial + 1) % 200 == 0 or is_better:
+            print(f"Trial {trial + 1}/{num_trials}, min: {min_distance:.6f}, sum: {sum_distance:.6f} "
+                  f"(test-train: {dist_test_train:.6f}, test-val: {dist_test_val:.6f})")
+        
+        if is_better:
+            best_min_distance = min_distance
+            best_sum_distance = sum_distance
+            best_test_paths = test_paths_trial
+            best_dist_test_train = dist_test_train
+            best_dist_test_val = dist_test_val
+            print(f"  → New best found! min_distance: {best_min_distance:.6f}, "
+                  f"test-train: {best_dist_test_train:.6f}, test-val: {best_dist_test_val:.6f}")
+    
+    if best_test_paths is None:
+        raise ValueError("Failed to find any valid test split with computable distance")
+    
+    print(f"\n✓ Best test set found:")
+    print(f"  Minimum distance (from both train and val): {best_min_distance:.6f}")
+    print(f"  Distance from train: {best_dist_test_train:.6f}")
+    print(f"  Distance from val: {best_dist_test_val:.6f}")
+    print(f"  Sum of distances: {best_sum_distance:.6f}")
+    print(f"  Test set size: {len(best_test_paths)}")
+    
+    return best_test_paths, best_min_distance, best_dist_test_train, best_dist_test_val
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate train/val splits that maximize Wasserstein distance."
