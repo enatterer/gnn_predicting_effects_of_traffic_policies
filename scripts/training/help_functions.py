@@ -5,6 +5,8 @@ import random
 import json
 import joblib
 import subprocess
+import time
+import fcntl
 from collections import defaultdict
 from pathlib import Path
 from functools import partial
@@ -42,6 +44,9 @@ use_highway = True  # Module constant: Include HIGHWAY features (4-9)
 
 ################################################# ↓ GPU + Randomness ↓ #################################################
 
+# Module-level storage for GPU lock files to prevent garbage collection
+_gpu_lock_files = {}
+
 def get_available_gpus():
     command = "nvidia-smi --query-gpu=index,utilization.gpu,memory.free --format=csv,noheader,nounits"
     result = subprocess.run(command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
@@ -56,12 +61,218 @@ def get_available_gpus():
             'utilization': int(utilization),
             'memory_free': int(memory_free)
         })
+    
+    # Check for active processes on each GPU
+    # Query for compute processes (PIDs) on each GPU
+    process_command = "nvidia-smi --query-compute-apps=gpu_uuid,pid --format=csv,noheader,nounits"
+    process_result = subprocess.run(process_command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # Get GPU UUIDs to map processes to GPU indices
+    uuid_command = "nvidia-smi --query-gpu=index,uuid --format=csv,noheader,nounits"
+    uuid_result = subprocess.run(uuid_command.split(), stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    
+    # Build a mapping of GPU UUID to index
+    gpu_uuid_to_index = {}
+    if uuid_result.returncode == 0:
+        uuid_info = uuid_result.stdout.decode('utf-8').strip().split('\n')
+        for uuid_line in uuid_info:
+            uuid_line = uuid_line.strip()
+            if uuid_line:
+                parts = [p.strip() for p in uuid_line.split(',')]
+                if len(parts) >= 2:
+                    idx, uuid = parts[0], parts[1]
+                    gpu_uuid_to_index[uuid] = int(idx)
+    
+    # Build a set of GPU indices that have active processes
+    gpus_with_processes = set()
+    if process_result.returncode == 0:
+        process_info = process_result.stdout.decode('utf-8').strip().split('\n')
+        for proc_line in process_info:
+            proc_line = proc_line.strip()
+            if proc_line:
+                parts = [p.strip() for p in proc_line.split(',')]
+                if len(parts) >= 2:
+                    uuid, pid = parts[0], parts[1]
+                    if uuid in gpu_uuid_to_index:
+                        gpu_idx = gpu_uuid_to_index[uuid]
+                        gpus_with_processes.add(gpu_idx)
+    
+    # Mark GPUs with active processes
+    for gpu in gpus:
+        gpu['has_processes'] = gpu['index'] in gpus_with_processes
+    
     return gpus
     
-def select_best_gpu(gpus):
+def _acquire_gpu_lock(gpu_index, lock_dir=None, timeout=30, max_retries=10):
+    """
+    Try to acquire a file-based lock for a GPU to prevent race conditions.
+    Checks for stale locks from dead processes.
+    
+    Args:
+        gpu_index: GPU index to lock
+        lock_dir: Directory for lock files (default: /tmp/gpu_locks)
+        timeout: Maximum time to wait for lock (seconds)
+        max_retries: Maximum number of retry attempts
+    
+    Returns:
+        Lock file handle if successful, None otherwise
+    """
+    if lock_dir is None:
+        lock_dir = "/tmp/gpu_locks"
+    
+    os.makedirs(lock_dir, exist_ok=True)
+    lock_file_path = os.path.join(lock_dir, f"gpu_{gpu_index}.lock")
+    
+    # Check for stale lock (from dead process)
+    # Try to read the lock file to check if the process is still alive
+    if os.path.exists(lock_file_path):
+        try:
+            # Try to open with shared lock to read PID
+            stale_lock = False
+            try:
+                f = open(lock_file_path, 'r')
+                try:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+                    lines = f.readlines()
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    f.close()
+                    
+                    if len(lines) >= 1:
+                        try:
+                            pid = int(lines[0].strip())
+                            # Check if process is still running
+                            try:
+                                os.kill(pid, 0)  # Signal 0 just checks if process exists
+                                # Process exists, lock is valid
+                            except OSError:
+                                # Process doesn't exist, mark as stale
+                                stale_lock = True
+                        except (ValueError, IndexError):
+                            # Invalid lock file, mark as stale
+                            stale_lock = True
+                except (IOError, OSError):
+                    # Can't acquire shared lock - another process has exclusive lock
+                    # This means the process is probably alive, so we'll wait
+                    f.close()
+            except (IOError, OSError):
+                # Can't read lock file - might be locked or invalid
+                # If we can't even open it, assume it's locked by a live process
+                pass
+            
+            # Remove stale lock file if detected (outside the file handle)
+            if stale_lock:
+                try:
+                    os.remove(lock_file_path)
+                except:
+                    pass
+        except Exception:
+            # Any other error, just continue and try to acquire lock
+            pass
+    
+    # Try to create and lock the file
+    lock_file = None
+    for attempt in range(max_retries):
+        try:
+            # Open file in append mode (creates if doesn't exist)
+            lock_file = open(lock_file_path, 'a')
+            
+            # Try to acquire exclusive lock (non-blocking)
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            
+            # Write PID and timestamp to lock file for debugging
+            lock_file.seek(0)
+            lock_file.truncate()
+            lock_file.write(f"{os.getpid()}\n{time.time()}\n")
+            lock_file.flush()
+            
+            return lock_file
+            
+        except (IOError, OSError) as e:
+            # Lock is held by another process
+            if lock_file:
+                try:
+                    lock_file.close()
+                except:
+                    pass
+                lock_file = None
+            
+            if attempt < max_retries - 1:
+                time.sleep(timeout / max_retries)
+            else:
+                return None
+    
+    return None
+
+def select_best_gpu(gpus, utilization_threshold=5, lock_timeout=30):
+    """
+    Select the best available GPU that is actually free, with file-based locking to prevent race conditions.
+    
+    Args:
+        gpus: List of GPU dictionaries from get_available_gpus()
+        utilization_threshold: Maximum utilization percentage to consider a GPU "free" (default: 5%)
+        lock_timeout: Maximum time to wait for GPU lock (seconds)
+    
+    Returns:
+        GPU index of the best available GPU
+    """
+    # Filter to only GPUs that are truly free:
+    # 1. No active processes
+    # 2. Utilization below threshold
+    free_gpus = [gpu for gpu in gpus if not gpu.get('has_processes', False) and gpu['utilization'] < utilization_threshold]
+    
+    if not free_gpus:
+        # If no GPUs are completely free, fall back to GPUs with no processes but higher utilization
+        free_gpus = [gpu for gpu in gpus if not gpu.get('has_processes', False)]
+    
+    if not free_gpus:
+        # Last resort: use any GPU, sorted by utilization and memory
+        print("WARNING: No completely free GPUs found. Selecting GPU with lowest utilization.")
+        free_gpus = gpus
+    
     # Sort by free memory (descending) and then by utilization (ascending)
-    gpus = sorted(gpus, key=lambda x: (-x['memory_free'], x['utilization']))
-    return gpus[0]['index']
+    free_gpus = sorted(free_gpus, key=lambda x: (-x['memory_free'], x['utilization']))
+    
+    # Try to acquire lock for each GPU in order of preference
+    lock_file = None
+    selected_gpu = None
+    
+    for gpu in free_gpus:
+        # Re-check GPU status after a brief delay (in case another process just grabbed it)
+        time.sleep(0.1)
+        gpus_recheck = get_available_gpus()
+        gpu_recheck = next((g for g in gpus_recheck if g['index'] == gpu['index']), None)
+        
+        if gpu_recheck and (gpu_recheck.get('has_processes', False) or gpu_recheck['utilization'] >= utilization_threshold):
+            # GPU is no longer free, skip it
+            continue
+        
+        # Try to acquire lock
+        lock_file = _acquire_gpu_lock(gpu['index'], timeout=lock_timeout)
+        if lock_file:
+            selected_gpu = gpu
+            break
+    
+    if not selected_gpu:
+        # Fallback: try any GPU without re-checking
+        for gpu in free_gpus:
+            lock_file = _acquire_gpu_lock(gpu['index'], timeout=2, max_retries=3)
+            if lock_file:
+                selected_gpu = gpu
+                break
+    
+    if not selected_gpu:
+        # Last resort: use best GPU even if we can't get a lock
+        selected_gpu = free_gpus[0]
+        print(f"WARNING: Could not acquire lock for any GPU. Using GPU {selected_gpu['index']} anyway.")
+    else:
+        print(f"Selected GPU {selected_gpu['index']}: {selected_gpu['memory_free']} MB free, {selected_gpu['utilization']}% utilization, "
+              f"has_processes={selected_gpu.get('has_processes', False)} (lock acquired)")
+        
+        # Store lock file in module-level dict to prevent garbage collection
+        # The lock will be automatically released when the process exits
+        _gpu_lock_files[selected_gpu['index']] = lock_file
+    
+    return selected_gpu['index']
 
 def set_cuda_visible_device(gpu_index):
     os.environ['CUDA_VISIBLE_DEVICES'] = str(gpu_index)
@@ -502,7 +713,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
                                      use_nested_neighbor_loader, neighbor_sizes, subgraphs_per_graph, seed_size,
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy,
                                      aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0,
-                                     use_destination_activity_param=None):
+                                     use_destination_activity_param=None,
+                                     return_test_loader: bool = False):
     """
     Prepare data with graph features.
     
@@ -684,6 +896,9 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     #save_dataloader_params(test_loader, path_to_save_dataloader + 'test_loader_params.json')
     # print("Test dataloader saved.")
     
+    if return_test_loader:
+        return train_loader, val_loader, test_loader
+
     # MODIFIED: Return None for scalers since we don't need them
     if use_inductive_variant == False:
         return train_loader, val_loader, None
