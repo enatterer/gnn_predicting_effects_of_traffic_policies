@@ -54,6 +54,7 @@ from training import run_models as run_models_module
 # Base directory used by both training and finetuning scripts
 BASE_DIR = Path(run_models_module.base_dir).resolve()
 
+# Defines ALL POSSIBLE Citites
 # Target cities
 TARGET_CITIES: Sequence[str] = (
     "landshut",
@@ -187,10 +188,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--loss_fct", type=str, default="mse")
     parser.add_argument("--use_weighted_loss", type=str_to_bool, default=False)
     parser.add_argument("--target_type", type=str, default="abs_vol_car")
-    parser.add_argument("--warmup_fraction", type=float, default=0.05)
+    parser.add_argument("--warmup_fraction", type=float, default=0.1)
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5)
     parser.add_argument("--min_lr_fraction", type=float, default=0.01)
-    parser.add_argument("--early_stopping_patience", type=int, default=30)
+    parser.add_argument("--early_stopping_patience", type=int, default=15)
     parser.add_argument("--use_dropout", type=str_to_bool, default=False)
     parser.add_argument("--dropout", type=float, default=0.3)
     parser.add_argument("--gradient_accumulation_steps", type=int, default=1)
@@ -200,7 +201,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--neighbor_sizes", type=str, default="5,5,5")
     parser.add_argument("--subgraphs_per_graph", type=int, default=2)
     parser.add_argument("--seed_size", type=int, default=10)
-    parser.add_argument("--batch_size", type=int, default=64)
+    parser.add_argument("--batch_size", type=int, default=32)
     parser.add_argument(
         "--sampling_strategy",
         type=str,
@@ -221,10 +222,10 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--aug_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--continue_training", type=str_to_bool, default=False)
     parser.add_argument("--base_checkpoint_path", type=str, default=None)
-    parser.add_argument("--run_peak_lr", type=float, default=0.001)
-    parser.add_argument("--run_initial_lr", type=float, default=0.0005)
-    parser.add_argument("--run_num_epochs", type=int, default=400)
-    parser.add_argument("--run_limit_available_graphs", type=int, default=300)
+    parser.add_argument("--run_peak_lr", type=float, default=0.0003)
+    parser.add_argument("--run_initial_lr", type=float, default=0.00003)
+    parser.add_argument("--run_num_epochs", type=int, default=300)
+    parser.add_argument("--run_limit_available_graphs", type=int, default=0)
 
     # Arguments specific to finetune_models.py
     parser.add_argument("--target_normalization", type=str, default="None",
@@ -237,18 +238,20 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--augment_feature_noise_prob", type=str_to_bool, default=False)
     parser.add_argument("--use_node_masking_probability", type=float, default=0.0)
     parser.add_argument("--pretraining_inductive", type=str_to_bool, default=False)  # Transductive pretraining
-    parser.add_argument("--finetune_peak_lr", type=float, default=0.001)
-    parser.add_argument("--finetune_initial_lr", type=float, default=0.0005)
-    parser.add_argument("--finetune_num_epochs", type=int, default=400)
-    parser.add_argument("--finetune_limit_train_graphs", type=int, default=40)
-    parser.add_argument("--finetune_limit_val_graphs", type=int, default=10)
-    parser.add_argument("--finetune_limit_test_graphs", type=int, default=200)
+    parser.add_argument("--finetune_peak_lr", type=float, default=0.0003)
+    parser.add_argument("--finetune_initial_lr", type=float, default=0.00003)
+    parser.add_argument("--finetune_num_epochs", type=int, default=300)
+    parser.add_argument("--finetune_limit_train_graphs", type=int, default=0)
+    parser.add_argument("--finetune_limit_val_graphs", type=int, default=0)
+    parser.add_argument("--finetune_limit_test_graphs", type=int, default=0)
 
     # Orchestrator-specific arguments
     parser.add_argument("--shuffle_seed", type=int, default=42,
                         help="Seed for random train/val split generation.")
     parser.add_argument("--selected_cities", type=str, default=None,
-                        help="Optional comma-separated subset of cities to run. Defaults to all.")
+                        help="Optional comma-separated subset of cities to consider. Defaults to all. [FOR PRETRAINING, Defines the Universe]")
+    parser.add_argument("--testing_cities", type=str, default=None,
+                        help="Optional comma-separated subset of cities to test on. Defaults to all. [FOR FINETUNING, Run finetuning vs scratch on these cities one by one]")
     parser.add_argument("--skip_pretraining", type=str_to_bool, default=False,
                         help="Skip pretraining stage (assumes checkpoints already exist).")
     parser.add_argument("--skip_finetuning", type=str_to_bool, default=False,
@@ -710,7 +713,6 @@ def main() -> None:
     splits_dir.mkdir(parents=True, exist_ok=True)
     
     neighbor_sizes = parse_neighbor_sizes(args.neighbor_sizes)
-    city_sequence = select_cities(args.selected_cities)
     seeds = [args.shuffle_seed + i for i in range(args.num_random_seeds)]
 
     # Prepare base arguments
@@ -775,8 +777,8 @@ def main() -> None:
     test_count = args.test_count
     train_val_configs = parse_train_val_configs(args.train_val_configs)
 
-    for idx, test_city in enumerate(city_sequence, start=1):
-        remaining_cities = [city for city in city_sequence if city != test_city]
+    for test_city in select_cities(args.target_cities):
+        remaining_cities = [city for city in select_cities(args.selected_cities) if city != test_city]
         
         # Transductive pretraining: use all remaining cities for train
         train_cities = remaining_cities
@@ -786,7 +788,7 @@ def main() -> None:
         project_name = run_base_args["project_name"]
         
         print("\n" + "=" * 80)
-        print(f"[{idx}/{len(city_sequence)}] Processing city: {test_city}")
+        print(f"Processing city: {test_city}")
         print(f"{'=' * 80}")
         print(f"Pretraining cities ({len(train_cities)}): {train_cities}")
         print(f"Pretraining run name: {pretrain_run_name}")

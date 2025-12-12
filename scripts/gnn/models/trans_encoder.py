@@ -27,21 +27,21 @@ class TransEncoder(BaseGNN):
                  target_normalization: str = None,
 
                  # Transformer Parameters
-                 ff_dim: int = 256,
+                 ff_dim: int = 512,
                  num_layers: int = 3,
-                 num_heads: int = 2, # Also for GNN
+                 num_heads: int = 4, # Also for GNN
                  
                  # GNN Parameters
                  use_graph_conv: bool = True,
                  graph_conv_type: str = 'trans_conv', # 'gcn', 'gatv2', 'graph'
-                 hidden_channels: list[int] = [64, 128, 64],
+                 hidden_channels: list[int] = [128, 256, 128],
                  use_graph_norm: bool = True,
                  use_residuals: bool = False,
                  message_drop_prob: float = 0.0,
 
                  # POSITIONAL ENCODING PARAMETERS
                  use_pos: bool = True,
-                 pos_dim: int = 2,
+                 pos_dim: int = 6,
                  use_lap_pe: bool = False,
                  lap_pe_dim: int = 8):
 
