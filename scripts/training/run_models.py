@@ -14,7 +14,6 @@ python run_models.py --gnn_arch eign --unique_model_description EIGN_trial_unsig
 python run_models.py --gnn_arch trans_encoder --unique_model_description encoder_trial --in_channels 5 --use_all_features True --num_epochs 20 --peak_lr 0.0003 --early_stopping_patience 25
 '''
 
-from html import parser
 import os
 import sys
 import json
@@ -42,12 +41,14 @@ DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','training_data','kreisfreistadt')
 
 # Please adjust as needed
-base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
+base_dir = os.path.join(project_root, 'inductive_gnn_data_results') # for saving results
 
+# Possible cities:
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
-train_cities = ['aschaffenburg','landshut','wuerzburg','regensburg','bayreuth','fuerth','kempten','augsburg','rosenheim','nuernberg', 'ingolstadt', 'schweinfurt']
-val_cities =['bamberg', 'erlangen'] # Non empty implies inductive learning
-test_cities = ['muenchen', 'neuulm'] # Non empty implies inductive learning
+
+train_cities = ['landshut','bayreuth','schweinfurt','wuerzburg','bamberg','regensburg'] # Good cities, Blue Cluster
+val_cities = [] # Non empty implies inductive learning
+test_cities = [] # Non empty implies inductive learning
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
@@ -61,7 +62,7 @@ def main():
     parser.add_argument("--unique_model_description", type=str, default="trans_encoder_5_features_15_cities",
                         help="A unique description for the run.")
     parser.add_argument("--in_channels", type=int, default=5, help="The number of input channels.")
-    parser.add_argument("--use_all_features", type=str_to_bool, default=True, help="Whether to use all features or 5 core features.")
+    parser.add_argument("--use_all_features", type=str_to_bool, default=False, help="Whether to use all features or 5 core features.")
     parser.add_argument("--out_channels", type=int, default=1, help="The number of output channels.")
     parser.add_argument("--model_kwargs", type=str, default=None,
                         help='Additional model parameters (as defined in the class) in JSON format (path to the file).' \
@@ -99,12 +100,12 @@ def main():
     
     # Parameters for the GraphSAGE
     parser.add_argument("--use_nested_neighbor_loader", type=str_to_bool, default=False, help="Whether to use nested neighbor loader.")
-    parser.add_argument("--neighbor_sizes", type=str, default="5,5,5", help="The neighbor sizes for the nested neighbor loader (comma-separated).")
-    parser.add_argument("--subgraphs_per_graph", type=int, default=2, help="The number of subgraphs to sample per graph.")
-    parser.add_argument("--seed_size", type=int, default=10, help="The number of seed nodes in each subgraph.")
+    parser.add_argument("--neighbor_sizes", type=str, default="7,7,7", help="The neighbor sizes for the nested neighbor loader (comma-separated).")
+    parser.add_argument("--subgraphs_per_graph", type=int, default=1, help="The number of subgraphs to sample per graph.")
+    parser.add_argument("--seed_size", type=int, default=1000, help="The number of seed nodes in each subgraph.")
     parser.add_argument("--sampling_strategy", type=str, default="neighbor_sampling", help="The sampling strategy to use for the nested neighbor loader.",
                         choices=["neighbor_sampling", "random_walk"])
-    parser.add_argument("--min_subgraph_nodes", type=int, default=500, help="The minimum number of nodes in a subgraph.")
+    parser.add_argument("--min_subgraph_nodes", type=int, default=5000, help="The minimum number of nodes in a subgraph.")
     parser.add_argument("--max_subgraph_nodes", type=int, default=50000, help="The maximum number of nodes in a subgraph.")
     
     # Parameters for Data Augmentation
@@ -220,7 +221,7 @@ def main():
             test_data = None
             
             # Optional: Subsample training graphs for faster iterations
-            if args.get('limit_available_graphs', 0) and args['limit_available_graphs'] > 0:
+            if args['limit_available_graphs'] > 0:
                 train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
 
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")

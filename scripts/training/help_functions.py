@@ -36,9 +36,9 @@ from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 ########## Control Center #########
 # Module-level defaults for feature selection (NOT command-line flags)
 # Only --use_destination_activity is a command-line flag (in finetune_models.py, etc.)
-use_allowed_modes = True  # Module constant: Include ALLOWED_MODE features (11-19)
+use_allowed_modes = False  # Module constant: Include ALLOWED_MODE features (11-19)
 use_destination_activity = False  # Module default: Excludes features 20-27. Overridden by --use_destination_activity flag.
-use_highway = True  # Module constant: Include HIGHWAY features (4-9)
+use_highway = False  # Module constant: Include HIGHWAY features (4-9)
 ###################################
 
 

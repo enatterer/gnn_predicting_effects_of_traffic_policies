@@ -171,6 +171,7 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
     # Only compute allowed modes if the flag is True
     allowed_modes = encode_modes(links_base_case) if use_allowed_modes else None
     
+    # TODO: Why computed multiple times? Can be refactored.
     # Get link geometries and edges_base FIRST
     _, stacked_edge_geometries_tensor, edges_base, nodes, _ = get_link_geometries(links_base_case, apply_scaling=True)
     
