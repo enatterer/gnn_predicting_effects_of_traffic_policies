@@ -777,7 +777,7 @@ def main() -> None:
     test_count = args.test_count
     train_val_configs = parse_train_val_configs(args.train_val_configs)
 
-    for test_city in select_cities(args.target_cities):
+    for test_city in select_cities(args.testing_cities):
         remaining_cities = [city for city in select_cities(args.selected_cities) if city != test_city]
         
         # Transductive pretraining: use all remaining cities for train

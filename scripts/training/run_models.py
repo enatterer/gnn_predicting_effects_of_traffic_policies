@@ -41,7 +41,7 @@ DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','training_data','kreisfreistadt')
 
 # Please adjust as needed
-base_dir = os.path.join(project_root, 'inductive_gnn_data_results') # for saving results
+base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 # Possible cities:
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
