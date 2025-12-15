@@ -254,8 +254,10 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Optional comma-separated subset of cities to test on. Defaults to all. [FOR FINETUNING, Run finetuning vs scratch on these cities one by one]")
     parser.add_argument("--skip_pretraining", type=str_to_bool, default=False,
                         help="Skip pretraining stage (assumes checkpoints already exist).")
+    parser.add_argument("--skip_scratch", type=str_to_bool, default=False,
+                        help="Skip training from scratch stage.")
     parser.add_argument("--skip_finetuning", type=str_to_bool, default=False,
-                        help="Skip finetuning stage.")
+                        help="Skip finetuning (from checkpoint) stage.")
     parser.add_argument("--skip_test_generation", type=str_to_bool, default=False,
                         help="Skip test set generation.")
     parser.add_argument("--splits_dir", type=str, default="data/splits",
@@ -827,7 +829,7 @@ def main() -> None:
                 )
                 split_file_path = city_config_split_dir / split_filename
 
-                if split_file_path.exists() and not args.skip_finetuning:
+                if split_file_path.exists():
                     print(f"\n[Step 2/6] Using existing split file: {split_file_path}")
                 else:
                     print(f"\n[Step 2/6] Generating random train/val split...")
@@ -843,10 +845,10 @@ def main() -> None:
                 scratch_run_name = f"{test_city}_scratch_rs_{seed_idx}_t{train_count}_v{val_count}"
                 finetune_run_name = f"{test_city}_finetune_rs_{seed_idx}_t{train_count}_v{val_count}"
 
+                shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
+                
                 # Step 3: Finetuning from scratch
-                if not args.skip_finetuning:
-                    shared_values = {name: run_args.get(name, getattr(args, name, None)) for name in SHARED_ARG_NAMES}
-
+                if not args.skip_scratch:
                     scratch_model_file = finetuned_model_path(project_name, scratch_run_name)
                     if scratch_model_file.exists():
                         print(f"\n[Step 3/6] Skipping finetuning from scratch; found existing model: {scratch_model_file}")
@@ -873,8 +875,11 @@ def main() -> None:
                                 continue
                             else:
                                 raise
+                else:
+                    print(f"\n[Step 3/6] Skipping training from scratch (--skip_scratch)")
 
-                    # Step 4: Finetuning from checkpoint
+                # Step 4: Finetuning from checkpoint
+                if not args.skip_finetuning:
                     finetuned_checkpoint_model = finetuned_model_path(project_name, finetune_run_name)
                     if finetuned_checkpoint_model.exists():
                         print(f"\n[Step 4/6] Skipping finetuning from checkpoint; found existing model: {finetuned_checkpoint_model}")
@@ -913,7 +918,7 @@ def main() -> None:
                             else:
                                 raise
                 else:
-                    print(f"\n[Step 3-4/6] Skipping finetuning (--skip_finetuning)")
+                    print(f"\n[Step 4/6] Skipping finetuning (--skip_finetuning)")
 
                 # Step 5: Generate or reuse distant test set per seed/config
                 test_split_filename = (
