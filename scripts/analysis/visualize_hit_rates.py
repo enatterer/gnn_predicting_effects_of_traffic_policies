@@ -28,7 +28,6 @@ from typing import Dict, List, Tuple
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import seaborn as sns
 from scipy.stats import wasserstein_distance
 import torch
 from torch_geometric.data import Data
@@ -41,7 +40,6 @@ if str(scripts_path) not in sys.path:
 from training.help_functions import load_metadata_from_disk
 
 # Set style for plots
-sns.set_style("whitegrid")
 plt.rcParams['figure.figsize'] = (14, 10)
 
 
