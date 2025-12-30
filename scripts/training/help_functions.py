@@ -712,7 +712,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy,
                                      aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0,
                                      use_destination_activity_param=None,
-                                     return_test_loader: bool = False):
+                                     return_test_loader: bool = False,
+                                     x_scaler_path: Optional[str] = None):
     """
     Prepare data with graph features.
     
@@ -801,7 +802,13 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     print('Use Nested Neighbor Loader:', use_nested_neighbor_loader)
 
     print("Normalizing train set...")
-    train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_norm_set)
+    if x_scaler_path is not None and os.path.exists(x_scaler_path):
+        print(f"Loading pre-fitted x_scaler from {x_scaler_path}...")
+        x_scaler_loaded = joblib.load(x_scaler_path)
+        scalers_train = {"x_scaler": x_scaler_loaded}
+        train_set_normalized = normalize_dataset_with_scaler(dataset_input=train_set, scalers=scalers_train)
+    else:
+        train_set_normalized, scalers_train = normalize_dataset(train_data_list=train_set, combined_data_list=combined_norm_set)
     print("Train set normalized")      
     
     print("Normalizing validation set ...")

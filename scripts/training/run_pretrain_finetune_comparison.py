@@ -29,7 +29,6 @@ import importlib.util
 import json
 import random
 import sys
-import subprocess
 import tempfile
 from pathlib import Path
 from types import SimpleNamespace
@@ -264,7 +263,7 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Directory to save/load split files.")
     parser.add_argument("--dataset_path", type=str, default=None,
                         help="Path to dataset directory.")
-    parser.add_argument("--num_trials_test", type=int, default=5000,
+    parser.add_argument("--num_trials_test", type=int, default=2000,
                         help="Number of trials for finding distant test sets (default: 2000 for better results).")
     parser.add_argument("--test_count", type=int, default=DEFAULT_TEST_COUNT,
                         help="Number of test graphs to select for the distant split.")
@@ -468,9 +467,6 @@ def generate_distant_test_set(
     train_val_split_file: Path,
     dataset_path: Path,
     test_count: int,
-    num_trials: int,
-    seed: int,
-    use_all_features: bool,
     output_path: Path,
 ) -> Path:
     """Generate test set distant from train+val sets."""
@@ -481,6 +477,12 @@ def generate_distant_test_set(
     # Load train/val split
     with open(train_val_split_file, 'r') as f:
         split_data = json.load(f)
+
+    # Fix PATHS for Retina, splits were created in LRZ
+    split_data['train_paths'] = [x.replace('/mnt/repo/','/home/rrao/development/gnn_predicting_effects_of_traffic_policies/') for x in split_data['train_paths']]
+    split_data['val_paths'] = [x.replace('/mnt/repo/','/home/rrao/development/gnn_predicting_effects_of_traffic_policies/') for x in split_data['val_paths']]
+    split_data['train_data']['path'] = [x.replace('/mnt/repo/','/home/rrao/development/gnn_predicting_effects_of_traffic_policies/') for x in split_data['train_data']['path']]
+    split_data['val_data']['path'] = [x.replace('/mnt/repo/','/home/rrao/development/gnn_predicting_effects_of_traffic_policies/') for x in split_data['val_data']['path']]
     
     train_paths = split_data['train_paths']
     val_paths = split_data['val_paths']
@@ -500,15 +502,10 @@ def generate_distant_test_set(
     spec.loader.exec_module(generate_module)
     
     # Find distant test split
-    test_paths, min_distance, dist_test_train, dist_test_val = generate_module.find_distant_test_split(
-        train_paths,
-        val_paths,
-        all_data['path'],
-        test_count,
-        num_trials=num_trials,
-        seed=seed,
-        use_all_features=use_all_features
-    )
+    test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val = generate_module.find_distant_iou_test_split(train_paths,
+                                                                                                                                             val_paths,
+                                                                                                                                             all_data['path'],
+                                                                                                                                             test_count)
     
     # Create test data structure
     # Create a mapping for efficient lookup
@@ -530,9 +527,9 @@ def generate_distant_test_set(
     # Update split file with test data and distance information
     split_data['test_count'] = len(test_paths)
     split_data['test_paths'] = test_paths
-    split_data['test_distance'] = float(min_distance)
-    split_data['test_distance_train'] = float(dist_test_train)
-    split_data['test_distance_val'] = float(dist_test_val)
+    split_data['test_distances_when_picked'] = test_distances_when_picked
+    split_data['test_distances_from_train'] = test_distances_from_train
+    split_data['test_distances_from_val'] = test_distances_from_val
     split_data['test_data'] = test_data
     
     # Save updated split file
@@ -542,9 +539,8 @@ def generate_distant_test_set(
     
     print(f"✓ Saved test set to: {output_path}")
     print(f"  Test set size: {len(test_paths)}")
-    print(f"  Minimum distance from train+val: {min_distance:.6f}")
-    print(f"  Distance from train: {dist_test_train:.6f}")
-    print(f"  Distance from val: {dist_test_val:.6f}")
+    print(f"  Minimum distance from train: {min(test_distances_from_train):.6f}")
+    print(f"  Minimum distance from val: {min(test_distances_from_val):.6f}")
     
     return output_path
 
@@ -619,7 +615,7 @@ def evaluate_model_on_test_split(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         tmp_dir = Path(tmp_dir)
-        train_loader, _, test_loader = prepare_data_with_graph_features(
+        _, _, test_loader = prepare_data_with_graph_features(
             train_data=train_data,
             val_data=val_data,
             test_data=test_data,
@@ -640,7 +636,7 @@ def evaluate_model_on_test_split(
             aug_node_masking_probability=0.0,
             use_destination_activity_param=config_obj.use_destination_activity,
             return_test_loader=True,
-        )
+            x_scaler_path=run_dir / "data_created_during_finetuning" / "train_x_scaler.pkl") # Use a previously saved x_scaler
 
         if test_loader is None or len(test_loader) == 0:
             print(f"  ✗ No test graphs available for split: {split_file_path}")
@@ -922,7 +918,7 @@ def main() -> None:
 
                 # Step 5: Generate or reuse distant test set per seed/config
                 test_split_filename = (
-                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_test{test_count}_distant.json"
+                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_test{test_count}_distant_iou.json"
                 )
                 test_split_file_path = city_config_split_dir / test_split_filename
                 test_split_exists = test_split_file_path.exists()
@@ -938,11 +934,7 @@ def main() -> None:
                                 split_file_path,
                                 dataset_path,
                                 test_count,
-                                args.num_trials_test,
-                                seed,
-                                args.use_all_features,
-                                test_split_file_path
-                            )
+                                test_split_file_path)
                             test_split_exists = True
                         except Exception as e:
                             print(f"ERROR generating test set for {test_city} (seed {seed_idx}, t{train_count}_v{val_count}): {e}")
