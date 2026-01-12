@@ -285,27 +285,58 @@ def compute_iou_dist(set_a: np.ndarray, set_b: np.ndarray) -> float:
     return 1 - (intersection / union)
 
 def compute_iou_distance_from_set(anchor_paths: List[str], valid_paths: List[str],
-                                  reduction_graphs: Dict[str, np.ndarray]) -> None:
+                                  reduction_graphs: Dict[str, np.ndarray]) -> Dict[str, float]:
+    """
+    Compute average IoU distance from each candidate to the anchor set.
     
-    candidates = {path: np.inf for path in valid_paths}
+    For each candidate, computes IoU distance to every scenario in the anchor set,
+    then returns the AVERAGE (mean) of those distances. This reflects overall 
+    dissimilarity rather than just the single closest match.
+    
+    Returns:
+        Dictionary mapping each candidate path to its average distance from anchor set
+    """
+    # Store all distances for each candidate
+    candidate_distances = {path: [] for path in valid_paths}
 
-    # Compute distances from train/val set to all candidates
-    for path in anchor_paths:
+    # Compute distances from each anchor to all candidates
+    for anchor_path in anchor_paths:
+        anchor_reduction = reduction_graphs[anchor_path]
         
-        reduction = reduction_graphs[path]
-        
-        for candidate_path in candidates.keys():
-            
+        for candidate_path in valid_paths:
             candidate_reduction = reduction_graphs[candidate_path]
+            iou_dist = compute_iou_dist(anchor_reduction, candidate_reduction)
+            candidate_distances[candidate_path].append(iou_dist)
 
-            iou_dist = compute_iou_dist(reduction, candidate_reduction)
-            candidates[candidate_path] = min(candidates[candidate_path], iou_dist)
-
-    return candidates
+    # Aggregate using average (mean)
+    result = {}
+    for path, distances in candidate_distances.items():
+        result[path] = float(np.mean(distances))
+    
+    return result
 
 def find_distant_iou_test_split(train_paths: List[str], val_paths: List[str], all_paths: List[str],
-                               test_count: int) -> Tuple[List[str], List[float], List[float], List[float]]:
+                               test_count: int, train_weight: float = 0.8, 
+                               trainval_weight: float = 0.8) -> Tuple[List[str], List[float], List[float], List[float]]:
+    """
+    Find test split with maximum distance from train/val sets using improved selection logic.
     
+    Improvements:
+    1. Uses AVERAGE distance (not min) when computing distance from a candidate to train/val sets
+    2. Combines train/val distances with weighted average (default: 80% train, 20% val)
+    3. Separates train/val distance from intra-test diversity with 80/20 weighting
+    
+    Args:
+        train_paths: Training set paths
+        val_paths: Validation set paths
+        all_paths: All available paths
+        test_count: Number of test scenarios to select
+        train_weight: Weight for train distance vs val distance (default: 0.8)
+        trainval_weight: Weight for train/val distance vs diversity (default: 0.8)
+    
+    Returns:
+        test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val
+    """
     # Filter out train and val paths from all_paths
     train_set = set(train_paths)
     val_set = set(val_paths)
@@ -323,11 +354,12 @@ def find_distant_iou_test_split(train_paths: List[str], val_paths: List[str], al
         )
     
     print(f"Found {len(valid_paths)} valid test graphs (excluding {len(train_paths)} train + {len(val_paths)} val)")
+    print(f"Selection strategy: AVERAGE distance aggregation, weighted {train_weight:.0%} train + {1-train_weight:.0%} val, "
+          f"{trainval_weight:.0%} train/val distance + {1-trainval_weight:.0%} diversity")
 
     # Get capacity reduction features for all graphs
     reduction_graphs = dict()
     for path in train_paths + val_paths + valid_paths:
-        
         graph = torch.load(path, map_location='cpu')
         node_features = graph.x.cpu().numpy()
         
@@ -335,44 +367,70 @@ def find_distant_iou_test_split(train_paths: List[str], val_paths: List[str], al
         capacity_reduction = node_features[:, 2]  # Feature index 2
         reduction_graphs[path] = capacity_reduction.flatten().astype(bool)
 
+    # Compute AVERAGE distances from train set (more robust than min)
+    candidate_train_distances = compute_iou_distance_from_set(train_paths, valid_paths, reduction_graphs)
+    
+    # Compute AVERAGE distances from val set
+    candidate_val_distances = compute_iou_distance_from_set(val_paths, valid_paths, reduction_graphs)
+
+    # Compute initial scores: weighted average of train/val distances
+    # This ensures candidates are distant from BOTH train and val, with train weighted higher
+    initial_scores = {}
+    for path in valid_paths:
+        initial_scores[path] = (train_weight * candidate_train_distances[path] + 
+                               (1 - train_weight) * candidate_val_distances[path])
+    
+    # Initialize diversity scores to infinity (no test graphs selected yet)
+    # This will be updated as we select test graphs to track min distance to selected test graphs
+    diversity_scores = {path: float('inf') for path in valid_paths}
+    
     test_paths = []
     test_distances_from_train = []
     test_distances_from_val = []
     test_distances_when_picked = []
 
-    # Compute distances from train set
-    candidate_train_distances = compute_iou_distance_from_set(train_paths, valid_paths, reduction_graphs)
-    
-    # Compute distances from val set
-    candidate_val_distances = compute_iou_distance_from_set(val_paths, valid_paths, reduction_graphs)
-
-    # Initialize candidates with min distance from train and val
-    candidates = dict()
-    for path in valid_paths:
-        candidates[path] = min(candidate_train_distances[path], candidate_val_distances[path])
-            
-    # Greedyly select test graphs with maximin IoU distance
-    for _ in tqdm(range(test_count), desc="Selecting distant test graphs ..."):
+    # Greedily select test graphs with maximum combined score
+    for iteration in tqdm(range(test_count), desc="Selecting distant test graphs"):
         
-        # Select best candidate
-        best_path = max(candidates.items(), key=lambda x: x[1])[0]
-        best_distance = candidates[best_path]
+        # Compute combined scores: weighted combination of initial distance and diversity
+        # Initial score (train/val distance) is prioritized with 80% weight
+        combined_scores = {}
+        for path in diversity_scores.keys():
+            if iteration == 0:
+                # First iteration: no test graphs selected yet, use initial scores only
+                combined_scores[path] = initial_scores[path]
+            else:
+                # Subsequent iterations: combine initial scores with diversity
+                combined_scores[path] = (trainval_weight * initial_scores[path] + 
+                                        (1 - trainval_weight) * diversity_scores[path])
+        
+        # Select candidate with maximum combined score
+        best_path = max(combined_scores.items(), key=lambda x: x[1])[0]
+        best_combined_score = combined_scores[best_path]
         
         test_paths.append(best_path)
         test_distances_from_train.append(candidate_train_distances[best_path])
         test_distances_from_val.append(candidate_val_distances[best_path])
-        test_distances_when_picked.append(best_distance)
+        test_distances_when_picked.append(best_combined_score)
         
         # Remove selected path from candidates
-        del candidates[best_path]
+        del diversity_scores[best_path]
+        del initial_scores[best_path]
         
-        # Update minimum distances for remaining candidates, improves intra test diversity
+        # Update diversity scores for remaining candidates
+        # Each candidate's diversity score becomes min distance to any selected test graph
         best_reduction = reduction_graphs[best_path]
         
-        for candidate_path in candidates.keys():
+        for candidate_path in diversity_scores.keys():
             candidate_reduction = reduction_graphs[candidate_path]
             iou_dist = compute_iou_dist(best_reduction, candidate_reduction)
-            candidates[candidate_path] = min(candidates[candidate_path], iou_dist)
+            # Update diversity score (keep min distance to maintain diversity)
+            diversity_scores[candidate_path] = min(diversity_scores[candidate_path], iou_dist)
+
+    print(f"\n✓ Selected {len(test_paths)} test scenarios")
+    print(f"  Mean distance from train: {np.mean(test_distances_from_train):.4f}")
+    print(f"  Mean distance from val: {np.mean(test_distances_from_val):.4f}")
+    print(f"  Mean combined score when picked: {np.mean(test_distances_when_picked):.4f}")
 
     return test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val
 
