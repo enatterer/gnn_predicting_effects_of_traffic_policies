@@ -272,13 +272,17 @@ def find_distant_test_split(train_paths: List[str], val_paths: List[str], all_pa
     
     return best_test_paths, best_min_distance, best_dist_test_train, best_dist_test_val
 
-def compute_iou(set_a: np.ndarray, set_b: np.ndarray) -> float:
-    """Compute Intersection over Union (IoU) between two boolean arrays."""
+def compute_iou_dist(set_a: np.ndarray, set_b: np.ndarray) -> float:
+    """Compute IoU distance (1 - IoU) between two boolean arrays."""
     intersection = np.logical_and(set_a, set_b).sum()
     union = np.logical_or(set_a, set_b).sum()
+
+    # If no reductions in both, then they are identical → IoU = 1 → distance = 0
     if union == 0:
         return 0.0
-    return intersection / union
+    
+    # IoU distance
+    return 1 - (intersection / union)
 
 def compute_iou_distance_from_set(anchor_paths: List[str], valid_paths: List[str],
                                   reduction_graphs: Dict[str, np.ndarray]) -> None:
@@ -294,7 +298,7 @@ def compute_iou_distance_from_set(anchor_paths: List[str], valid_paths: List[str
             
             candidate_reduction = reduction_graphs[candidate_path]
 
-            iou_dist = compute_iou(reduction, candidate_reduction)
+            iou_dist = compute_iou_dist(reduction, candidate_reduction)
             candidates[candidate_path] = min(candidates[candidate_path], iou_dist)
 
     return candidates
@@ -367,10 +371,61 @@ def find_distant_iou_test_split(train_paths: List[str], val_paths: List[str], al
         
         for candidate_path in candidates.keys():
             candidate_reduction = reduction_graphs[candidate_path]
-            iou_dist = compute_iou(best_reduction, candidate_reduction)
+            iou_dist = compute_iou_dist(best_reduction, candidate_reduction)
             candidates[candidate_path] = min(candidates[candidate_path], iou_dist)
 
     return test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val
+
+def find_random_test_split(train_paths: List[str], val_paths: List[str], all_paths: List[str],
+                           test_count: int, seed: int = 42) -> Tuple[List[str], List[float], List[float]]:
+    
+    # Filter out train and val paths from all_paths
+    train_set = set(train_paths)
+    val_set = set(val_paths)
+    available_paths = [p for p in all_paths if p not in train_set and p not in val_set]
+    
+    # Filter out invalid paths
+    valid_paths = []
+    for path in available_paths:
+        if os.path.exists(path):
+            valid_paths.append(path)
+    
+    if len(valid_paths) < test_count:
+        raise ValueError(
+            f"Insufficient valid graphs for test: {len(valid_paths)} < {test_count}"
+        )
+    
+    print(f"Found {len(valid_paths)} valid test graphs (excluding {len(train_paths)} train + {len(val_paths)} val)")
+
+    # Randomly select test graphs
+    rng = _rnd.Random(seed)
+    selected_paths = rng.sample(valid_paths, test_count)
+
+    # Get capacity reduction features for all graphs
+    reduction_graphs = dict()
+    for path in train_paths + val_paths + selected_paths:
+        
+        graph = torch.load(path, map_location='cpu')
+        node_features = graph.x.cpu().numpy()
+        
+        # Extract feature 2 (CAPACITY_REDUCTION) for all nodes
+        capacity_reduction = node_features[:, 2]  # Feature index 2
+        reduction_graphs[path] = capacity_reduction.flatten().astype(bool)
+
+    test_distances_from_train = []
+    test_distances_from_val = []
+
+    # Compute distances from train set
+    candidate_train_distances = compute_iou_distance_from_set(train_paths, selected_paths, reduction_graphs)
+
+    # Compute distances from val set
+    candidate_val_distances = compute_iou_distance_from_set(val_paths, selected_paths, reduction_graphs)
+
+    for path in selected_paths:
+        test_distances_from_train.append(candidate_train_distances[path])
+        test_distances_from_val.append(candidate_val_distances[path])
+
+    return selected_paths, test_distances_from_train, test_distances_from_val
 
 def main():
     parser = argparse.ArgumentParser(

@@ -267,6 +267,9 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Number of trials for finding distant test sets (default: 2000 for better results).")
     parser.add_argument("--test_count", type=int, default=DEFAULT_TEST_COUNT,
                         help="Number of test graphs to select for the distant split.")
+    parser.add_argument("--test_set_type", type=str, default="distant_iou",
+                        choices=["distant_iou", "random"],
+                        help="Type of distant test set generation.")
     parser.add_argument("--force_test_regeneration", type=str_to_bool, default=False,
                         help="If True, regenerate test splits even if they already exist.")
     parser.add_argument("--project_name", type=str, default=None,
@@ -468,10 +471,12 @@ def generate_distant_test_set(
     dataset_path: Path,
     test_count: int,
     output_path: Path,
+    test_set_type: str = "distant_iou"
 ) -> Path:
     """Generate test set distant from train+val sets."""
     print(f"\n{'=' * 80}")
     print(f"Generating distant test set for {city}")
+    print(f"Using test set type: {test_set_type}")
     print(f"{'=' * 80}")
     
     # Load train/val split
@@ -502,10 +507,19 @@ def generate_distant_test_set(
     spec.loader.exec_module(generate_module)
     
     # Find distant test split
-    test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val = generate_module.find_distant_iou_test_split(train_paths,
+    if test_set_type == "distant_iou":
+        test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val = generate_module.find_distant_iou_test_split(train_paths,
                                                                                                                                              val_paths,
                                                                                                                                              all_data['path'],
                                                                                                                                              test_count)
+    elif test_set_type == "random":
+        test_paths, test_distances_from_train, test_distances_from_val = generate_module.find_random_test_split(train_paths,
+                                                                                                                val_paths,
+                                                                                                                all_data['path'],
+                                                                                                                test_count,
+                                                                                                                seed=42)
+    else:
+        raise ValueError(f"Unknown test_set_type: {test_set_type}")
     
     # Create test data structure
     # Create a mapping for efficient lookup
@@ -527,7 +541,8 @@ def generate_distant_test_set(
     # Update split file with test data and distance information
     split_data['test_count'] = len(test_paths)
     split_data['test_paths'] = test_paths
-    split_data['test_distances_when_picked'] = test_distances_when_picked
+    if test_set_type == "distant_iou":
+        split_data['test_distances_when_picked'] = test_distances_when_picked
     split_data['test_distances_from_train'] = test_distances_from_train
     split_data['test_distances_from_val'] = test_distances_from_val
     split_data['test_data'] = test_data
@@ -918,7 +933,7 @@ def main() -> None:
 
                 # Step 5: Generate or reuse distant test set per seed/config
                 test_split_filename = (
-                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_test{test_count}_distant_iou.json"
+                    f"{test_city}_rs{seed_idx}_t{train_count}_v{val_count}_seed{seed}_train{train_count}_val{val_count}_test{test_count}_{args.test_set_type}.json"
                 )
                 test_split_file_path = city_config_split_dir / test_split_filename
                 test_split_exists = test_split_file_path.exists()
@@ -934,7 +949,8 @@ def main() -> None:
                                 split_file_path,
                                 dataset_path,
                                 test_count,
-                                test_split_file_path)
+                                test_split_file_path,
+                                test_set_type=args.test_set_type)
                             test_split_exists = True
                         except Exception as e:
                             print(f"ERROR generating test set for {test_city} (seed {seed_idx}, t{train_count}_v{val_count}): {e}")
