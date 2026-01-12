@@ -14,3 +14,4 @@ SUMMARY.md
 scripts/evaluation/*.json
 scripts/evaluation/*.log
 scripts/visualization/results/*
+results/*
