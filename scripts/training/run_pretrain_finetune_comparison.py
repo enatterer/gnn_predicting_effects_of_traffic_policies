@@ -33,6 +33,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
+import numpy as np
 import torch
 
 # Ensure the repository's `scripts` directory is on the Python path
@@ -552,10 +553,10 @@ def generate_distant_test_set(
     with open(output_path, 'w') as f:
         json.dump(split_data, f, indent=2)
     
+    print(f"\n✓ Selected {len(test_paths)} test scenarios")
     print(f"✓ Saved test set to: {output_path}")
-    print(f"  Test set size: {len(test_paths)}")
-    print(f"  Minimum distance from train: {min(test_distances_from_train):.6f}")
-    print(f"  Minimum distance from val: {min(test_distances_from_val):.6f}")
+    print(f"  Mean distance from train: {np.mean(test_distances_from_train):.4f}")
+    print(f"  Mean distance from val: {np.mean(test_distances_from_val):.4f}")
     
     return output_path
 

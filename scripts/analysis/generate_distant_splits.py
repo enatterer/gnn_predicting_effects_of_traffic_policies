@@ -427,11 +427,6 @@ def find_distant_iou_test_split(train_paths: List[str], val_paths: List[str], al
             # Update diversity score (keep min distance to maintain diversity)
             diversity_scores[candidate_path] = min(diversity_scores[candidate_path], iou_dist)
 
-    print(f"\n✓ Selected {len(test_paths)} test scenarios")
-    print(f"  Mean distance from train: {np.mean(test_distances_from_train):.4f}")
-    print(f"  Mean distance from val: {np.mean(test_distances_from_val):.4f}")
-    print(f"  Mean combined score when picked: {np.mean(test_distances_when_picked):.4f}")
-
     return test_paths, test_distances_when_picked, test_distances_from_train, test_distances_from_val
 
 def find_random_test_split(train_paths: List[str], val_paths: List[str], all_paths: List[str],

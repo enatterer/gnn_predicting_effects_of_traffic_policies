@@ -8,6 +8,7 @@ scripts/evaluation/results_paris_trc/*
 inductive_gnn_data_results/*
 data
 scripts/visualization/plots/*
+scripts/evaluation/plots/*
 scripts/training/*.log
 STRUCTURE_COMPARISON.md
 SUMMARY.md
