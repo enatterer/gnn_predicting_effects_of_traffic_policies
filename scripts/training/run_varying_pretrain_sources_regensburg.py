@@ -17,7 +17,7 @@ Each pretraining run saves checkpoints, which are then used to finetune on Regen
 using the same train/val/test split from run_pretrain_finetune_comparison.py.
 
 IMPORTANT: This script requires an existing train/val/test split for Regensburg.
-By default, it looks for: data/splits/regensburg/rs_1/t40_v10/regensburg_rs1_t40_v10_seed42_train40_val10_test100_distant_iou.json
+By default, it looks for: data/splits/regensburg/rs_1/t40_v10/regensburg_rs1_t40_v10_seed42_train40_val10_test100_random.json
 
 To generate this split if it doesn't exist, run:
     python scripts/training/run_pretrain_finetune_comparison.py \
@@ -37,16 +37,12 @@ Example (nohup):
 
 import argparse
 import importlib
-import importlib.util
 import json
 import random
 import sys
-import tempfile
 from itertools import combinations
 from pathlib import Path
-from types import SimpleNamespace
 from typing import Dict, List, Optional, Sequence, Tuple
-import torch
 
 # Ensure the repository's `scripts` directory is on the Python path
 CURRENT_FILE = Path(__file__).resolve()
@@ -55,12 +51,8 @@ if str(SCRIPTS_DIR) not in sys.path:
     sys.path.append(str(SCRIPTS_DIR))
 
 from training.help_functions import (
-    load_metadata_from_disk,
-    prepare_data_with_graph_features,
-    set_cuda_visible_device,
     str_to_bool,
 )
-from gnn.help_functions import GNN_Loss, validate_model_during_training
 from training import run_models as run_models_module
 
 # Base directory used by both training and finetuning scripts
@@ -241,7 +233,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pretraining_inductive", type=str_to_bool, default=False)
     parser.add_argument("--finetune_peak_lr", type=float, default=0.0003)
     parser.add_argument("--finetune_initial_lr", type=float, default=0.00003)
-    parser.add_argument("--finetune_num_epochs", type=int, default=300)
+    parser.add_argument("--finetune_num_epochs", type=int, default=500)
     parser.add_argument("--finetune_limit_train_graphs", type=int, default=0)
     parser.add_argument("--finetune_limit_val_graphs", type=int, default=0)
     parser.add_argument("--finetune_limit_test_graphs", type=int, default=0)
@@ -261,7 +253,7 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Seed index to use (1-5). Used to locate the correct split file.")
     parser.add_argument("--test_count", type=int, default=100,
                         help="Test count used in the split file name.")
-    parser.add_argument("--test_set_type", type=str, default="distant_iou",
+    parser.add_argument("--test_set_type", type=str, default="random",
                         choices=["distant_iou", "random"],
                         help="Test set type used in the split file name.")
     parser.add_argument("--random_seed", type=int, default=42,
@@ -270,8 +262,8 @@ def create_parser() -> argparse.ArgumentParser:
                         help="Skip pretraining stage (assumes checkpoints already exist).")
     parser.add_argument("--skip_finetuning", type=str_to_bool, default=False,
                         help="Skip finetuning stage.")
-    parser.add_argument("--skip_evaluation", type=str_to_bool, default=False,
-                        help="Skip evaluation stage.")
+    parser.add_argument("--skip_scratch", type=str_to_bool, default=False,
+                        help="Skip scratch (from-scratch) training stage.")
 
     return parser
 
@@ -309,6 +301,11 @@ def pretrain_checkpoint_dir(project_name: str, run_name: str) -> Path:
 
 def finetuned_model_path(project_name: str, run_name: str) -> Path:
     """Return the expected model path for a finetuning run."""
+    return BASE_DIR / project_name / run_name / "finetuned_model" / "model.pth"
+
+
+def scratch_model_path(project_name: str, run_name: str) -> Path:
+    """Return the expected model path for a scratch (from-scratch) training run."""
     return BASE_DIR / project_name / run_name / "finetuned_model" / "model.pth"
 
 
@@ -400,136 +397,6 @@ def generate_city_combinations(source_cities: Sequence[str], seed: int) -> List[
         configs.append((4, list(quad), f"n4_c{i}_{city_str}"))
     
     return configs
-
-
-_EVAL_MODULE = None
-
-
-def _load_eval_module():
-    """Lazily load the evaluation helper module."""
-    global _EVAL_MODULE
-    if _EVAL_MODULE is None:
-        eval_script = Path(__file__).resolve().parents[1] / "evaluation" / "evaluate_pretrained_on_cities.py"
-        spec = importlib.util.spec_from_file_location("evaluate_pretrained_on_cities", eval_script)
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        _EVAL_MODULE = module
-    return _EVAL_MODULE
-
-
-def evaluate_model_on_test_split(
-    run_name: str,
-    project_name: str,
-    model_path: Path,
-    split_file_path: Path,
-    eval_params: Dict[str, object],
-) -> Optional[Dict[str, object]]:
-    """Load a trained model and evaluate it on the test split."""
-    if not split_file_path.exists():
-        print(f"  ✗ Test split missing: {split_file_path}")
-        return None
-    if not model_path.exists():
-        print(f"  ✗ Model file missing: {model_path}")
-        return None
-
-    with open(split_file_path, "r") as f:
-        split_data = json.load(f)
-
-    test_data = split_data.get("test_data") or {}
-    if not test_data.get("path"):
-        print(f"  ✗ Split file has no test_data paths: {split_file_path}")
-        return None
-
-    train_data = split_data.get("train_data") or {}
-    val_data = split_data.get("val_data") or {}
-
-    eval_module = _load_eval_module()
-
-    set_cuda_visible_device(eval_params["device_nr"])
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    run_dir = BASE_DIR / project_name / run_name
-    model, inferred_config = eval_module.load_model_from_checkpoint(
-        checkpoint_path=model_path,
-        run_dir=run_dir,
-        gnn_arch=eval_params["gnn_arch"],
-        device=device,
-    )
-    model = model.to(device)
-
-    config_dict = {
-        "target_type": eval_params["target_type"],
-        "target_normalization": eval_params.get("target_normalization"),
-        "use_all_features": eval_params["use_all_features"],
-        "use_destination_activity": inferred_config.get("use_destination_activity", False),
-    }
-    for key, value in inferred_config.items():
-        config_dict.setdefault(key, value)
-    config_obj = SimpleNamespace(**config_dict)
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        tmp_dir = Path(tmp_dir)
-        _, _, test_loader = prepare_data_with_graph_features(
-            train_data=train_data,
-            val_data=val_data,
-            test_data=test_data,
-            use_inductive_variant=False,
-            batch_size=eval_params["batch_size"],
-            path_to_save_dataloader=str(tmp_dir) + "/",
-            use_all_features=config_obj.use_all_features,
-            use_weighted_batches=False,
-            use_nested_neighbor_loader=False,
-            neighbor_sizes=eval_params["neighbor_sizes"],
-            subgraphs_per_graph=eval_params["subgraphs_per_graph"],
-            seed_size=eval_params["seed_size"],
-            sampling_strategy=eval_params["sampling_strategy"],
-            min_subgraph_nodes=eval_params["min_subgraph_nodes"],
-            max_subgraph_nodes=eval_params["max_subgraph_nodes"],
-            aug_pos_rotation=False,
-            aug_feature_noise=False,
-            aug_node_masking_probability=0.0,
-            use_destination_activity_param=config_obj.use_destination_activity,
-            return_test_loader=True,
-            x_scaler_path=run_dir / "data_created_during_finetuning" / "train_x_scaler.pkl"
-        )
-
-        if test_loader is None or len(test_loader) == 0:
-            print(f"  ✗ No test graphs available")
-            return None
-        else:
-            print(f"  ✓ Test loader ready — graphs: {len(test_data.get('path', []))}, batches: {len(test_loader)}")
-
-        loss_func = GNN_Loss(loss_fct="mse", device=device, weighted=False)
-        loss, r2, spearman, pearson, hit_rates = validate_model_during_training(
-            config=config_obj,
-            model=model,
-            dataset=test_loader,
-            loss_func=loss_func,
-            device=device,
-        )
-
-    metrics = {
-        "run_name": run_name,
-        "project_name": project_name,
-        "model_path": str(model_path),
-        "split_file": str(split_file_path),
-        "city": split_data.get("city"),
-        "test_graphs": len(test_data.get("path", [])),
-        "loss": float(loss),
-        "r2": float(r2),
-        "spearman": float(spearman),
-        "pearson": float(pearson),
-        "hit_rates": {k: float(v) for k, v in (hit_rates or {}).items()},
-    }
-
-    output_dir = run_dir / "evaluation"
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"{split_file_path.stem}_metrics.json"
-    with open(output_path, "w") as f:
-        json.dump(metrics, f, indent=2)
-
-    print(f"  ✓ Saved test metrics to: {output_path}")
-    return metrics
 
 
 def main() -> None:
@@ -633,22 +500,6 @@ def main() -> None:
 
     finetune_base_args["split_file"] = str(split_file_path)
 
-    # Evaluation parameters
-    eval_params = {
-        "gnn_arch": args.gnn_arch,
-        "use_all_features": args.use_all_features,
-        "target_type": args.target_type,
-        "target_normalization": finetune_base_args.get("target_normalization"),
-        "batch_size": args.batch_size,
-        "neighbor_sizes": neighbor_sizes,
-        "subgraphs_per_graph": args.subgraphs_per_graph,
-        "seed_size": args.seed_size,
-        "sampling_strategy": args.sampling_strategy,
-        "min_subgraph_nodes": args.min_subgraph_nodes,
-        "max_subgraph_nodes": args.max_subgraph_nodes,
-        "device_nr": args.device_nr,
-    }
-
     # Generate all city combinations
     city_configs = generate_city_combinations(SOURCE_CITIES, args.random_seed)
     
@@ -665,9 +516,6 @@ def main() -> None:
         split_info = json.load(f)
     print(f"  Train: {split_info.get('train_count', 'N/A')}, Val: {split_info.get('val_count', 'N/A')}, Test: {split_info.get('test_count', 'N/A')}")
     print("=" * 80)
-
-    # Track results
-    all_results = []
 
     # Process each configuration
     for config_idx, (num_cities, pretrain_cities, run_suffix) in enumerate(city_configs, start=1):
@@ -690,8 +538,19 @@ def main() -> None:
                 run_args = dict(run_base_args)
                 run_args["unique_model_description"] = pretrain_run_name
                 
-                # Transductive pretraining: use pretrain_cities for training
-                call_run_models(run_args, pretrain_cities, [], [TARGET_CITY])
+                try:
+                    # Transductive pretraining: use pretrain_cities for training
+                    call_run_models(run_args, pretrain_cities, [], [TARGET_CITY])
+                except KeyboardInterrupt:
+                    print(f"\n  ⚠️  KeyboardInterrupt received during pretraining")
+                    print(f"  Exiting gracefully...")
+                    raise  # Re-raise to allow clean exit
+                except Exception as e:
+                    print(f"  ✗ Pretraining failed with exception: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    print(f"  Skipping this configuration and continuing...")
+                    continue
                 
                 if not has_checkpoints(pretrain_ckpt_dir):
                     print(f"  ✗ Pretraining failed to create checkpoints: {pretrain_ckpt_dir}")
@@ -702,9 +561,11 @@ def main() -> None:
         # Step 2: Finetuning from checkpoint
         if not args.skip_finetuning:
             finetuned_model = finetuned_model_path(args.project_name, finetune_run_name)
+            print(f"\n[Step 2/3] Checking for existing finetuned model: {finetuned_model}")
             if finetuned_model.exists():
-                print(f"\n[Step 2/3] Skipping finetuning; found existing model: {finetuned_model}")
+                print(f"  ✓ Found existing model, skipping finetuning: {finetuned_model}")
             else:
+                print(f"  ✗ Model not found, starting finetuning...")
                 print(f"\n[Step 2/3] Finetuning {TARGET_CITY} from checkpoint...")
                 finetune_args = dict(finetune_base_args)
                 finetune_args["run_name"] = finetune_run_name
@@ -715,6 +576,10 @@ def main() -> None:
                 try:
                     call_finetune_models(finetune_args)
                     print(f"  ✓ Finetuning completed: {finetune_run_name}")
+                except KeyboardInterrupt:
+                    print(f"\n  ⚠️  KeyboardInterrupt received during finetuning")
+                    print(f"  Exiting gracefully...")
+                    raise  # Re-raise to allow clean exit
                 except Exception as e:
                     print(f"  ✗ Finetuning failed: {e}")
                     import traceback
@@ -723,52 +588,40 @@ def main() -> None:
         else:
             print(f"\n[Step 2/3] Skipping finetuning (--skip_finetuning)")
 
-        # Step 3: Evaluation
-        if not args.skip_evaluation:
-            print(f"\n[Step 3/3] Evaluating finetuned model on test split...")
-            metrics = evaluate_model_on_test_split(
-                run_name=finetune_run_name,
-                project_name=args.project_name,
-                model_path=finetuned_model_path(args.project_name, finetune_run_name),
-                split_file_path=split_file_path,
-                eval_params=eval_params,
-            )
-            
-            if metrics:
-                metrics["num_pretrain_cities"] = num_cities
-                metrics["pretrain_cities"] = pretrain_cities
-                metrics["config_suffix"] = run_suffix
-                all_results.append(metrics)
-                
-                print(f"  Results: loss={metrics['loss']:.4f}, r2={metrics['r2']:.4f}, "
-                      f"spearman={metrics['spearman']:.4f}, pearson={metrics['pearson']:.4f}")
+        # Step 3: Scratch (from-scratch) training
+        scratch_run_name = f"{TARGET_CITY}_scratch_{run_suffix}"
+        if not args.skip_scratch:
+            scratch_model = scratch_model_path(args.project_name, scratch_run_name)
+            print(f"\n[Step 3/3] Checking for existing scratch model: {scratch_model}")
+            if scratch_model.exists():
+                print(f"  ✓ Found existing model, skipping scratch training: {scratch_model}")
             else:
-                print(f"  ✗ Evaluation failed")
+                print(f"  ✗ Model not found, starting scratch training...")
+                print(f"\n[Step 3/3] Training {TARGET_CITY} from scratch (no pretraining)...")
+                scratch_args = dict(finetune_base_args)
+                scratch_args["run_name"] = scratch_run_name
+                scratch_args["pretrain_run_name"] = None  # No pretraining
+                scratch_args["start_from_scratch"] = True
+                scratch_args["unique_model_description"] = scratch_run_name
+                # Use the exact same split_file as finetuning
+                scratch_args["split_file"] = finetune_base_args["split_file"]
+                
+                try:
+                    call_finetune_models(scratch_args)
+                    print(f"  ✓ Scratch training completed: {scratch_run_name}")
+                except KeyboardInterrupt:
+                    print(f"\n  ⚠️  KeyboardInterrupt received during scratch training")
+                    print(f"  Exiting gracefully...")
+                    raise  # Re-raise to allow clean exit
+                except Exception as e:
+                    print(f"  ✗ Scratch training failed: {e}")
+                    import traceback
+                    traceback.print_exc()
+                    # Continue to evaluation even if scratch fails
         else:
-            print(f"\n[Step 3/3] Skipping evaluation (--skip_evaluation)")
+            print(f"\n[Step 3/3] Skipping scratch training (--skip_scratch)")
 
         print(f"\n✓ Completed experiment {config_idx}/{len(city_configs)}")
-
-    # Save aggregated results
-    if all_results:
-        results_dir = BASE_DIR / args.project_name / "aggregated_results"
-        results_dir.mkdir(parents=True, exist_ok=True)
-        results_file = results_dir / f"{TARGET_CITY}_varying_sources_results.json"
-        with open(results_file, "w") as f:
-            json.dump(all_results, f, indent=2)
-        print(f"\n✓ Saved aggregated results to: {results_file}")
-
-        # Print summary
-        print("\n" + "=" * 80)
-        print("RESULTS SUMMARY")
-        print("=" * 80)
-        for num_cities in [1, 2, 3, 4]:
-            relevant = [r for r in all_results if r["num_pretrain_cities"] == num_cities]
-            if relevant:
-                avg_r2 = sum(r["r2"] for r in relevant) / len(relevant)
-                avg_spearman = sum(r["spearman"] for r in relevant) / len(relevant)
-                print(f"{num_cities} source city(ies): R²={avg_r2:.4f}, Spearman={avg_spearman:.4f} (n={len(relevant)})")
-        print("=" * 80)
 
     print("\n" + "=" * 80)
     print("ALL EXPERIMENTS COMPLETED!")

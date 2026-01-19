@@ -37,6 +37,73 @@ DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 # Please adjust as needed
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
+
+def normalize_path_in_split(path_str: str, project_root: Path) -> str:
+    """
+    Convert absolute paths from other users/machines to relative paths.
+    Minimal change: just extract the relative part after the project name.
+    """
+    path_str = str(path_str)
+    
+    # If already a relative path, return as-is
+    if not os.path.isabs(path_str):
+        return path_str
+    
+    # Extract relative part from common absolute path patterns
+    # Pattern 1: /home/rrao/development/gnn_predicting_effects_of_traffic_policies/...
+    if 'gnn_predicting_effects_of_traffic_policies/' in path_str:
+        rel_part = path_str.split('gnn_predicting_effects_of_traffic_policies/')[1]
+        return rel_part
+    
+    # Pattern 2: /mnt/repo/... (LRZ paths)
+    if path_str.startswith('/mnt/repo/'):
+        return path_str.replace('/mnt/repo/', '')
+    
+    # Pattern 3: Extract data/... part if present
+    if '/data/' in path_str:
+        rel_part = 'data/' + path_str.split('/data/')[1]
+        return rel_part
+    
+    # Last resort: try to make relative to project_root
+    try:
+        rel_path = os.path.relpath(path_str, project_root)
+        if not rel_path.startswith('..'):
+            return rel_path
+    except ValueError:
+        pass
+    
+    # Return original if can't convert (will error later)
+    return path_str
+
+
+def normalize_split_paths(split_data: dict, project_root: Path) -> dict:
+    """
+    Normalize all paths in a split file to relative paths.
+    """
+    def normalize_path_list(path_list):
+        return [normalize_path_in_split(p, project_root) for p in path_list]
+    
+    # Normalize train_data paths
+    if 'train_data' in split_data and 'path' in split_data['train_data']:
+        split_data['train_data']['path'] = normalize_path_list(split_data['train_data']['path'])
+    
+    # Normalize val_data paths
+    if 'val_data' in split_data and 'path' in split_data['val_data']:
+        split_data['val_data']['path'] = normalize_path_list(split_data['val_data']['path'])
+    
+    # Normalize test_data paths
+    if 'test_data' in split_data and 'path' in split_data['test_data']:
+        split_data['test_data']['path'] = normalize_path_list(split_data['test_data']['path'])
+    
+    # Normalize train_paths and val_paths if they exist
+    if 'train_paths' in split_data:
+        split_data['train_paths'] = normalize_path_list(split_data['train_paths'])
+    
+    if 'val_paths' in split_data:
+        split_data['val_paths'] = normalize_path_list(split_data['val_paths'])
+    
+    return split_data
+
 def main():
     parser = argparse.ArgumentParser(description="Finetune a pre-trained GNN model on new cities.")
     
@@ -255,6 +322,9 @@ def main():
                 print(f"Loading pre-specified split from: {split_file_path}")
                 with open(split_file_path, 'r') as f:
                     split_data = json.load(f)
+                
+                # Normalize paths in split file (convert absolute paths from other users/machines to relative paths)
+                split_data = normalize_split_paths(split_data, project_root)
                 
                 # Verify the split matches the expected city and counts
                 split_city = split_data.get('city', '')
