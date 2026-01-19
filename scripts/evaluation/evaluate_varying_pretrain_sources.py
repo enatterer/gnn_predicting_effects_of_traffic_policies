@@ -6,15 +6,15 @@ This script loads models, evaluates them on test splits, and creates visualizati
 comparing finetuned vs scratch models across different numbers of pretraining cities.
 
 For i in [1, 4]: Uses runs from run_varying_pretrain_sources_regensburg.py
-For i = 5: Uses runs from run_and_finetune_all_cities.py for regensburg
+For i = 5: Uses runs from Scratch_vs_Finetune project (regensburg_scratch_rs_* and regensburg_finetune_rs_*)
 
 All evaluations use the random test set (as specified in spatial_maps.ipynb).
 
 Example usage:
-    python scripts/evaluation/evaluate_varying_pretrain_sources.py \
+    nohup python scripts/evaluation/evaluate_varying_pretrain_sources.py \
         --project_name VaryingPretrainSources \
         --all_cities_project_name GNN_Transductive \
-        --train_val_size '40:10' --seed_idx 1
+        --train_val_size '40:10' --seed_idx 1 > output_evaluation.log 2>&1 &
 """
 
 import argparse
@@ -61,16 +61,19 @@ def extract_num_pretrain_cities(run_name: str) -> Optional[int]:
     - Pattern: regensburg_finetune_n{i}_c{j}_* or regensburg_scratch_n{i}_c{j}_*
     - Returns i (1-4)
     
-    For run_and_finetune_all_cities.py:
-    - finetune_regensburg or run_from_scratch_regensburg -> 5 (all other cities)
+    For i=5 runs (from Scratch_vs_Finetune project):
+    - Pattern: regensburg_scratch_rs_{seed_idx}_t{train}_v{val} or regensburg_finetune_rs_{seed_idx}_t{train}_v{val}
+    - These use all other cities for pretraining, so count = 5
     """
     # Check for n{i} pattern (i=1-4)
     match = re.search(r'_n(\d+)_', run_name)
     if match:
         return int(match.group(1))
     
-    # Check for run_and_finetune_all_cities.py patterns (i=5)
-    if run_name.startswith("finetune_") or run_name.startswith("run_from_scratch_"):
+    # Check for Scratch_vs_Finetune patterns (i=5)
+    # Pattern: regensburg_scratch_rs_* or regensburg_finetune_rs_*
+    # Only accept the specific pattern with rs_*, t*, v* format
+    if re.match(r'regensburg_(scratch|finetune)_rs_\d+_t\d+_v\d+', run_name):
         # These use all other cities for pretraining, so count = 5
         return 5
     
@@ -84,6 +87,7 @@ def is_finetune_run(run_name: str) -> bool:
 
 def is_scratch_run(run_name: str) -> bool:
     """Check if run is a scratch run."""
+    # Pattern: regensburg_scratch_rs_* or run_from_scratch_*
     return "scratch" in run_name or run_name.startswith("run_from_scratch_")
 
 
@@ -195,7 +199,20 @@ def evaluate_model_on_test_split(
     set_cuda_visible_device(eval_params["device_nr"])
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    run_dir = BASE_DIR / project_name / run_name
+    # Resolve run_dir - check both possible locations
+    project_root = Path(__file__).resolve().parents[2]
+    run_dir_main = BASE_DIR / project_name / run_name
+    run_dir_alt = project_root / "data" / "inductive_gnn_data_results" / "transductive" / project_name / run_name
+    
+    if run_dir_main.exists():
+        run_dir = run_dir_main
+    elif run_dir_alt.exists():
+        run_dir = run_dir_alt
+    else:
+        print(f"  ✗ Run directory not found: {run_name}")
+        print(f"    Checked: {run_dir_main}")
+        print(f"    Checked: {run_dir_alt}")
+        return None
     
     # Load model
     model, inferred_config = load_model_from_checkpoint(
@@ -257,11 +274,22 @@ def evaluate_model_on_test_split(
             device=device,
         )
 
+    # Convert paths to relative paths (project_root already defined above)
+    try:
+        model_path_rel = model_path.relative_to(project_root)
+    except ValueError:
+        model_path_rel = model_path
+    
+    try:
+        split_file_path_rel = split_file_path.relative_to(project_root)
+    except ValueError:
+        split_file_path_rel = split_file_path
+    
     metrics = {
         "run_name": run_name,
         "project_name": project_name,
-        "model_path": str(model_path),
-        "split_file": str(split_file_path),
+        "model_path": str(model_path_rel),
+        "split_file": str(split_file_path_rel),
         "city": split_data.get("city"),
         "test_graphs": len(test_data.get("path", [])),
         "loss": float(loss),
@@ -272,12 +300,39 @@ def evaluate_model_on_test_split(
     }
 
     output_dir = run_dir / "evaluation"
-    output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{split_file_path.stem}_metrics.json"
-    with open(output_path, "w") as f:
-        json.dump(metrics, f, indent=2)
-
-    print(f"  ✓ Saved test metrics to: {output_path}")
+    
+    # Try to save to original location first
+    saved = False
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+        # Check if we can write to the directory
+        if output_dir.exists() and not os.access(output_dir, os.W_OK):
+            raise PermissionError(f"Cannot write to evaluation directory '{output_dir}': permission denied")
+        
+        with open(output_path, "w") as f:
+            json.dump(metrics, f, indent=2)
+        print(f"  ✓ Saved test metrics to: {output_path}")
+        saved = True
+    except (PermissionError, OSError) as e:
+        # Try fallback location in project root where user likely has permissions
+        fallback_dir = project_root / "evaluation_metrics" / project_name / run_name
+        fallback_path = fallback_dir / f"{split_file_path.stem}_metrics.json"
+        
+        try:
+            fallback_dir.mkdir(parents=True, exist_ok=True)
+            with open(fallback_path, "w") as f:
+                json.dump(metrics, f, indent=2)
+            print(f"  ⚠️  Warning: Could not save to '{output_path}' (permission denied)")
+            print(f"  ✓ Saved test metrics to fallback location: {fallback_path}")
+            saved = True
+        except (PermissionError, OSError) as e:
+            # Even fallback failed - just log warning but continue
+            print(f"  ⚠️  Warning: Cannot save metrics file (permission denied at both locations)")
+            print(f"     Original: {output_path}")
+            print(f"     Fallback: {fallback_path}")
+            print(f"     Metrics computed but not saved. Results will still be included in statistics.")
+    
     return metrics
 
 
@@ -286,7 +341,7 @@ def collect_and_evaluate_runs(
     target_city: str,
     split_file_path: Path,
     eval_params: Dict[str, object],
-    skip_if_exists: bool = True
+    skip_if_exists: bool = False
 ) -> Dict[int, Dict[str, List[float]]]:
     """
     Collect metrics by evaluating runs, grouped by number of pretraining cities.
@@ -294,10 +349,29 @@ def collect_and_evaluate_runs(
     Returns:
         Dict mapping num_cities -> {"finetuned": [loss1, loss2, ...], "scratch": [loss1, loss2, ...]}
     """
+    # Resolve project directory - check both possible locations
+    project_root = Path(__file__).resolve().parents[2]
+    
+    # Try main location first
     project_dir = BASE_DIR / project_name
     if not project_dir.exists():
-        print(f"Warning: Project directory not found: {project_dir}")
-        return {}
+        # Try alternative location in data/ subdirectory (for Scratch_vs_Finetune)
+        alt_project_dir = project_root / "data" / "inductive_gnn_data_results" / "transductive" / project_name
+        if alt_project_dir.exists():
+            print(f"  Note: Using alternative path: {alt_project_dir}")
+            project_dir = alt_project_dir
+        else:
+            print(f"Warning: Project directory not found: {project_dir}")
+            print(f"  Also checked: {alt_project_dir}")
+            return {}
+    
+    # Convert to relative path for consistency
+    try:
+        project_dir_rel = project_dir.relative_to(project_root)
+        print(f"  Using project directory (relative): {project_dir_rel}")
+    except ValueError:
+        # If can't make relative, use absolute but log it
+        print(f"  Using project directory (absolute): {project_dir}")
     
     results = defaultdict(lambda: {"finetuned": [], "scratch": []})
     
@@ -311,6 +385,11 @@ def collect_and_evaluate_runs(
         # Skip if not related to target city
         if target_city not in run_name.lower():
             continue
+        
+        # For Scratch_vs_Finetune project (i=5), only use t40_v10 runs (rs_1 through rs_5)
+        if project_name == "Scratch_vs_Finetune":
+            if not re.search(r'_rs_[1-5]_t40_v10$', run_name):
+                continue
         
         # Extract number of pretraining cities
         num_cities = extract_num_pretrain_cities(run_name)
@@ -328,42 +407,28 @@ def collect_and_evaluate_runs(
         # Find model path
         model_path = find_model_path(run_dir)
         if model_path is None:
-            print(f"  ⚠️  No model found for {run_name}, skipping...")
+            print(f"  ⚠️  No model found for {run_name} (expected at: {run_dir / 'finetuned_model' / 'model.pth'}), skipping...")
             continue
         
-        # Check if metrics already exist
-        eval_dir = run_dir / "evaluation"
-        metrics_file = eval_dir / f"{split_file_path.stem}_metrics.json" if eval_dir.exists() else None
-        
-        if skip_if_exists and metrics_file and metrics_file.exists():
-            print(f"  ✓ Loading existing metrics for {run_name} (n={num_cities}, {run_type})")
-            try:
-                with open(metrics_file, 'r') as f:
-                    metrics = json.load(f)
-                if "loss" in metrics:
-                    results[num_cities][run_type].append(metrics["loss"])
-                    print(f"    loss={metrics['loss']:.4f}")
-            except Exception as e:
-                print(f"  ⚠️  Error loading metrics: {e}, will re-evaluate...")
-                skip_if_exists = False
-        
-        if not (skip_if_exists and metrics_file and metrics_file.exists()):
-            print(f"  🔄 Evaluating {run_name} (n={num_cities}, {run_type})...")
-            try:
-                metrics = evaluate_model_on_test_split(
-                    run_name=run_name,
-                    project_name=project_name,
-                    model_path=model_path,
-                    split_file_path=split_file_path,
-                    eval_params=eval_params,
-                )
-                if metrics and "loss" in metrics:
-                    results[num_cities][run_type].append(metrics["loss"])
-                    print(f"    ✓ loss={metrics['loss']:.4f}")
-            except Exception as e:
-                print(f"  ✗ Evaluation failed for {run_name}: {e}")
-                import traceback
-                traceback.print_exc()
+        # Always evaluate fresh (don't load existing metrics)
+        print(f"  🔄 Evaluating {run_name} (n={num_cities}, {run_type})...")
+        try:
+            metrics = evaluate_model_on_test_split(
+                run_name=run_name,
+                project_name=project_name,
+                model_path=model_path,
+                split_file_path=split_file_path,
+                eval_params=eval_params,
+            )
+            if metrics and "loss" in metrics:
+                results[num_cities][run_type].append(metrics["loss"])
+                print(f"    ✓ loss={metrics['loss']:.4f}, r2={metrics.get('r2', 'N/A'):.4f}")
+            else:
+                print(f"    ⚠️  Evaluation returned no metrics")
+        except Exception as e:
+            print(f"  ✗ Evaluation failed for {run_name}: {e}")
+            import traceback
+            traceback.print_exc()
     
     return dict(results)
 
@@ -394,24 +459,32 @@ def create_mse_plot(
     plt.rcParams['font.family'] = 'Times New Roman'
     plt.rcParams['font.size'] = 12
     
-    # Prepare data
+    # Compute overall scratch statistics across ALL runs (constant line)
+    all_scratch_values = []
+    for num_cities, data in results.items():
+        all_scratch_values.extend(data.get("scratch", []))
+    scratch_overall_mean, scratch_overall_std = compute_statistics(all_scratch_values)
+    
+    # Prepare data for per-city finetuned values
     num_cities_list = sorted([k for k in results.keys() if k <= 5])
     finetune_means = []
     finetune_stds = []
-    scratch_means = []
-    scratch_stds = []
     
     for num_cities in num_cities_list:
         finetune_values = results[num_cities].get("finetuned", [])
-        scratch_values = results[num_cities].get("scratch", [])
-        
         finetune_mean, finetune_std = compute_statistics(finetune_values)
-        scratch_mean, scratch_std = compute_statistics(scratch_values)
         
         finetune_means.append(finetune_mean if finetune_mean is not None else np.nan)
         finetune_stds.append(finetune_std if finetune_std is not None else np.nan)
-        scratch_means.append(scratch_mean if scratch_mean is not None else np.nan)
-        scratch_stds.append(scratch_std if scratch_std is not None else np.nan)
+    
+    # Add x=0 case where Scratch = Finetune (both use overall scratch mean)
+    num_cities_list_with_zero = [0] + num_cities_list
+    finetune_means_with_zero = [scratch_overall_mean if scratch_overall_mean is not None else np.nan] + finetune_means
+    finetune_stds_with_zero = [scratch_overall_std if scratch_overall_std is not None else np.nan] + finetune_stds
+    
+    # Scratch line is constant (overall mean) for all x values including 0
+    scratch_means_constant = [scratch_overall_mean if scratch_overall_mean is not None else np.nan] * len(num_cities_list_with_zero)
+    scratch_stds_constant = [scratch_overall_std if scratch_overall_std is not None else np.nan] * len(num_cities_list_with_zero)
     
     # Create plot
     fig, ax = plt.subplots(figsize=(8, 6))
@@ -420,45 +493,77 @@ def create_mse_plot(
     finetune_color = '#1f77b4'  # Blue
     scratch_color = '#ff7f0e'   # Orange
     
-    # Plot points with error bars
-    x_positions = np.array(num_cities_list)
+    # Convert to numpy arrays for easier handling
+    x_positions = np.array(num_cities_list_with_zero)
+    finetune_means_arr = np.array(finetune_means_with_zero)
+    finetune_stds_arr = np.array(finetune_stds_with_zero)
+    scratch_means_arr = np.array(scratch_means_constant)
+    scratch_stds_arr = np.array(scratch_stds_constant)
     
-    # Finetuned points
-    finetune_mask = ~np.isnan(finetune_means)
+    # Create masks for valid data
+    finetune_mask = ~np.isnan(finetune_means_arr)
+    scratch_mask = ~np.isnan(scratch_means_arr)
+    
+    # Plot shaded bands first (so they appear behind the lines)
     if np.any(finetune_mask):
-        ax.errorbar(
+        # Finetuned shaded band
+        ax.fill_between(
             x_positions[finetune_mask],
-            np.array(finetune_means)[finetune_mask],
-            yerr=np.array(finetune_stds)[finetune_mask],
-            fmt='o',
+            finetune_means_arr[finetune_mask] - finetune_stds_arr[finetune_mask],
+            finetune_means_arr[finetune_mask] + finetune_stds_arr[finetune_mask],
             color=finetune_color,
-            label='Finetuned',
-            capsize=5,
-            capthick=1.5,
-            markersize=8,
-            linewidth=1.5
+            alpha=0.2,
+            linewidth=0,
+            label='_nolegend_'  # Don't show in legend
         )
     
-    # Scratch points
-    scratch_mask = ~np.isnan(scratch_means)
     if np.any(scratch_mask):
-        ax.errorbar(
+        # Scratch shaded band (constant)
+        ax.fill_between(
             x_positions[scratch_mask],
-            np.array(scratch_means)[scratch_mask],
-            yerr=np.array(scratch_stds)[scratch_mask],
-            fmt='s',
+            scratch_means_arr[scratch_mask] - scratch_stds_arr[scratch_mask],
+            scratch_means_arr[scratch_mask] + scratch_stds_arr[scratch_mask],
+            color=scratch_color,
+            alpha=0.2,
+            linewidth=0,
+            label='_nolegend_'  # Don't show in legend
+        )
+    
+    # Plot lines on top of bands
+    if np.any(finetune_mask):
+        # Finetuned line
+        ax.plot(
+            x_positions[finetune_mask],
+            finetune_means_arr[finetune_mask],
+            'o-',
+            color=finetune_color,
+            label='Finetuned',
+            markersize=8,
+            linewidth=1.5,
+            markerfacecolor=finetune_color,
+            markeredgecolor='white',
+            markeredgewidth=1
+        )
+    
+    if np.any(scratch_mask):
+        # Scratch line (constant)
+        ax.plot(
+            x_positions[scratch_mask],
+            scratch_means_arr[scratch_mask],
+            's-',
             color=scratch_color,
             label='Scratch',
-            capsize=5,
-            capthick=1.5,
             markersize=8,
-            linewidth=1.5
+            linewidth=1.5,
+            markerfacecolor=scratch_color,
+            markeredgecolor='white',
+            markeredgewidth=1
         )
     
     # Formatting
     ax.set_xlabel("# of cities in pretraining", fontsize=14)
     ax.set_ylabel(metric_name, fontsize=14)
-    ax.set_xticks(num_cities_list)
+    ax.set_xticks(num_cities_list_with_zero)
     ax.grid(True, alpha=0.3, linestyle='--')
     ax.legend(loc='best', fontsize=12)
     
@@ -491,8 +596,8 @@ def main():
     parser.add_argument(
         "--all_cities_project_name",
         type=str,
-        default="GNN_Transductive",
-        help="Project name for run_and_finetune_all_cities.py results (i=5)"
+        default="Scratch_vs_Finetune",
+        help="Project name for i=5 runs (regensburg_scratch_rs_* and regensburg_finetune_rs_* from Scratch_vs_Finetune project)"
     )
     parser.add_argument(
         "--output_dir",
@@ -619,8 +724,8 @@ def main():
     parser.add_argument(
         "--skip_if_exists",
         type=str_to_bool,
-        default=True,
-        help="Skip evaluation if metrics file already exists"
+        default=False,
+        help="Skip evaluation if metrics file already exists (default: False - always recompute metrics)"
     )
     
     args = parser.parse_args()
@@ -695,15 +800,19 @@ def main():
         "device_nr": args.device_nr,
     }
     
-    # Collect and evaluate runs from both projects
+    # Collect and evaluate runs from both projects (always recompute metrics)
     print(f"\nEvaluating runs from {args.project_name} (i=1-4)...")
     results_1_4 = collect_and_evaluate_runs(
-        args.project_name, args.target_city, split_file_path, eval_params, args.skip_if_exists
+        args.project_name, args.target_city, split_file_path, eval_params, skip_if_exists=False
     )
     
-    print(f"\nEvaluating runs from {args.all_cities_project_name} (i=5)...")
+    # For i=5, always use Scratch_vs_Finetune project (enforce correct project)
+    i5_project_name = "Scratch_vs_Finetune"
+    if args.all_cities_project_name != i5_project_name:
+        print(f"⚠️  Warning: Overriding --all_cities_project_name '{args.all_cities_project_name}' with '{i5_project_name}' for i=5 runs")
+    print(f"\nEvaluating runs from {i5_project_name} (i=5)...")
     results_5 = collect_and_evaluate_runs(
-        args.all_cities_project_name, args.target_city, split_file_path, eval_params, args.skip_if_exists
+        i5_project_name, args.target_city, split_file_path, eval_params, skip_if_exists=False
     )
     
     # Merge results
