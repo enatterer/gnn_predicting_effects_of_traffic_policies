@@ -33,8 +33,8 @@ markers = ['o', 's', '^', 'D', 'v', 'p']
 
 # Data from the table
 cities = ['C1', 'C2', 'C3', 'C4', 'C5', 'C6']
-scratch_mse = np.array([118.55, 303.12, 24.20, 31.09, 57.08, 41.15])
-finetune_mse = np.array([77.75, 115.98, 19.97, 18.01, 49.29, 26.04])
+scratch_mse = np.array([140.98, 124.61, 23.26, 34.45, 67.26, 28.46])
+finetune_mse = np.array([51.46, 49.77, 16.13, 18.23, 38.24, 21.24])
 mse_improvement = scratch_mse - finetune_mse
 
 # Calculate correlation
@@ -58,10 +58,10 @@ for i, city in enumerate(cities):
 
 # Regression line
 ax.plot(line_x, line_y, 'r--', linewidth=2, alpha=0.7, 
-        label=f'Linear fit: y = {slope:.3f}x + {intercept:.2f}', zorder=2)
+        label='Linear best fit', zorder=2)
 
 # Add text box with correlation statistics
-textstr = f'Pearson r = {pearson_r:.4f}\n$R^2$ = {r_squared:.4f}\np-value = {pearson_p:.4f}'
+textstr = f'Pearson r = {pearson_r:.4f}\n$R^2$ = {r_squared:.4f}'
 props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
 ax.text(0.05, 0.95, textstr, transform=ax.transAxes, fontsize=13,
         verticalalignment='top', bbox=props)
@@ -80,7 +80,9 @@ ax.legend(loc='lower right', framealpha=0.9, edgecolor='black')
 plt.tight_layout()
 
 # Save figure
-output_dir = '/home/enatterer/Development/elena_gnn_predicting_effects_of_traffic_policies/results/figures'
+# Save to results folder at the same level as this script
+script_dir = os.path.dirname(os.path.abspath(__file__))
+output_dir = os.path.join(script_dir, 'results')
 os.makedirs(output_dir, exist_ok=True)
 
 output_path_pdf = os.path.join(output_dir, 'mse_improvement_correlation.pdf')

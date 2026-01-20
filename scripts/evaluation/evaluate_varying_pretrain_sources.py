@@ -433,13 +433,61 @@ def collect_and_evaluate_runs(
     return dict(results)
 
 
-def compute_statistics(values: List[float]) -> Tuple[Optional[float], Optional[float]]:
-    """Compute mean and standard deviation."""
+def remove_outliers_iqr(values: List[float]) -> List[float]:
+    """
+    Remove outliers using IQR method (1.5 × IQR rule).
+    
+    Args:
+        values: List of values
+        
+    Returns:
+        List of values with outliers removed
+    """
+    if not values or len(values) < 3:
+        return values
+    
+    values_arr = np.array(values)
+    q1 = np.percentile(values_arr, 25)
+    q3 = np.percentile(values_arr, 75)
+    iqr = q3 - q1
+    
+    if iqr == 0:
+        return values
+    
+    lower_bound = q1 - 1.5 * iqr
+    upper_bound = q3 + 1.5 * iqr
+    
+    # Keep values within bounds
+    filtered_values = [v for v in values if lower_bound <= v <= upper_bound]
+    return filtered_values
+
+
+def compute_statistics(values: List[float], remove_outliers: bool = True) -> Tuple[Optional[float], Optional[float], int]:
+    """
+    Compute mean and standard deviation, optionally removing outliers using IQR method.
+    
+    Args:
+        values: List of values
+        remove_outliers: If True, remove outliers using IQR method before computing statistics
+        
+    Returns:
+        Tuple of (mean, std, n) where n is the number of values used after outlier removal
+    """
     if not values:
-        return None, None
-    mean = np.mean(values)
-    std = np.std(values, ddof=1) if len(values) > 1 else 0.0
-    return mean, std
+        return None, None, 0
+    
+    # Remove outliers if requested
+    if remove_outliers:
+        filtered_values = remove_outliers_iqr(values)
+    else:
+        filtered_values = values
+    
+    if not filtered_values:
+        return None, None, 0
+    
+    mean = np.mean(filtered_values)
+    std = np.std(filtered_values, ddof=1) if len(filtered_values) > 1 else 0.0
+    return mean, std, len(filtered_values)
 
 
 def create_mse_plot(
@@ -460,19 +508,21 @@ def create_mse_plot(
     plt.rcParams['font.size'] = 12
     
     # Compute overall scratch statistics across ALL runs (constant line)
+    # Remove outliers using IQR method
     all_scratch_values = []
     for num_cities, data in results.items():
         all_scratch_values.extend(data.get("scratch", []))
-    scratch_overall_mean, scratch_overall_std = compute_statistics(all_scratch_values)
+    scratch_overall_mean, scratch_overall_std, scratch_n = compute_statistics(all_scratch_values, remove_outliers=True)
     
     # Prepare data for per-city finetuned values
+    # Remove outliers using IQR method for each n value
     num_cities_list = sorted([k for k in results.keys() if k <= 5])
     finetune_means = []
     finetune_stds = []
     
     for num_cities in num_cities_list:
         finetune_values = results[num_cities].get("finetuned", [])
-        finetune_mean, finetune_std = compute_statistics(finetune_values)
+        finetune_mean, finetune_std, finetune_n = compute_statistics(finetune_values, remove_outliers=True)
         
         finetune_means.append(finetune_mean if finetune_mean is not None else np.nan)
         finetune_stds.append(finetune_std if finetune_std is not None else np.nan)
@@ -832,23 +882,37 @@ def main():
     print("STATISTICS SUMMARY")
     print("=" * 80)
     
+    # Compute overall scratch statistics across ALL runs (constant baseline)
+    all_scratch_values = []
+    for num_cities, data in all_results.items():
+        all_scratch_values.extend(data.get("scratch", []))
+    scratch_overall_mean, scratch_overall_std, scratch_n = compute_statistics(all_scratch_values, remove_outliers=True)
+    scratch_original_n = len(all_scratch_values)
+    scratch_removed = scratch_original_n - scratch_n
+    
     for num_cities in sorted(all_results.keys()):
         finetune_values = all_results[num_cities]["finetuned"]
-        scratch_values = all_results[num_cities]["scratch"]
         
-        finetune_mean, finetune_std = compute_statistics(finetune_values)
-        scratch_mean, scratch_std = compute_statistics(scratch_values)
+        finetune_mean, finetune_std, finetune_n = compute_statistics(finetune_values, remove_outliers=True)
+        
+        # Show original count and outlier removal info
+        finetune_original_n = len(finetune_values)
+        finetune_removed = finetune_original_n - finetune_n
         
         print(f"\n{num_cities} cities in pretraining:")
         if finetune_mean is not None:
-            print(f"  Finetuned: MSE = {finetune_mean:.4f} ± {finetune_std:.4f} (n={len(finetune_values)})")
+            outlier_info = f" (removed {finetune_removed} outlier(s))" if finetune_removed > 0 else ""
+            print(f"  Finetuned: MSE = {finetune_mean:.4f} ± {finetune_std:.4f} (n={finetune_n}{outlier_info}, original n={finetune_original_n})")
         else:
             print(f"  Finetuned: No data")
-        
-        if scratch_mean is not None:
-            print(f"  Scratch: MSE = {scratch_mean:.4f} ± {scratch_std:.4f} (n={len(scratch_values)})")
-        else:
-            print(f"  Scratch: No data")
+    
+    # Print scratch statistics once (constant across all n values)
+    print(f"\nScratch (baseline, constant across all n values):")
+    if scratch_overall_mean is not None:
+        outlier_info = f" (removed {scratch_removed} outlier(s))" if scratch_removed > 0 else ""
+        print(f"  Scratch: MSE = {scratch_overall_mean:.4f} ± {scratch_overall_std:.4f} (n={scratch_n}{outlier_info}, original n={scratch_original_n})")
+    else:
+        print(f"  Scratch: No data")
     
     print("=" * 80)
     
