@@ -596,18 +596,14 @@ def create_mse_plot(
         )
     
     if np.any(scratch_mask):
-        # Scratch line (constant)
+        # Scratch line (constant horizontal line, no markers)
         ax.plot(
             x_positions[scratch_mask],
             scratch_means_arr[scratch_mask],
-            's-',
+            '-',
             color=scratch_color,
             label='Scratch',
-            markersize=8,
             linewidth=1.5,
-            markerfacecolor=scratch_color,
-            markeredgecolor='white',
-            markeredgewidth=1
         )
     
     # Formatting
