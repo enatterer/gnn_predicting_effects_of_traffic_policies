@@ -381,13 +381,12 @@ def plot_average_prediction_differences(gdf_inputs: list,
     # Styling
     plt.xlim(x_min, x_max)
     plt.ylim(y_min, y_max)
-    plt.xlabel("Longitude", fontname=font, fontsize=15)
-    plt.ylabel("Latitude", fontname=font, fontsize=15)
+    plt.xlabel("Longitude", fontname=font, fontsize=21)
+    plt.ylabel("Latitude", fontname=font, fontsize=21)
     
-    ax.tick_params(axis='both', which='major', labelsize=10)
     for label in (ax.get_xticklabels() + ax.get_yticklabels()):
         label.set_fontname(font)
-        label.set_fontsize(15)
+        label.set_fontsize(19)
 
     # Colorbar setup
     ax.set_position([0.1, 0.1, 0.75, 0.75])
@@ -415,11 +414,11 @@ def plot_average_prediction_differences(gdf_inputs: list,
         cbar = plt.colorbar(sm, cax=cax)
     
     # Customize colorbar
-    cbar.ax.tick_params(labelsize=15)
+    cbar.ax.tick_params(labelsize=19)
     for t in cbar.ax.get_yticklabels():
         t.set_fontname(font)
     cbar.ax.yaxis.label.set_fontname(font)
-    cbar.ax.yaxis.label.set_size(15)
+    cbar.ax.yaxis.label.set_size(21)
     
     error_type ="Relative" if use_percentage else "Absolute"
     # error_type = "Absolute" if use_absolute_value_of_difference else "Signed"
@@ -428,14 +427,15 @@ def plot_average_prediction_differences(gdf_inputs: list,
     cbar.set_label(f'{error_type} Prediction Error ({units})' ,
                 #    f'{loss_fct} difference in {units}\n',
                 #    f'(Averaged across {len(gdf_inputs)} samples)',
-                   fontname=font, fontsize=15)
+                   fontname=font, fontsize=21)
 
     if save_it:
         error_type_str = "average_absolute_value_of_difference" if use_absolute_value_of_difference else "average_signed_difference"
         metric_str = "percent" if use_percentage else "abs_vehicles"
         # THIS LINE CHANGED
-        plt.savefig(f"{result_path}", 
-                   bbox_inches='tight')
+        plt.savefig(f"{result_path}",
+                    dpi = 300,
+                    bbox_inches='tight')
     
     plt.show()
     return base_gdf
@@ -489,8 +489,8 @@ def filter_for_geographic_section(gdf):
     # bbox = box(x_min, y_min, x_max, y_max)
 
     xmin, ymin, xmax, ymax = gdf.total_bounds
-    dx = 0.05 * (xmax - xmin)
-    dy = 0.05 * (ymax - ymin)
+    dx = 0.032 * (xmax - xmin)
+    dy = 0.032 * (ymax - ymin)
 
     bbox = box(xmin - dx, ymin - dy, xmax + dx, ymax + dy)
 
