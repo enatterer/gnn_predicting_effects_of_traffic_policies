@@ -18,9 +18,11 @@ import os
 import sys
 import json
 import argparse
+import copy
+import random
+from pathlib import Path
 
 import torch
-from pathlib import Path
 
 # TODO: Check if this helps
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
@@ -31,7 +33,7 @@ if scripts_path not in sys.path:
     sys.path.append(scripts_path)
 
 from training.help_functions import *
-from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss
+from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss, select_target_tensor
 
 # Repo root: repo/scripts/training/run_models.py → go two levels up
 project_root = Path(__file__).resolve().parents[2]
@@ -40,21 +42,117 @@ DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 # Use universal un-normalized data, any normalization will be handled during training
 dataset_path = os.path.join(project_root, 'data','bavaria','inductive_data','training_data','kreisfreistadt')
 
-# Please adjust as needed
+# Writable local results directory
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 # Possible cities:
 # ['wuerzburg','aschaffenburg','regensburg','landshut','bayreuth','erlangen','fuerth','kempten','neuulm','muenchen','augsburg','rosenheim','schweinfurt','bamberg','nuernberg', 'ingolstadt']
 
-train_cities = ['landshut'] # Good cities, Blue Cluster 'landshut','bayreuth','schweinfurt','wuerzburg','bamberg','regensburg'
+train_cities = ['landshut', 'bayreuth', 'schweinfurt', 'wuerzburg', 'bamberg', 'regensburg'] # Good cities, Blue Cluster 'landshut','bayreuth','schweinfurt','wuerzburg','bamberg','regensburg'
 val_cities = [] # Non empty implies inductive learning
 test_cities = [] # Non empty implies inductive learning
+
+# Fixed defaults for CITY-level CrossTReS-style selective weighting.
+DEFAULT_SELECTIVE_TARGET_SUPPORT_FRACTION = 0.5
+DEFAULT_SELECTIVE_META_UPDATE_INTERVAL = 10
+DEFAULT_SELECTIVE_META_SOURCE_STEPS = 1
+DEFAULT_SELECTIVE_META_TARGET_STEPS = 1
+DEFAULT_SELECTIVE_WEIGHT_TEMPERATURE = 1.0
+DEFAULT_SELECTIVE_WEIGHT_EMA = 0.7
+DEFAULT_SELECTIVE_LIMIT_GRAPHS_PER_CITY = 80
+
+
+def _slice_metadata(data_dict, indices):
+    return {
+        "path": [data_dict["path"][i] for i in indices],
+        "policy_region": [data_dict["policy_region"][i] for i in indices],
+        "scenario": [data_dict["scenario"][i] for i in indices],
+        "city": [data_dict["city"][i] for i in indices],
+    }
+
+
+class CrossTReSCityWeightingCallback:
+    """
+    Approximate CrossTReS-style city selection via target-conditioned meta simulation.
+    """
+
+    def __init__(
+        self,
+        source_city_loaders,
+        loss_fct,
+        device,
+        target_type,
+        weight_temperature=1.0,
+        ema_coef=0.7,
+        eval_steps_per_city=1,
+        update_interval=1,
+    ):
+        self.source_city_loaders = source_city_loaders
+        self.loss_fct = loss_fct
+        self.device = device
+        self.target_type = target_type
+        self.weight_temperature = max(weight_temperature, 1e-6)
+        self.ema_coef = min(max(ema_coef, 0.0), 0.999)
+        self.eval_steps_per_city = max(int(eval_steps_per_city), 1)
+        self.update_interval = max(int(update_interval), 1)
+        self.city_list = sorted(source_city_loaders.keys())
+        self.weights = {city: 1.0 for city in self.city_list}
+        self.source_iters = {city: iter(loader) for city, loader in source_city_loaders.items()}
+
+    @staticmethod
+    def _next_batch(loader, iterator):
+        try:
+            return next(iterator), iterator
+        except StopIteration:
+            iterator = iter(loader)
+            return next(iterator), iterator
+
+    def _estimate_city_loss(self, model, city_name):
+        model.eval()
+        losses = []
+        with torch.no_grad():
+            for _ in range(self.eval_steps_per_city):
+                source_batch, self.source_iters[city_name] = self._next_batch(
+                    self.source_city_loaders[city_name], self.source_iters[city_name]
+                )
+                source_batch = source_batch.to(self.device)
+                source_target = select_target_tensor(source_batch, self.target_type)
+                source_target = model.standardize_target(source_target, data=source_batch)
+                pred_source = model(source_batch)
+                loss_val = self.loss_fct(pred_source, source_target, source_batch, source_batch.batch).item()
+                losses.append(float(loss_val))
+        model.train()
+        if not losses:
+            return 1.0
+        return float(sum(losses) / len(losses))
+
+    def __call__(self, epoch, model):
+        if epoch % self.update_interval != 0:
+            return self.weights
+
+        city_losses = {}
+        for city in self.city_list:
+            city_losses[city] = self._estimate_city_loss(model=model, city_name=city)
+
+        losses_tensor = torch.tensor([city_losses[c] for c in self.city_list], dtype=torch.float32)
+        raw_scores = -losses_tensor / self.weight_temperature
+        softmax_weights = torch.softmax(raw_scores, dim=0)
+        scaled_weights = softmax_weights * len(self.city_list)
+
+        updated = {}
+        for i, city in enumerate(self.city_list):
+            candidate = float(scaled_weights[i].item())
+            updated[city] = self.ema_coef * self.weights[city] + (1.0 - self.ema_coef) * candidate
+
+        self.weights = updated
+        print(f"[CrossTReSCityWeighting] epoch={epoch} weights={self.weights} losses={city_losses}")
+        return self.weights
     
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_encoder",
                         help="The GNN architecture to use.",
-                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder"])  # Add more as you implement them
+                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder", "crossST"])  # Add more as you implement them
     parser.add_argument("--use_inductive_variant", type=str_to_bool, default=True,
                         help="Whether to perform inductive or transductive training.")
     parser.add_argument("--project_name", type=str, default=None,
@@ -79,7 +177,7 @@ def main():
     parser.add_argument("--target_type", type=str, default="abs_vol_car", help="Which target to use for training.", 
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_weighted_batches", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training batches.")
-    parser.add_argument("--num_epochs", type=int, default=600, help="Number of epochs to train for.")
+    parser.add_argument("--num_epochs", type=int, default=300, help="Number of epochs to train for.")
     parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     
     #parameters for the learning rate scheduler
@@ -88,7 +186,7 @@ def main():
     parser.add_argument("--warmup_fraction", type=float, default=0.1, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
-    parser.add_argument("--early_stopping_patience", type=int, default=40, help="The early stopping patience.")
+    parser.add_argument("--early_stopping_patience", type=int, default=15, help="The early stopping patience.")
     
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
@@ -115,6 +213,12 @@ def main():
 
     # Fast-iteration: optionally cap dataset sizes per split (random subsample)
     parser.add_argument("--limit_available_graphs", type=int, default=2000, help="If >0, randomly keep only this many available graphs after reading metadata (applies before splitting into train/val/test).")
+    parser.add_argument("--apply_source_city_weighting_crosstres", type=str_to_bool, default=False,
+                        help="Enable CrossTReS-style CITY-level selective source weighting during pretraining.")
+    parser.add_argument("--crossst_alpha", type=float, default=0.3,
+                        help="CrossST-inspired temporal distillation weight (used in finetuning mode).")
+    parser.add_argument("--crossst_beta", type=float, default=0.3,
+                        help="CrossST-inspired spatial distillation weight (used in finetuning mode).")
 
     args = vars(parser.parse_args())
     
@@ -125,16 +229,22 @@ def main():
     # Convert "None" string to None
     if args.get('target_normalization') == "None":
         args['target_normalization'] = None
-    
+
     # Backward compatibility: map use_target_standardization to target_normalization
     if args.get('target_normalization') is None and args.get('use_target_standardization', False):
         args['target_normalization'] = "relative_standard_scaler"
         print("Warning: --use_target_standardization is deprecated. Using --target_normalization='relative_standard_scaler'")
     
     set_random_seeds()
+
+    if args.get("apply_source_city_weighting_crosstres", False):
+        run_desc = str(args.get("unique_model_description", "") or "")
+        if "crosstres" not in run_desc.lower():
+            args["unique_model_description"] = f"{run_desc}_crosstres" if run_desc else "crosstres"
     
     if args.get('project_name') is None:
         args['project_name'] = "GNN_Inductive" if args['use_inductive_variant'] else "GNN_Transductive"
+    
     
     try:
         
@@ -221,10 +331,22 @@ def main():
             test_data = None
             
             # Optional: Subsample training graphs for faster iterations
-            if args['limit_available_graphs'] > 0:
+            if args.get("apply_source_city_weighting_crosstres", False):
+                # In CrossTReS benchmark mode, always use all source-city graphs for pretraining,
+                # regardless of the global fast-iteration default.
+                pass
+            elif args['limit_available_graphs'] > 0:
                 train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
 
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
+        transductive_val_ratio = 0.15
+        transductive_test_ratio = 0.05
+        if (not args["use_inductive_variant"]) and args.get("apply_source_city_weighting_crosstres", False):
+            # For benchmark fairness in CrossTReS mode: use all source-city graphs for train+val,
+            # and keep no internal test holdout during pretraining.
+            transductive_val_ratio = 0.2
+            transductive_test_ratio = 0.0
+
         train_dl, valid_dl, scalers_train = prepare_data_with_graph_features(train_data=train_data,
                                                                              val_data=val_data,
                                                                              test_data=test_data,
@@ -242,7 +364,9 @@ def main():
                                                                              max_subgraph_nodes=args['max_subgraph_nodes'],
                                                                              aug_pos_rotation=args['aug_pos_rotation'],
                                                                              aug_feature_noise=args['aug_feature_noise'],
-                                                                             aug_node_masking_probability=args['aug_node_masking_probability'])
+                                                                             aug_node_masking_probability=args['aug_node_masking_probability'],
+                                                                             transductive_val_ratio=transductive_val_ratio,
+                                                                             transductive_test_ratio=transductive_test_ratio)
 
         # Create WandB config
         config = setup_wandb(args)
@@ -326,6 +450,68 @@ def main():
         early_stopping = EarlyStopping(patience=config.early_stopping_patience, verbose=True)
 
         print(f"Training method: {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'}")
+
+        selective_weight_callback = None
+        dynamic_city_weights = {}
+        use_crosstres_city_weighting = args.get("apply_source_city_weighting_crosstres", False)
+        if use_crosstres_city_weighting:
+            forbidden_targets = set(test_cities or [])
+            overlapping_cities = forbidden_targets.intersection(set(train_cities or []))
+            if overlapping_cities:
+                raise ValueError(
+                    f"CrossTReSCityWeighting requires strict source-only pretraining. "
+                    f"Target city/cities found in train_cities: {sorted(overlapping_cities)}"
+                )
+
+            source_city_loaders = {}
+            meta_loader_dir = os.path.join(path_to_save_dataloader, "cross_tres_city_weighting")
+            os.makedirs(meta_loader_dir, exist_ok=True)
+
+            for city in sorted(train_cities):
+                city_meta = {"path": [], "policy_region": [], "scenario": [], "city": []}
+                load_metadata_from_disk(city_meta, os.path.join(dataset_path, city, "metadata.json"))
+                if DEFAULT_SELECTIVE_LIMIT_GRAPHS_PER_CITY > 0:
+                    city_meta = balanced_subset_by_city(
+                        city_meta, min(DEFAULT_SELECTIVE_LIMIT_GRAPHS_PER_CITY, len(city_meta["path"]))
+                    )
+                city_loader_dir = os.path.join(meta_loader_dir, f"{city}_source")
+                os.makedirs(city_loader_dir, exist_ok=True)
+                city_train_loader, _, _ = prepare_data_with_graph_features(
+                    train_data=city_meta,
+                    val_data=None,
+                    test_data=None,
+                    use_inductive_variant=False,
+                    batch_size=args["batch_size"],
+                    path_to_save_dataloader=city_loader_dir + "/",
+                    use_all_features=args["use_all_features"],
+                    use_weighted_batches=False,
+                    use_nested_neighbor_loader=False,
+                    neighbor_sizes=args["neighbor_sizes"],
+                    subgraphs_per_graph=args["subgraphs_per_graph"],
+                    seed_size=args["seed_size"],
+                    sampling_strategy=args["sampling_strategy"],
+                    min_subgraph_nodes=args["min_subgraph_nodes"],
+                    max_subgraph_nodes=args["max_subgraph_nodes"],
+                    aug_pos_rotation=False,
+                    aug_feature_noise=False,
+                    aug_node_masking_probability=0.0,
+                    transductive_val_ratio=0.0,
+                    transductive_test_ratio=0.0,
+                )
+                source_city_loaders[city] = city_train_loader
+                dynamic_city_weights.setdefault(city, 1.0)
+
+            selective_weight_callback = CrossTReSCityWeightingCallback(
+                source_city_loaders=source_city_loaders,
+                loss_fct=loss_fct,
+                device=device,
+                target_type=config.target_type,
+                weight_temperature=DEFAULT_SELECTIVE_WEIGHT_TEMPERATURE,
+                ema_coef=DEFAULT_SELECTIVE_WEIGHT_EMA,
+                eval_steps_per_city=DEFAULT_SELECTIVE_META_SOURCE_STEPS,
+                update_interval=DEFAULT_SELECTIVE_META_UPDATE_INTERVAL,
+            )
+
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                              loss_fct=loss_fct,
                                                              optimizer=torch.optim.AdamW(gnn_instance.parameters(), lr=config.peak_lr, weight_decay=1e-3) if config.gnn_arch != "xgboost" else None,
@@ -333,7 +519,10 @@ def main():
                                                              valid_dl=valid_dl,
                                                              device=device,
                                                              early_stopping=early_stopping,
-                                                             model_save_path=model_save_path)
+                                                             model_save_path=model_save_path,
+                                                             apply_source_city_weights=use_crosstres_city_weighting,
+                                                             source_city_weights=dynamic_city_weights,
+                                                             city_weight_callback=selective_weight_callback)
         
         print(f'Best model saved to {model_save_path} with validation loss: {best_val_loss} at epoch {best_epoch}')   
         print_model_info(gnn_instance)
