@@ -16,3 +16,8 @@ scripts/evaluation/*.json
 scripts/evaluation/*.log
 scripts/visualization/results/*
 results/*
+scripts/evaluation/overlaps/*
+tmp_dataloader/*
+tmp_distant_splits/*
+tmp_random_splits/*
+evaluation_metrics/*
