@@ -179,13 +179,14 @@ def load_model_from_checkpoint(
     config.setdefault('use_pos', True)
     config.setdefault('pos_dim', 6)
     
-    # Prepare model_kwargs with inferred parameters
-    model_kwargs = {
-        'in_channels': config.get('in_channels', 5),
-        'ff_dim': config.get('ff_dim', 256),
-        'use_pos': config.get('use_pos', True),
-        'pos_dim': config.get('pos_dim', 6),
-    }
+    # Prepare model kwargs only for architectures that support them.
+    model_kwargs = {'in_channels': config.get('in_channels', 5)}
+    if gnn_arch == "trans_encoder":
+        model_kwargs.update({
+            'ff_dim': config.get('ff_dim', 256),
+            'use_pos': config.get('use_pos', True),
+            'pos_dim': config.get('pos_dim', 6),
+        })
     
     # Create model with inferred parameters
     model = create_gnn_model(

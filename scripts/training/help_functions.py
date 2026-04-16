@@ -31,6 +31,8 @@ from gnn.models.gatv2 import GATv2
 from gnn.models.trans_conv import TransConv
 from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.trans_encoder import TransEncoder
+from gnn.models.crossst import CrossST
+from gnn.models.citytrans import CityTrans
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 ########## Control Center #########
@@ -975,6 +977,12 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
         
     elif gnn_arch == "trans_encoder":
         return TransEncoder(**common_kwargs, **model_kwargs_clean).to(device)
+    
+    elif gnn_arch == "crossST":
+        return CrossST(**common_kwargs, **model_kwargs_clean).to(device)
+
+    elif gnn_arch == "citytrans":
+        return CityTrans(**common_kwargs, **model_kwargs_clean).to(device)
         
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")

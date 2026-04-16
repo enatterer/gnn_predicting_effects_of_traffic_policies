@@ -472,6 +472,14 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     predicted = self(data)
                     train_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
+                    # Optional: allow weighting callbacks to observe batch-level losses/labels.
+                    # This is a no-op unless the callback implements observe_batch().
+                    if city_weight_callback is not None and hasattr(city_weight_callback, "observe_batch"):
+                        try:
+                            city_weight_callback.observe_batch(data=data, loss_value=float(train_loss.item()))
+                        except Exception as e:
+                            # Never break training for auxiliary weighting logic.
+                            print(f"[WeightCallback] observe_batch failed: {e}")
                     if apply_source_city_weights:
                         city_weight = self._compute_batch_city_weight(data, active_source_city_weights)
                         train_loss = train_loss * city_weight

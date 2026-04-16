@@ -410,6 +410,22 @@ def collate_fn(data_list, node_feature_filter, filtered_feature_mapping=None, is
     # STEP 1: Filter node features FIRST (before augmentation)
     for data in data_list:
         if node_feature_filter is not None:
+            # Some stored graphs already contain a reduced feature matrix (e.g. 5 selected features).
+            # In that case, applying an "original-index" filter (e.g. indices like 10) would crash.
+            # Heuristic: if the feature matrix already has the expected width, skip filtering.
+            expected_width = len(node_feature_filter)
+            if data.x is None:
+                continue
+            if data.x.dim() != 2:
+                raise ValueError(f"Expected data.x to be 2D, got shape={getattr(data.x, 'shape', None)}")
+            if data.x.shape[1] == expected_width:
+                continue
+            if max(node_feature_filter) >= data.x.shape[1]:
+                raise IndexError(
+                    f"Feature filter indices out of bounds for this graph: "
+                    f"x.shape[1]={data.x.shape[1]}, max_filter_idx={max(node_feature_filter)}. "
+                    f"This likely means mixed datasets with different stored feature layouts."
+                )
             data.x = data.x[:, node_feature_filter]
     
     # STEP 2: Apply augmentation to filtered features

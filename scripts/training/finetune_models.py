@@ -346,7 +346,9 @@ def main():
                 if split_city != train_cities[0] if len(train_cities) == 1 else None:
                     print(f"Warning: Split file city '{split_city}' doesn't match requested cities {train_cities}")
                 
-                # Load train and val data from split file
+                # Load train and val data from split file.
+                # IMPORTANT: For the TL pipeline, test data is only used at the very end
+                # (held-out target-city evaluation) and must NOT be used during finetuning.
                 train_data = split_data.get('train_data', {})
                 val_data = split_data.get('val_data', {})
                 test_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city': list()}

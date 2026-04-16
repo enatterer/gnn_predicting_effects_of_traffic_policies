@@ -23,6 +23,8 @@ import random
 from pathlib import Path
 
 import torch
+import torch.nn.functional as F
+from torch import nn
 
 # TODO: Check if this helps
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True" # This is to avoid memory issues in Retina. Comment it out in LRZ AI
@@ -147,12 +149,157 @@ class CrossTReSCityWeightingCallback:
         self.weights = updated
         print(f"[CrossTReSCityWeighting] epoch={epoch} weights={self.weights} losses={city_losses}")
         return self.weights
-    
+
+
+class CrossTReSRegionWeightingCallback:
+    """
+    CrossTReS_full-style selective weighting:
+    - Learn region-level source weights via a lightweight MLP.
+    - Use an update loop to align MLP scores with inverse region losses.
+    - Aggregate region weights into per-city weights for compatibility with
+      existing training loop (no changes to other strategies).
+    """
+
+    def __init__(
+        self,
+        region_keys,
+        device,
+        update_interval=1,
+        temperature=1.0,
+        ema_coef=0.7,
+        mlp_lr=5e-3,
+        loss_ema=0.9,
+        min_observations_per_region=1,
+    ):
+        self.device = device
+        self.update_interval = max(int(update_interval), 1)
+        self.temperature = max(float(temperature), 1e-6)
+        self.ema_coef = min(max(float(ema_coef), 0.0), 0.999)
+        self.mlp_lr = float(mlp_lr)
+        self.loss_ema = min(max(float(loss_ema), 0.0), 0.999)
+        self.min_observations_per_region = max(int(min_observations_per_region), 1)
+
+        # Region keys are tuples: (city, policy_region)
+        self.region_keys = sorted(set(region_keys), key=lambda x: (x[0], str(x[1])))
+        self.city_list = sorted({k[0] for k in self.region_keys})
+
+        self.region_weights = {k: 1.0 for k in self.region_keys}
+        self.city_weights = {city: 1.0 for city in self.city_list}
+
+        # Tiny scoring net: [normalized_loss, region_sample_count] -> logit.
+        self.scoring_mlp = nn.Sequential(
+            nn.Linear(2, 16),
+            nn.GELU(),
+            nn.Linear(16, 1),
+        ).to(device)
+        self.scoring_optimizer = torch.optim.Adam(self.scoring_mlp.parameters(), lr=self.mlp_lr)
+
+        # Online loss statistics per region (observed during training batches).
+        self.region_loss_ema = {k: None for k in self.region_keys}
+        self.region_obs_count = {k: 0 for k in self.region_keys}
+
+    def observe_batch(self, data, loss_value: float):
+        """
+        Observe a training batch and update per-region loss EMA.
+        This is called from BaseGNN.train_model when available.
+        """
+        if not hasattr(data, "city") or not hasattr(data, "policy_region"):
+            return
+        cities = data.city if isinstance(data.city, list) else [data.city]
+        regions = data.policy_region if isinstance(data.policy_region, list) else [data.policy_region]
+        if not cities or not regions:
+            return
+        # If batching keeps per-graph metadata, take aligned pairs; otherwise use a single label.
+        if len(cities) == len(regions):
+            keys = [(str(c), str(r)) for c, r in zip(cities, regions)]
+        else:
+            keys = [(str(cities[0]), str(regions[0]))]
+
+        for key in keys:
+            if key not in self.region_loss_ema:
+                continue
+            prev = self.region_loss_ema[key]
+            if prev is None:
+                self.region_loss_ema[key] = float(loss_value)
+            else:
+                self.region_loss_ema[key] = self.loss_ema * float(prev) + (1.0 - self.loss_ema) * float(loss_value)
+            self.region_obs_count[key] += 1
+
+    def _aggregate_city_weights(self, region_weight_dict):
+        city_weights = {}
+        for city in self.city_list:
+            region_vals = [w for (c, _), w in region_weight_dict.items() if c == city]
+            if region_vals:
+                city_weights[city] = float(sum(region_vals) / len(region_vals))
+            else:
+                city_weights[city] = 1.0
+        return city_weights
+
+    def __call__(self, epoch, model):
+        if epoch % self.update_interval != 0:
+            return self.city_weights
+
+        # Only use regions we have actually observed in training batches.
+        available = [
+            k for k in self.region_keys
+            if (self.region_loss_ema.get(k) is not None and self.region_obs_count.get(k, 0) >= self.min_observations_per_region)
+        ]
+        if not available:
+            # No observations yet; keep uniform weights.
+            return self.city_weights
+
+        region_losses = {k: float(self.region_loss_ema[k]) for k in available}
+
+        losses_tensor = torch.tensor(
+            [region_losses[k] for k in available], dtype=torch.float32, device=self.device
+        )
+        sizes_tensor = torch.tensor([self.region_obs_count[k] for k in available], dtype=torch.float32, device=self.device)
+
+        # Normalize features for stable tiny-MLP training.
+        losses_norm = (losses_tensor - losses_tensor.mean()) / (losses_tensor.std(unbiased=False) + 1e-6)
+        sizes_norm = (sizes_tensor - sizes_tensor.mean()) / (sizes_tensor.std(unbiased=False) + 1e-6)
+        mlp_features = torch.stack([losses_norm, sizes_norm], dim=1)
+
+        # MLP predicts region logits. Train to mimic inverse-loss soft targets.
+        pred_logits = self.scoring_mlp(mlp_features).squeeze(-1)
+        target_probs = torch.softmax(-losses_tensor / self.temperature, dim=0).detach()
+        pred_log_probs = F.log_softmax(pred_logits, dim=0)
+        meta_loss = F.kl_div(pred_log_probs, target_probs, reduction="batchmean")
+
+        self.scoring_optimizer.zero_grad()
+        meta_loss.backward()
+        self.scoring_optimizer.step()
+
+        with torch.no_grad():
+            updated_logits = self.scoring_mlp(mlp_features).squeeze(-1)
+            region_probs = torch.softmax(updated_logits / self.temperature, dim=0)
+            scaled_region_weights = region_probs * len(available)
+
+        updated_region_weights = {}
+        # Start from previous weights, update only observed regions this epoch.
+        updated_region_weights.update(self.region_weights)
+        for idx, region_key in enumerate(available):
+            candidate = float(scaled_region_weights[idx].item())
+            prev = float(self.region_weights.get(region_key, 1.0))
+            updated_region_weights[region_key] = self.ema_coef * prev + (1.0 - self.ema_coef) * candidate
+        self.region_weights = updated_region_weights
+        self.city_weights = self._aggregate_city_weights(self.region_weights)
+
+        printable_region_weights = {f"{k[0]}::{k[1]}": round(self.region_weights[k], 4) for k in available[:25]}
+        print(
+            f"[CrossTReSFullRegionWeighting] epoch={epoch} "
+            f"meta_loss={meta_loss.item():.6f} "
+            f"city_weights={self.city_weights} "
+            f"region_weights_sample={printable_region_weights}"
+        )
+        return self.city_weights
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_encoder",
                         help="The GNN architecture to use.",
-                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder", "crossST"])  # Add more as you implement them
+                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder", "crossST", "citytrans"])  # Add more as you implement them
     parser.add_argument("--use_inductive_variant", type=str_to_bool, default=True,
                         help="Whether to perform inductive or transductive training.")
     parser.add_argument("--project_name", type=str, default=None,
@@ -219,10 +366,18 @@ def main():
                         help="Test split ratio for transductive preparation.")
     parser.add_argument("--apply_source_city_weighting_crosstres", type=str_to_bool, default=False,
                         help="Enable CrossTReS-style CITY-level selective source weighting during pretraining.")
+    parser.add_argument("--apply_source_region_weighting_crosstres_full", type=str_to_bool, default=False,
+                        help="Enable CrossTReS_full-style REGION-level selective source weighting via lightweight MLP + meta-updates.")
     parser.add_argument("--crossst_alpha", type=float, default=0.3,
                         help="CrossST-inspired temporal distillation weight (used in finetuning mode).")
     parser.add_argument("--crossst_beta", type=float, default=0.3,
                         help="CrossST-inspired spatial distillation weight (used in finetuning mode).")
+    parser.add_argument(
+        "--citytrans_target_city",
+        type=str,
+        default=None,
+        help="CityTrans-only: target city name for source/target domain labels during end-to-end training.",
+    )
 
     args = vars(parser.parse_args())
     
@@ -241,10 +396,30 @@ def main():
     
     set_random_seeds()
 
+    print(
+        f"[run_models] start project_name={args.get('project_name')} "
+        f"gnn_arch={args.get('gnn_arch')} inductive={args.get('use_inductive_variant')} "
+        f"run={args.get('unique_model_description')} "
+        f"crosstres_city={args.get('apply_source_city_weighting_crosstres', False)} "
+        f"crosstres_full_region={args.get('apply_source_region_weighting_crosstres_full', False)}",
+        flush=True,
+    )
+
+    if args.get("apply_source_city_weighting_crosstres", False) and args.get("apply_source_region_weighting_crosstres_full", False):
+        raise ValueError(
+            "Only one selective weighting strategy can be active. "
+            "Choose either --apply_source_city_weighting_crosstres or "
+            "--apply_source_region_weighting_crosstres_full."
+        )
+
     if args.get("apply_source_city_weighting_crosstres", False):
         run_desc = str(args.get("unique_model_description", "") or "")
         if "crosstres" not in run_desc.lower():
             args["unique_model_description"] = f"{run_desc}_crosstres" if run_desc else "crosstres"
+    if args.get("apply_source_region_weighting_crosstres_full", False):
+        run_desc = str(args.get("unique_model_description", "") or "")
+        if "crosstres_full" not in run_desc.lower():
+            args["unique_model_description"] = f"{run_desc}_crosstres_full" if run_desc else "crosstres_full"
     
     if args.get('project_name') is None:
         args['project_name'] = "GNN_Inductive" if args['use_inductive_variant'] else "GNN_Transductive"
@@ -267,9 +442,11 @@ def main():
                                                              model_save_path='trained_model/model.pth')
         
         # Start data prepration
+        print(f"[run_models] loading metadata for train_cities={sorted(train_cities)}", flush=True)
         train_data = {'path': list(), 'policy_region': list(), 'scenario': list(), 'city':list()}    
         for city in sorted(train_cities):
             load_metadata_from_disk(train_data, os.path.join(dataset_path, city, 'metadata.json'))
+        print(f"[run_models] loaded train graphs: {len(train_data['path'])}", flush=True)
 
         if args['use_inductive_variant']:
             if len(val_cities) > 0:
@@ -335,7 +512,7 @@ def main():
             test_data = None
             
             # Optional: Subsample training graphs for faster iterations
-            if args.get("apply_source_city_weighting_crosstres", False):
+            if args.get("apply_source_city_weighting_crosstres", False) or args.get("apply_source_region_weighting_crosstres_full", False):
                 # In CrossTReS benchmark mode, always use all source-city graphs for pretraining,
                 # regardless of the global fast-iteration default.
                 pass
@@ -345,7 +522,13 @@ def main():
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
         transductive_val_ratio = float(args.get("transductive_val_ratio", 0.15))
         transductive_test_ratio = float(args.get("transductive_test_ratio", 0.05))
-        if (not args["use_inductive_variant"]) and args.get("apply_source_city_weighting_crosstres", False):
+        if (
+            (not args["use_inductive_variant"])
+            and (
+                args.get("apply_source_city_weighting_crosstres", False)
+                or args.get("apply_source_region_weighting_crosstres_full", False)
+            )
+        ):
             # For benchmark fairness in CrossTReS mode: use all source-city graphs for train+val,
             # and keep no internal test holdout during pretraining.
             transductive_val_ratio = 0.2
@@ -380,6 +563,10 @@ def main():
                 model_kwargs = json.load(f)
         else:
             model_kwargs = {}
+
+        # CityTrans: allow passing target city name without requiring a model_kwargs JSON file.
+        if config.gnn_arch == "citytrans" and args.get("citytrans_target_city"):
+            model_kwargs.setdefault("target_city", args["citytrans_target_city"])
 
         # CRITICAL: Get actual data feature count from a batch (after collate_fn filtering)
         # The collate_fn filters features, so we need to check the batch, not the raw dataset
@@ -458,6 +645,7 @@ def main():
         selective_weight_callback = None
         dynamic_city_weights = {}
         use_crosstres_city_weighting = args.get("apply_source_city_weighting_crosstres", False)
+        use_crosstres_full_region_weighting = args.get("apply_source_region_weighting_crosstres_full", False)
         if use_crosstres_city_weighting:
             forbidden_targets = set(test_cities or [])
             overlapping_cities = forbidden_targets.intersection(set(train_cities or []))
@@ -515,6 +703,37 @@ def main():
                 eval_steps_per_city=DEFAULT_SELECTIVE_META_SOURCE_STEPS,
                 update_interval=DEFAULT_SELECTIVE_META_UPDATE_INTERVAL,
             )
+        elif use_crosstres_full_region_weighting:
+            forbidden_targets = set(test_cities or [])
+            overlapping_cities = forbidden_targets.intersection(set(train_cities or []))
+            if overlapping_cities:
+                raise ValueError(
+                    f"CrossTReSFullRegionWeighting requires strict source-only pretraining. "
+                    f"Target city/cities found in train_cities: {sorted(overlapping_cities)}"
+                )
+
+            region_keys = set()
+            for city in sorted(train_cities):
+                city_meta = {"path": [], "policy_region": [], "scenario": [], "city": []}
+                load_metadata_from_disk(city_meta, os.path.join(dataset_path, city, "metadata.json"))
+                if DEFAULT_SELECTIVE_LIMIT_GRAPHS_PER_CITY > 0:
+                    city_meta = balanced_subset_by_city(
+                        city_meta, min(DEFAULT_SELECTIVE_LIMIT_GRAPHS_PER_CITY, len(city_meta["path"]))
+                    )
+                for region_name in set(city_meta["policy_region"]):
+                    region_keys.add((city, str(region_name)))
+                dynamic_city_weights.setdefault(city, 1.0)
+
+            selective_weight_callback = CrossTReSRegionWeightingCallback(
+                device=device,
+                region_keys=region_keys,
+                temperature=DEFAULT_SELECTIVE_WEIGHT_TEMPERATURE,
+                ema_coef=DEFAULT_SELECTIVE_WEIGHT_EMA,
+                update_interval=DEFAULT_SELECTIVE_META_UPDATE_INTERVAL,
+                mlp_lr=5e-3,
+                loss_ema=0.9,
+                min_observations_per_region=1,
+            )
 
         best_val_loss, best_epoch = gnn_instance.train_model(config=config,
                                                              loss_fct=loss_fct,
@@ -524,7 +743,7 @@ def main():
                                                              device=device,
                                                              early_stopping=early_stopping,
                                                              model_save_path=model_save_path,
-                                                             apply_source_city_weights=use_crosstres_city_weighting,
+                                                             apply_source_city_weights=(use_crosstres_city_weighting or use_crosstres_full_region_weighting),
                                                              source_city_weights=dynamic_city_weights,
                                                              city_weight_callback=selective_weight_callback)
         
