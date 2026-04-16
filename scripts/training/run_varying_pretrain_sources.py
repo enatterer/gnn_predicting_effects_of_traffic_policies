@@ -120,6 +120,7 @@ RUN_MODELS_ARGS = [
     "aug_feature_noise",
     "aug_node_masking_probability",
     "limit_available_graphs",
+    "apply_source_city_weighting_crosstres",
 ]
 
 FINETUNE_ARGS = [
@@ -227,6 +228,8 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--run_initial_lr", type=float, default=0.00003)
     parser.add_argument("--run_num_epochs", type=int, default=200)
     parser.add_argument("--run_limit_available_graphs", type=int, default=0)
+    parser.add_argument("--apply_source_city_weighting_crosstres", type=str_to_bool, default=False,
+                        help="Enable CrossTReS-style CITY-level selective source weighting during pretraining.")
 
     # Arguments specific to finetune_models.py
     parser.add_argument("--target_normalization", type=str, default="None",
@@ -538,6 +541,7 @@ def main() -> None:
 
     # Resolve paths
     project_root = Path(__file__).resolve().parents[2]
+    mode_tag = "crosstres" if args.apply_source_city_weighting_crosstres else "naive"
     
     if args.dataset_path is None:
         dataset_path = project_root / 'data' / 'bavaria' / 'inductive_data' / 'training_data' / 'kreisfreistadt'
@@ -677,8 +681,8 @@ def main() -> None:
         print(f"Run suffix: {run_suffix}")
         print("=" * 80)
 
-        pretrain_run_name = f"{TARGET_CITY}_pretrain_{run_suffix}"
-        finetune_run_name = f"{TARGET_CITY}_finetune_{run_suffix}"
+        pretrain_run_name = f"{TARGET_CITY}_{mode_tag}_pretrain_{run_suffix}"
+        finetune_run_name = f"{TARGET_CITY}_{mode_tag}_finetune_{run_suffix}"
 
         # Step 1: Pretraining
         if not args.skip_pretraining:

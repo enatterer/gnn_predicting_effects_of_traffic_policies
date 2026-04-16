@@ -213,6 +213,10 @@ def main():
 
     # Fast-iteration: optionally cap dataset sizes per split (random subsample)
     parser.add_argument("--limit_available_graphs", type=int, default=2000, help="If >0, randomly keep only this many available graphs after reading metadata (applies before splitting into train/val/test).")
+    parser.add_argument("--transductive_val_ratio", type=float, default=0.15,
+                        help="Validation split ratio for transductive preparation.")
+    parser.add_argument("--transductive_test_ratio", type=float, default=0.05,
+                        help="Test split ratio for transductive preparation.")
     parser.add_argument("--apply_source_city_weighting_crosstres", type=str_to_bool, default=False,
                         help="Enable CrossTReS-style CITY-level selective source weighting during pretraining.")
     parser.add_argument("--crossst_alpha", type=float, default=0.3,
@@ -339,8 +343,8 @@ def main():
                 train_data = balanced_subset_by_city(train_data, args['limit_available_graphs'])
 
         print(f"Using {'INDUCTIVE' if args['use_inductive_variant'] else 'TRANSDUCTIVE'} data preparation!")
-        transductive_val_ratio = 0.15
-        transductive_test_ratio = 0.05
+        transductive_val_ratio = float(args.get("transductive_val_ratio", 0.15))
+        transductive_test_ratio = float(args.get("transductive_test_ratio", 0.05))
         if (not args["use_inductive_variant"]) and args.get("apply_source_city_weighting_crosstres", False):
             # For benchmark fairness in CrossTReS mode: use all source-city graphs for train+val,
             # and keep no internal test holdout during pretraining.

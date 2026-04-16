@@ -712,6 +712,8 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
                                      min_subgraph_nodes, max_subgraph_nodes, sampling_strategy,
                                      aug_pos_rotation, aug_feature_noise, aug_node_masking_probability=0.0,
                                      use_destination_activity_param=None,
+                                     transductive_val_ratio: float = 0.15,
+                                     transductive_test_ratio: float = 0.05,
                                      return_test_loader: bool = False,
                                      x_scaler_path: Optional[str] = None):
     """
@@ -728,8 +730,27 @@ def prepare_data_with_graph_features(train_data, val_data, test_data, use_induct
     
     print("Splitting into subsets...")
 
-    entire_set, train_set, valid_set, test_set = load_data_and_split_into_subsets(train_data=train_data, val_data=val_data, test_data=test_data,
-                                                                         train_ratio=0.8, val_ratio=0.15, test_ratio=0.05)
+    if use_inductive_variant:
+        train_ratio, val_ratio, test_ratio = 0.8, 0.15, 0.05
+    else:
+        # For transductive workflows, allow caller to control how much is reserved
+        # for internal validation/testing.
+        val_ratio = max(float(transductive_val_ratio), 0.0)
+        test_ratio = max(float(transductive_test_ratio), 0.0)
+        train_ratio = 1.0 - val_ratio - test_ratio
+        if train_ratio <= 0:
+            raise ValueError(
+                f"Invalid transductive split ratios: train={train_ratio}, val={val_ratio}, test={test_ratio}"
+            )
+
+    entire_set, train_set, valid_set, test_set = load_data_and_split_into_subsets(
+        train_data=train_data,
+        val_data=val_data,
+        test_data=test_data,
+        train_ratio=train_ratio,
+        val_ratio=val_ratio,
+        test_ratio=test_ratio,
+    )
     
     # TODO: Change if needed!
     # Transductive: TRAIN + VAL + TEST Scaler

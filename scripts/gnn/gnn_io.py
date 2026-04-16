@@ -55,7 +55,8 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
                                      train_ratio, val_ratio, test_ratio=0, seed=42):
     
     # Ensure the ratios sum to 1
-    assert train_ratio + val_ratio + test_ratio == 1, "Ratios must sum to 1"
+    if not math.isclose(train_ratio + val_ratio + test_ratio, 1.0, rel_tol=1e-9, abs_tol=1e-9):
+        raise ValueError("Ratios must sum to 1")
     
     dataset_length = len(train_data['path']) + (len(val_data['path']) if val_data is not None else 0) + (len(test_data['path']) if test_data is not None else 0)
     print(f"Total dataset length: {dataset_length}")
@@ -66,39 +67,65 @@ def load_data_and_split_into_subsets(train_data, val_data, test_data,
 
         indices = list(range(len(paths)))
 
-        try:
-            train_indices, test_indices = train_test_split(
-                indices,
-                test_size=test_ratio,
-                random_state=seed,
-                stratify=labels
-            )
-        except ValueError:
-            print("Warning: Stratified train/test split not possible (class with <2 samples). Falling back to unstratified split.")
-            train_indices, test_indices = train_test_split(
-                indices,
-                test_size=test_ratio,
-                random_state=seed,
-                stratify=None
-            )
+        if test_ratio <= 0 and val_ratio <= 0:
+            # Special case: no internal validation/test split requested.
+            train_indices = indices
+            val_indices = []
+            test_indices = []
+            train_labels = labels
+        elif test_ratio <= 0:
+            test_indices = []
+            val_fraction = val_ratio / (train_ratio + val_ratio)
+            try:
+                train_indices, val_indices = train_test_split(
+                    indices,
+                    test_size=val_fraction,
+                    random_state=seed,
+                    stratify=labels
+                )
+            except ValueError:
+                print("Warning: Stratified train/val split not possible (class with <2 samples). Falling back to unstratified split.")
+                train_indices, val_indices = train_test_split(
+                    indices,
+                    test_size=val_fraction,
+                    random_state=seed,
+                    stratify=None
+                )
+            train_labels = [labels[i] for i in train_indices]
+        else:
+            try:
+                train_indices, test_indices = train_test_split(
+                    indices,
+                    test_size=test_ratio,
+                    random_state=seed,
+                    stratify=labels
+                )
+            except ValueError:
+                print("Warning: Stratified train/test split not possible (class with <2 samples). Falling back to unstratified split.")
+                train_indices, test_indices = train_test_split(
+                    indices,
+                    test_size=test_ratio,
+                    random_state=seed,
+                    stratify=None
+                )
 
-        train_labels = [labels[i] for i in train_indices]
+            train_labels = [labels[i] for i in train_indices]
 
-        try:
-            train_indices, val_indices = train_test_split(
-                train_indices,
-                test_size=val_ratio/(train_ratio + val_ratio),
-                random_state=seed,
-                stratify=train_labels
-            )
-        except ValueError:
-            print("Warning: Stratified train/val split not possible (class with <2 samples). Falling back to unstratified split.")
-            train_indices, val_indices = train_test_split(
-                train_indices,
-                test_size=val_ratio/(train_ratio + val_ratio),
-                random_state=seed,
-                stratify=None
-            )
+            try:
+                train_indices, val_indices = train_test_split(
+                    train_indices,
+                    test_size=val_ratio/(train_ratio + val_ratio),
+                    random_state=seed,
+                    stratify=train_labels
+                )
+            except ValueError:
+                print("Warning: Stratified train/val split not possible (class with <2 samples). Falling back to unstratified split.")
+                train_indices, val_indices = train_test_split(
+                    train_indices,
+                    test_size=val_ratio/(train_ratio + val_ratio),
+                    random_state=seed,
+                    stratify=None
+                )
 
     else:
         

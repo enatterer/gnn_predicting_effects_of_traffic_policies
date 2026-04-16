@@ -34,7 +34,7 @@ from gnn.help_functions import GNN_Loss, CityBalancedGNNLoss
 project_root = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("DATA_DIR", project_root / "data")).resolve()
 
-# Please adjust as needed
+# Writable local results directory
 base_dir = os.path.join(project_root, 'inductive_gnn_data_results', 'transductive') # for saving results
 
 
@@ -112,7 +112,7 @@ def main():
                         help="Name for this finetuning run (used for saving the finetuned model).")
     parser.add_argument("--gnn_arch", type=str, required=True,
                         help="The GNN architecture to use (must match the original model).",
-                        choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost", "trans_encoder"])
+                        choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost", "trans_encoder", "crossST"])
     parser.add_argument("--cities", type=str, required=True,
                         help="Comma-separated list of cities to use for finetuning (e.g., 'wuerzburg,rosenheim,regensburg').")
     
@@ -144,21 +144,21 @@ def main():
                         choices=["abs_vol_car", "abs_vol_car_percentage", "vol_car_signed_log", "vol_car_percentage_signed_log", "vol_car_mean_std", "vol_car_percentage_mean_std", "vol_car_min_max", "vol_car_percentage_min_max"])
     parser.add_argument("--use_bootstrapping", type=str_to_bool, default=False, help="Whether to use bootstrapping for train-validation split.")
     parser.add_argument("--use_weighted_sampling", type=str_to_bool, default=False, help="Whether to use weighted random sampling for training.")
-    parser.add_argument("--num_epochs", type=int, default=100, help="Number of epochs to train for.")
-    parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training.")
+    parser.add_argument("--num_epochs", type=int, default=300, help="Number of epochs to train for.")
+    parser.add_argument("--batch_size", type=int, default=32, help="Batch size for training.")
     
     # Learning rate scheduler parameters
-    parser.add_argument("--peak_lr", type=float, default=0.0006, help="The peak learning rate (after warmup) from which decay will occur.")
-    parser.add_argument("--initial_lr", type=float, default=0.0002, help="The initial learning rate from which training will start (used during warmup).")
+    parser.add_argument("--peak_lr", type=float, default=0.0003, help="The peak learning rate (after warmup) from which decay will occur.")
+    parser.add_argument("--initial_lr", type=float, default=0.00003, help="The initial learning rate from which training will start (used during warmup).")
     parser.add_argument("--warmup_fraction", type=float, default=0.1, help="Fraction of total training steps to use for linear warmup (0.0 to 1.0, e.g., 0.15 = 15%%).")
     parser.add_argument("--cosine_decay_rate", type=float, default=0.5, help="The rate at which the learning rate decays after warmup.")
     parser.add_argument("--min_lr_fraction", type=float, default=0.01, help="The minimum learning rate fraction of the initial learning rate to which the learning rate decays after warmup.")
-    parser.add_argument("--early_stopping_patience", type=int, default=25, help="The early stopping patience.")
+    parser.add_argument("--early_stopping_patience", type=int, default=15, help="The early stopping patience.")
     
     # Dropout parameters
     parser.add_argument("--use_dropout", type=str_to_bool, default=False, help="Whether to use dropout.")
     parser.add_argument("--dropout", type=float, default=0.3, help="The dropout rate.")
-    parser.add_argument("--gradient_accumulation_steps", type=int, default=3, help="After how many steps the gradient should be updated.")
+    parser.add_argument("--gradient_accumulation_steps", type=int, default=1, help="After how many steps the gradient should be updated.")
     parser.add_argument("--use_gradient_clipping", type=str_to_bool, default=True, help="Whether to use gradient clipping.")
     parser.add_argument("--device_nr", type=int, default=0, help="The device number (0 or 1 for Retina Roaster's two GPUs).")
     
@@ -193,6 +193,16 @@ def main():
     parser.add_argument("--unique_model_description", type=str, default=None, help="Unique description for the finetuned run (default: {run_name}_finetuned).")
 
     parser.add_argument("--start_from_scratch", type=str_to_bool, default=False,help="If True, initialize model weights randomly instead of loading a checkpoint.")
+    parser.add_argument("--crossst_alpha", type=float, default=0.3,
+                        help="CrossST-inspired temporal distillation weight during finetuning.")
+    parser.add_argument("--crossst_beta", type=float, default=0.3,
+                        help="CrossST-inspired spatial distillation weight during finetuning.")
+    parser.add_argument(
+        "--crossst_use_best_pretrain_model",
+        type=str_to_bool,
+        default=False,
+        help="CrossST-only: if True, load trained_model/model.pth from pretraining; otherwise use latest checkpoint (default behavior).",
+    )
 
     args = vars(parser.parse_args())
     
@@ -240,7 +250,7 @@ def main():
         set_cuda_visible_device(best_gpu)
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         
-        latest_checkpoint_path = None
+        checkpoint_to_load_path = None
 
         # Use pretrain_run_name for checkpoint loading if provided, otherwise use run_name
         checkpoint_run_name = args.get('pretrain_run_name') or args['run_name']
@@ -268,21 +278,26 @@ def main():
         original_checkpoint_dir = os.path.join(original_run_dir, 'trained_model', 'checkpoints')
 
         # Load checkpoint early to infer configuration BEFORE data preparation
-        latest_checkpoint_path = None
+        checkpoint_to_load_path = None
         inferred_config = {}
         if not args['start_from_scratch']:
             if not os.path.exists(original_run_dir):
                 raise ValueError(f"Original run directory does not exist: {original_run_dir}")
 
-            latest_checkpoint_path = find_latest_checkpoint(original_checkpoint_dir)
+            checkpoint_to_load_path = find_best_or_latest_checkpoint(
+                run_dir=original_run_dir,
+                checkpoint_dir=original_checkpoint_dir,
+                gnn_arch=args['gnn_arch'],
+                use_best_pretrain_model=args.get('crossst_use_best_pretrain_model', False),
+            )
 
-            checkpoint_info = torch.load(latest_checkpoint_path, map_location='cpu')
+            checkpoint_info = torch.load(checkpoint_to_load_path, map_location='cpu')
             print(f"Found checkpoint from epoch {checkpoint_info.get('epoch', 'unknown')}")
             print(f"Checkpoint validation loss: {checkpoint_info.get('val_loss', 'unknown')}")
             
             # Infer model configuration from checkpoint
             print("Inferring model configuration from checkpoint...")
-            inferred_config = infer_model_config_from_checkpoint(latest_checkpoint_path, args['gnn_arch'])
+            inferred_config = infer_model_config_from_checkpoint(checkpoint_to_load_path, args['gnn_arch'])
             
             del checkpoint_info
             
@@ -564,10 +579,12 @@ def main():
                                         model_kwargs=model_kwargs_override,
                                         device=device).to(device)
 
-        if not args['start_from_scratch'] and latest_checkpoint_path is not None:
-            checkpoint = torch.load(latest_checkpoint_path, map_location=device)
+        if not args['start_from_scratch'] and checkpoint_to_load_path is not None:
+            checkpoint = torch.load(checkpoint_to_load_path, map_location=device)
+            # Support both periodic checkpoint dicts and best-model state_dict files.
+            state_dict_to_load = checkpoint.get('model_state_dict', checkpoint) if isinstance(checkpoint, dict) else checkpoint
             try:
-                missing_keys, unexpected_keys = gnn_instance.load_state_dict(checkpoint['model_state_dict'], strict=False)
+                missing_keys, unexpected_keys = gnn_instance.load_state_dict(state_dict_to_load, strict=False)
                 if missing_keys:
                     print(f"Warning: Missing keys when loading checkpoint: {missing_keys}")
                 if unexpected_keys:
@@ -582,7 +599,7 @@ def main():
                     if hasattr(gnn_instance, 'ff_dim'):
                         print(f"Model ff_dim: {gnn_instance.ff_dim}")
                     # Print checkpoint info
-                    state_dict = checkpoint['model_state_dict']
+                    state_dict = state_dict_to_load
                     if 'graph_convs.0.lin_key.weight' in state_dict:
                         ckpt_in_channels = state_dict['graph_convs.0.lin_key.weight'].shape[1]
                         print(f"Checkpoint expects in_channels: {ckpt_in_channels}")
@@ -599,6 +616,10 @@ def main():
             #     print("Restored target statistics from checkpoint for finetuning")
         else:
             print("Initialized model weights randomly for scratch finetuning.")
+
+        if args['gnn_arch'] == 'crossST' and hasattr(gnn_instance, "enable_finetune_mode"):
+            gnn_instance.enable_finetune_mode(alpha=args['crossst_alpha'], beta=args['crossst_beta'])
+            print(f"Enabled CrossST-inspired finetune mode (alpha={args['crossst_alpha']}, beta={args['crossst_beta']}).")
 
         # Set up loss function
         if args.get('use_city_balanced_loss', False):
@@ -714,6 +735,23 @@ def find_latest_checkpoint(checkpoint_dir):
     
     print(f"Found latest checkpoint: {latest_checkpoint_path} (epoch {extract_epoch(latest_checkpoint)})")
     return latest_checkpoint_path
+
+
+def find_best_or_latest_checkpoint(run_dir, checkpoint_dir, gnn_arch, use_best_pretrain_model=False):
+    """
+    For CrossST, prefer the best pretrained model and fall back to periodic checkpoints.
+    For other architectures, keep previous behavior (latest checkpoint).
+    """
+    if gnn_arch != "crossST" or not use_best_pretrain_model:
+        return find_latest_checkpoint(checkpoint_dir)
+
+    best_model_path = os.path.join(run_dir, 'trained_model', 'model.pth')
+    if os.path.exists(best_model_path):
+        print(f"Using best pretrained model for finetuning: {best_model_path}")
+        return best_model_path
+
+    print("Best pretrained model not found. Falling back to latest checkpoint.")
+    return find_latest_checkpoint(checkpoint_dir)
 
 def get_finetuned_model_paths(base_dir, project_name, run_name):
     """

@@ -307,6 +307,22 @@ class BaseGNN(nn.Module, ABC):
         else:
             raise ValueError(f"Unknown target_normalization: {self.target_normalization}")
 
+    @staticmethod
+    def _compute_batch_city_weight(data: object, city_weights: dict) -> float:
+        """
+        Compute the average city weight for the current batch.
+        Falls back to 1.0 when city labels are unavailable.
+        """
+        if not city_weights or not hasattr(data, "city"):
+            return 1.0
+
+        cities = data.city if isinstance(data.city, list) else [data.city]
+        if not cities:
+            return 1.0
+
+        mapped = [float(city_weights.get(str(city), 1.0)) for city in cities]
+        return float(sum(mapped) / len(mapped))
+
     def train_model(self, 
             config: object = None, 
             loss_fct: nn.Module = None, 
@@ -315,7 +331,10 @@ class BaseGNN(nn.Module, ABC):
             valid_dl: DataLoader = None, 
             device: torch.device = None, 
             early_stopping: object = None, 
-            model_save_path: str = None) -> tuple:
+            model_save_path: str = None,
+            apply_source_city_weights: bool = False,
+            source_city_weights: dict = None,
+            city_weight_callback=None) -> tuple:
         """
         Basic training pipeline for GNN models, can be overridden by child classes.
 
@@ -410,7 +429,14 @@ class BaseGNN(nn.Module, ABC):
             
             print(f"Resuming training from epoch {start_epoch} with best validation loss: {best_val_loss}")
 
+        active_source_city_weights = dict(source_city_weights or {})
+
         for epoch in range(start_epoch if config.continue_training else 0, config.num_epochs):
+            if city_weight_callback is not None:
+                callback_weights = city_weight_callback(epoch=epoch, model=self)
+                if callback_weights:
+                    active_source_city_weights = dict(callback_weights)
+
             super().train()
             optimizer.zero_grad()
 
@@ -446,6 +472,9 @@ class BaseGNN(nn.Module, ABC):
                     # Forward pass
                     predicted = self(data)
                     train_loss = loss_fct(predicted, targets_node_predictions, data, data.batch)
+                    if apply_source_city_weights:
+                        city_weight = self._compute_batch_city_weight(data, active_source_city_weights)
+                        train_loss = train_loss * city_weight
 
                 # Total loss
                 epoch_train_loss += train_loss.item()
