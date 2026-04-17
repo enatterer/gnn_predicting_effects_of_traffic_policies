@@ -1,11 +1,6 @@
 """
 Process simulation data (from MATSim) for GNNs. Load basecase and simulated graphs (with policies applied in various hex combinations),
 convert them to dual line graphs, and compute specified edge features. Save as PyTorch Geometric Tensors for efficient loading and training.
-
-Here we specify all features, then run_models can be called with a reduced set. Note that, for example, the flag "use_allowed_modes" is accessed from the run_models script.
-
-***To call this script, use the following command:***
-python process_simulations_for_gnn.py
 """
 
 import os
@@ -13,7 +8,6 @@ import sys
 import json
 from enum import IntEnum
 import shutil
-import random
 
 import numpy as np
 import pandas as pd
@@ -23,12 +17,6 @@ import geopandas as gpd
 import torch
 from torch_geometric.transforms import LineGraph
 from torch_geometric.data import Data
-
-#TODO: Check if this helps, or is overkill?
-# Set seeds for reproducibility
-np.random.seed(23)
-random.seed(23)
-torch.manual_seed(23)
 
 # Add the 'scripts' directory to Python Path
 scripts_path = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
@@ -149,6 +137,7 @@ def compute_result_dic(basecase_links, networks, use_destination_activity, activ
 
 # Compute features and targets, and generate graph data objects
 def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case,
+                        stacked_edge_geometries_tensor, edges_base, nodes, # Computed from hf.get_link_geometries()
                         gdf_basecase_mean_mode_stats, use_destination_activity, use_allowed_modes, 
                         x_normalization_type, required_modes_on_links, project_root,
                         precomputed_lap_pe=None):  # Accept pre-computed Laplacian PE
@@ -171,11 +160,7 @@ def generate_graph_data(city, result_dic, result_dic_mode_stats, links_base_case
     # Only compute allowed modes if the flag is True
     allowed_modes = encode_modes(links_base_case) if use_allowed_modes else None
     
-    # TODO: Why computed multiple times? Can be refactored.
-    # Get link geometries and edges_base FIRST
-    _, stacked_edge_geometries_tensor, edges_base, nodes, _ = get_link_geometries(links_base_case, apply_scaling=True)
-    
-    # THEN use edges_base to create edge_index
+    # Use edges_base to create edge_index
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
 
     # USE PRE-COMPUTED LAPLACIAN PE (DON'T RECOMPUTE)
@@ -487,7 +472,7 @@ def process_single_city(city, project_root, result_path, use_destination_activit
         print("=" * 30)
     
     # Get link geometries and edges
-    _, _, edges_base, nodes, _ = get_link_geometries(gdf_basecase_links, apply_scaling=True)
+    _, stacked_edge_geometries_tensor, edges_base, nodes, _ = get_link_geometries(gdf_basecase_links, apply_scaling=True)
     edge_index = torch.tensor(edges_base, dtype=torch.long).t().contiguous()
     
     # COMPUTE LAPLACIAN PE ONCE FOR THE CITY (OUTSIDE BATCH LOOP)
@@ -539,14 +524,16 @@ def process_single_city(city, project_root, result_path, use_destination_activit
             
             # Process networks and generate graph data
             result_dic_output_links, result_dic_eqasim_trips = compute_result_dic(basecase_links=gdf_basecase_links, networks=networks, use_destination_activity=use_destination_activity, activity_destination_names=activity_destination_names)
-            base_gdf = result_dic_output_links["base_network_no_policies"]
             
             # PASS PRE-COMPUTED LAPLACIAN PE TO generate_graph_data
             city_data = generate_graph_data(
                 city, 
                 result_dic=result_dic_output_links, 
                 result_dic_mode_stats=result_dic_eqasim_trips,
-                links_base_case=base_gdf, 
+                links_base_case=gdf_basecase_links,
+                stacked_edge_geometries_tensor=stacked_edge_geometries_tensor,
+                edges_base=edges_base,
+                nodes=nodes, 
                 gdf_basecase_mean_mode_stats=gdf_basecase_mean_mode_stats,
                 use_destination_activity=use_destination_activity, 
                 use_allowed_modes=use_allowed_modes,
