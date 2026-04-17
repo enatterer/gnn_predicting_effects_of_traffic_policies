@@ -33,6 +33,8 @@ from gnn.models.graphSAGE import GraphSAGE
 from gnn.models.trans_encoder import TransEncoder
 from gnn.models.crossst import CrossST
 from gnn.models.citytrans import CityTrans
+from gnn.models.transgtr import TransGTR
+from gnn.models.tpb import TPB
 from data_preprocessing.process_simulations_for_gnn import EdgeFeatures
 
 ########## Control Center #########
@@ -983,6 +985,12 @@ def create_gnn_model(gnn_arch: str, config: object, model_kwargs: dict, device: 
 
     elif gnn_arch == "citytrans":
         return CityTrans(**common_kwargs, **model_kwargs_clean).to(device)
+
+    elif gnn_arch == "transgtr":
+        return TransGTR(**common_kwargs, **model_kwargs_clean).to(device)
+
+    elif gnn_arch == "tpb":
+        return TPB(**common_kwargs, **model_kwargs_clean).to(device)
         
     else:
         raise ValueError(f"Unknown architecture: {gnn_arch}")

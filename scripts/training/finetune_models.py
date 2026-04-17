@@ -112,7 +112,7 @@ def main():
                         help="Name for this finetuning run (used for saving the finetuned model).")
     parser.add_argument("--gnn_arch", type=str, required=True,
                         help="The GNN architecture to use (must match the original model).",
-                        choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost", "trans_encoder", "crossST"])
+                        choices=["point_net_transf_gat", "gat", "gatv2", "gatv3", "gcn", "gcn2", "trans_conv", "pnc", "fc_nn", "graphSAGE", "eign", "xgboost", "trans_encoder", "crossST", "transgtr", "tpb"])
     parser.add_argument("--cities", type=str, required=True,
                         help="Comma-separated list of cities to use for finetuning (e.g., 'wuerzburg,rosenheim,regensburg').")
     

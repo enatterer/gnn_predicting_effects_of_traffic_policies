@@ -299,7 +299,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run GNN model training with configurable parameters.")
     parser.add_argument("--gnn_arch", type=str, default="trans_encoder",
                         help="The GNN architecture to use.",
-                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder", "crossST", "citytrans"])  # Add more as you implement them
+                        choices=["gatv2", "trans_conv", "graphSAGE", "trans_encoder", "crossST", "citytrans", "transgtr", "tpb"])  # Add more as you implement them
     parser.add_argument("--use_inductive_variant", type=str_to_bool, default=True,
                         help="Whether to perform inductive or transductive training.")
     parser.add_argument("--project_name", type=str, default=None,
@@ -754,6 +754,9 @@ def main():
         print(f"Error: {e}")
         print("Falling back to CPU.")
         os.environ['CUDA_VISIBLE_DEVICES'] = ""
+        # Do not silently continue in benchmark mode. Propagate failures so callers
+        # can stop before finetuning and avoid using stale/partial pretraining artifacts.
+        raise
 
 
 if __name__ == '__main__':
