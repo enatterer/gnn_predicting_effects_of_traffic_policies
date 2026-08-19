@@ -43,7 +43,6 @@ highway_cluster_mapping = {
 
 # Extract the relevant parts
 # Specific to Bavarian Simulations for now!
-# #TODO: fix for Paris
 def create_policy_key(file_path):
     filename = os.path.basename(file_path)  # Get the filename
     scenario = filename.split('_')[-1]  # Get scenario
@@ -136,16 +135,15 @@ def get_reduced_capacity_links(city, policy_region, scenario, project_root):
     )
     
     # Find the geojson file matching the pattern
-    # Pattern: network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson
     pattern = f"network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson"
-    search_pattern = os.path.join(reduced_links_dir, f"network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson")
+    search_pattern = os.path.join(reduced_links_dir, pattern)
     
     matching_files = glob.glob(search_pattern)
     
     if not matching_files:
         print(f"WARNING: No reduced capacity geojson file found for {city}, policy_region={policy_region}, scenario={scenario}")
         print(f"  Searched in: {reduced_links_dir}")
-        print(f"  Pattern: network_seed3_{city}_primary_*_{scenario}_reduced_capacity_edges.geojson")
+        print(f"  Pattern: {pattern}")
         return set()
     
     if len(matching_files) > 1:
@@ -187,6 +185,7 @@ def get_basic_edge_attributes(capacity_base_case, gdf, required_modes_on_links):
     capacity_reduction = capacities_new - capacity_base_case # check the sign of this
     highway_raw = gdf['highway'].apply(lambda x: highway_mapping.get(x, -1)).values
     highway_clustered = np.vectorize(highway_cluster_mapping.get)(highway_raw)
+    
     # One-hot encode into 6 classes
     highway_onehot = np.eye(6)[highway_clustered]  # shape: (N, 6)
     return capacities_new, capacity_reduction, highway_onehot
@@ -483,6 +482,7 @@ def modify_geodataframe(gdf):
     gdf["perimetre"] = gdf.geometry.length
     gdf["zone_id"] = range(1, len(gdf)+1) #zone id
     zones_gdf = gdf[["zone_id", "area", "perimetre", "geometry"]]
+    
     # Ensure the data is in the correct CRS (EPSG:25832) (VERY IMPORTANT)
     if zones_gdf.crs != "EPSG:25832": # Should match with the CRS of the Network Geodataframe
         zones_gdf = zones_gdf.to_crs(epsg=25832)
